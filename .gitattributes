@@ -1,0 +1,14 @@
+# Normalize all text files to LF in the repo and on checkout (all platforms).
+# Matches .editorconfig (end_of_line = lf) and keeps Prettier's default
+# endOfLine: "lf" happy on the Windows CI runner. Binary files are
+# auto-detected and left untouched.
+* text=auto eol=lf
+
+# Explicit binaries (never touch line endings).
+*.png binary
+*.ico binary
+*.icns binary
+*.p12 binary
+*.jks binary
+*.keystore binary
+*.vidyabak binary
