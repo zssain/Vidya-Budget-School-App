@@ -1,0 +1,20 @@
+[package]
+name = "vidya-testkit"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+license.workspace = true
+
+# Test fixtures and simulation harness. This crate builds on top of every other
+# workspace crate, and is only ever pulled in by others as a [dev-dependencies]
+# entry (never a normal dependency of production code).
+[dependencies]
+vidya-core = { path = "../vidya-core" }
+vidya-db = { path = "../vidya-db" }
+vidya-services = { path = "../vidya-services" }
+vidya-license = { path = "../vidya-license" }
+vidya-sync = { path = "../vidya-sync" }
+vidya-server = { path = "../vidya-server" }
+vidya-client = { path = "../vidya-client" }
+vidya-backup = { path = "../vidya-backup" }
+vidya-export = { path = "../vidya-export" }

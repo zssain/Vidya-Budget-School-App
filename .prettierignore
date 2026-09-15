@@ -1,0 +1,13 @@
+dist
+target
+src-tauri/gen
+reference
+docs
+Cargo.lock
+package-lock.json
+
+# Kit source-of-truth files: AGENTS.md rule #5 forbids reformatting these.
+AGENTS.md
+CLAUDE.md
+README-FIRST.md
+VIDYA_PROMPTS_BOOK.md

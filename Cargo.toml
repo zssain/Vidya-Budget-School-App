@@ -1,0 +1,19 @@
+[workspace]
+resolver = "2"
+members = ["src-tauri", "crates/*"]
+
+[workspace.package]
+edition = "2021"
+version = "0.1.0"
+publish = false
+license = "LicenseRef-Proprietary"
+
+[workspace.dependencies]
+# filled in by later prompts using versions resolved by cargo add
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+panic = "abort"
+strip = true

@@ -21,3 +21,14 @@ Read the root `AGENTS.md` first. These rules add to it.
 - Each crate has unit tests next to the code and integration tests in `tests/`.
 - Public functions have doc comments that say what they do, what errors they return and who may call them.
 - Services take an `Actor` (user id, role, sections, device id), never raw ids from callers.
+
+## Adding dependencies
+External crates must already be listed in `docs/DEPENDENCIES.md`. To add a new one, stop and ask (purpose, alternatives, size, licence, last release). To wire an allowed crate into the workspace:
+
+1. Run `cargo add <crate> -p <member>` in the member that needs it (never write a version from memory).
+2. Read the resolved version in `Cargo.lock`.
+3. Move it to the root `[workspace.dependencies]` pinned to that version.
+4. In each member that uses it, reference it as `<crate> = { workspace = true }` (add features per member as needed).
+5. Fill in the **Installed version** and **Added in** columns in `docs/DEPENDENCIES.md`.
+
+Path dependencies between workspace crates follow the arrows in `docs/ARCHITECTURE.md` section 2 only.

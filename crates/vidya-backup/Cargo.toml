@@ -1,0 +1,9 @@
+[package]
+name = "vidya-backup"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+vidya-db = { path = "../vidya-db" }

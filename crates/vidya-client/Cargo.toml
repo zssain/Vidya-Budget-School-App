@@ -1,0 +1,10 @@
+[package]
+name = "vidya-client"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+vidya-sync = { path = "../vidya-sync" }
+vidya-services = { path = "../vidya-services" }

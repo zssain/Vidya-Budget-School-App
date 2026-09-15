@@ -5,7 +5,7 @@ Agents update this file at the end of every session. The developer ticks the man
 ## Status
 | Prompt | Title | Status | Date | Notes |
 |---|---|---|---|---|
-| P1.1 | Workspace, tooling and CI | not started | | |
+| P1.1 | Workspace, tooling and CI | done | 2026-09-15 | `npm run verify` + `VERIFY_DENY=1` pass. Pending developer manual checks (window, CI green, Windows installer). |
 | P1.2 | Frontend port of the prototype | not started | | |
 | P1.3 | Desktop shell and security settings | not started | | |
 | P2.1 | vidya-core domain rules | not started | | |
@@ -55,7 +55,20 @@ Status values: not started, in progress, done, blocked.
 ## Check in Windows VM
 (Agents add items with exact steps. The developer ticks them.)
 
+- [ ] **P1.1** In GitHub → Actions → latest CI run, confirm the **Windows — verify and installer** job is green. Download the **vidya-windows-installer** artifact, unzip, run the `.exe` in the Windows 11 VM (SmartScreen: More info → Run anyway). Confirm it installs and opens a Vidya window, then uninstall.
+
+## Check on MacBook
+- [ ] **P1.1** Run `npm run tauri dev`; a Vidya window opens showing "Vidya" and a version.
+- [ ] **P1.1** After pushing, confirm all three CI jobs (macos, windows, deny) are green in the GitHub Actions tab.
+
 ## Check on Android phone
 
 ## Session log
 (Newest first. Paste each session summary here.)
+
+### 2026-09-15 — P1.1 Workspace, tooling and CI
+- Dev environment installed (Rust + both macOS targets, cargo-deny 0.20.2); doctor.sh core tools all present.
+- Created root files, npm+Vite frontend, Tauri 2 app crate (`vidya-app`/`vidya_app_lib`, id `in.vidya.school`), 10-crate Rust workspace with dependency arrows matching ARCHITECTURE.md §2, eslint/prettier/rustfmt config, check-api-drift + check-i18n + verify.sh, deny.toml, and `.github/workflows/ci.yml` (macos/windows/deny jobs).
+- `VERIFY_DENY=1 npm run verify` → ALL CHECKS PASSED.
+- Decisions: dropped auto-added `log`/`tauri-plugin-log` from the app crate (not in DEPENDENCIES.md; plugins land in P1.3); scoped cargo-deny `unmaintained = "workspace"` for transitive Tauri deps; added kit source-of-truth markdown to `.prettierignore` (AGENTS.md rule #5). See docs/KNOWN_ISSUES.md.
+- Pending: developer manual checks above (dev window, CI green, Windows installer in VM).

@@ -1,0 +1,74 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  macos:
+    name: macOS — verify
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: '.nvmrc'
+          cache: 'npm'
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - run: npm ci
+
+      - run: npm run verify
+
+  windows:
+    name: Windows — verify and installer
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: '.nvmrc'
+          cache: 'npm'
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - run: npm ci
+
+      - run: npm run verify
+
+      - name: Build NSIS installer
+        run: npm run tauri build -- --bundles nsis
+
+      - name: Upload Windows installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: vidya-windows-installer
+          path: target/release/bundle/nsis/*.exe
+          retention-days: 14
+
+  deny:
+    name: cargo-deny
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # cargo-deny reads the dependency graph via `cargo metadata`, so a Rust
+      # toolchain must be on PATH.
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny
+
+      - run: cargo deny check

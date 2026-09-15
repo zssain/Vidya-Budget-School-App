@@ -10,15 +10,15 @@ Rules:
 ## Rust — application and core
 | Crate | Purpose | Used in | Notes to verify | Installed version | Added in |
 |---|---|---|---|---|---|
-| tauri | App framework | src-tauri, provider | Enable `tray-icon` feature for desktop | | |
-| tauri-build | Build script | src-tauri, provider | | | |
+| tauri | App framework | src-tauri, provider | Enable `tray-icon` feature for desktop | 2.11.5 | P1.1 |
+| tauri-build | Build script | src-tauri, provider | | 2.6.3 | P1.1 |
 | tauri-plugin-dialog | Save and open file dialogs | src-tauri | Desktop | | |
 | tauri-plugin-opener | Open URLs and system settings pages | src-tauri | Desktop | | |
 | tauri-plugin-single-instance | Only one Vidya instance on the office computer | src-tauri | Desktop | | |
 | tauri-plugin-autostart | Start at login | src-tauri | Desktop | | |
 | tauri-plugin-notification | Approval requests, backup warnings | src-tauri | | | |
 | tauri-plugin-log | Logging to file, no personal data | src-tauri | | | |
-| serde, serde_json | Serialisation | all | `derive` feature | | |
+| serde, serde_json | Serialisation | all | `derive` feature | serde 1.0.229, serde_json 1.0.151 | P1.1 |
 | thiserror | Error types | all library crates | | | |
 | chrono | Dates and times | core, db, services | `serde` feature; no `now()` inside core (pass time in) | | |
 | uuid | UUID v7 IDs | core, db | `v7`, `serde` features | | |
@@ -72,16 +72,16 @@ Rules:
 ## JavaScript
 | Package | Purpose | Installed version | Added in |
 |---|---|---|---|
-| @tauri-apps/cli | Tauri CLI | | |
-| @tauri-apps/api | `invoke` and events | | |
+| @tauri-apps/cli | Tauri CLI | 2.11.4 | P1.1 |
+| @tauri-apps/api | `invoke` and events | 2.11.1 | P1.1 |
 | @tauri-apps/plugin-dialog | Dialog JS API | | |
 | @tauri-apps/plugin-opener | Opener JS API | | |
 | @tauri-apps/plugin-notification | Notification JS API | | |
-| vite | Frontend build | | |
-| vitest | Frontend tests | | |
-| jsdom | DOM for tests | | |
-| eslint, @eslint/js, globals | Linting | | |
-| prettier | Formatting | | |
+| vite | Frontend build | 8.3.0 | P1.1 |
+| vitest | Frontend tests | 4.1.11 | P1.1 |
+| jsdom | DOM for tests | 29.1.1 | P1.1 |
+| eslint, @eslint/js, globals | Linting | eslint 10.10.0, @eslint/js 10.0.1, globals 17.12.0 | P1.1 |
+| prettier | Formatting | 3.9.6 | P1.1 |
 
 No other runtime JavaScript libraries. No CSS frameworks, no icon fonts from the internet, no chart libraries (bars are plain CSS like the prototype).
 

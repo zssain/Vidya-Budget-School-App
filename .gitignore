@@ -1,0 +1,26 @@
+# Dependencies and build output
+node_modules/
+dist/
+target/
+coverage/
+
+# macOS
+.DS_Store
+
+# Vidya backups
+*.vidyabak
+
+# Environment and secrets
+.env
+.env.*
+*.p12
+*.pem
+*.jks
+*.keystore
+provider-keys/
+keystore.properties
+
+# Test fixtures
+.test-phone-*
+
+# Note: src-tauri/gen/schemas/ is intentionally NOT ignored (kept in git).
