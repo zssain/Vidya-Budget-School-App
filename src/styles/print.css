@@ -1,0 +1,81 @@
+/* Print rules and the print document container. Copied verbatim from the prototype. */
+
+@media print {
+  .nav,
+  .top,
+  .tabbar,
+  .noprint {
+    display: none !important;
+  }
+  body {
+    background: #fff;
+  }
+  .view {
+    padding: 0;
+    overflow: visible;
+  }
+  .rc {
+    border: 2px solid #000;
+    max-width: 100%;
+  }
+}
+
+#printArea {
+  display: none;
+}
+.p-doc {
+  font-family: var(--f);
+  color: #000;
+  font-size: 13px;
+}
+.p-doc h2 {
+  font-size: 18px;
+  margin: 0;
+}
+.p-doc table {
+  width: 100%;
+  border-collapse: collapse;
+}
+.p-doc th,
+.p-doc td {
+  border: 1px solid #555;
+  padding: 4px 6px;
+  font-size: 12px;
+  text-align: left;
+}
+.p-copy {
+  border: 1.5px solid #000;
+  border-radius: 6px;
+  padding: 14px 16px;
+  margin-bottom: 14px;
+}
+.p-cut {
+  border-top: 1.5px dashed #000;
+  margin: 10px 0 14px;
+  text-align: center;
+  font-size: 10px;
+}
+.pbreak {
+  break-after: page;
+  page-break-after: always;
+}
+
+@media print {
+  body.printing {
+    background: #fff;
+  }
+  body.printing #setup,
+  body.printing #login,
+  body.printing #app,
+  body.printing .tabbar,
+  body.printing #tst,
+  body.printing #mroot {
+    display: none !important;
+  }
+  body.printing #printArea {
+    display: block !important;
+  }
+  @page {
+    margin: 12mm;
+  }
+}

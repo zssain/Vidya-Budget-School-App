@@ -80,20 +80,26 @@ function main() {
   }
 
   const errors = [];
+  // Rust is the concrete layer: every Rust command must have a JS wrapper and a
+  // doc entry.
   for (const cmd of rust) {
     if (!api.has(cmd)) errors.push(`Rust command '${cmd}' is missing from docs/API.md`);
     if (js && !js.has(cmd)) errors.push(`Rust command '${cmd}' is missing from src/api/commands.js`);
   }
+  // The frontend is built before the Rust backend (P1.2 precedes P2.7), so a JS
+  // command that exists in API.md but not yet in Rust is "planned" and allowed.
+  // A JS command NOT in API.md is always an error.
   if (js) {
     for (const cmd of js) {
-      if (!rust.has(cmd)) errors.push(`JS command '${cmd}' is missing from the generate_handler! list`);
       if (!api.has(cmd)) errors.push(`JS command '${cmd}' is missing from docs/API.md`);
     }
   }
 
-  const planned = [...api].filter((c) => !rust.has(c));
+  const plannedRust = [...api].filter((c) => !rust.has(c));
+  const jsAheadOfRust = js ? [...js].filter((c) => !rust.has(c)) : [];
   console.log(`Commands — API.md: ${api.size}, Rust: ${rust.size}, JS: ${js ? js.size : 'skipped'}`);
-  console.log(`Planned (in API.md but not yet in Rust): ${planned.length}`);
+  console.log(`Planned (in API.md but not yet in Rust): ${plannedRust.length}`);
+  if (js) console.log(`JS commands not yet backed by Rust (planned): ${jsAheadOfRust.length}`);
 
   if (errors.length) {
     console.error('\nAPI drift detected:');

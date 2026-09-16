@@ -12,21 +12,21 @@ Rules:
 |---|---|---|---|---|---|
 | tauri | App framework | src-tauri, provider | Enable `tray-icon` feature for desktop | 2.11.5 | P1.1 |
 | tauri-build | Build script | src-tauri, provider | | 2.6.3 | P1.1 |
-| tauri-plugin-dialog | Save and open file dialogs | src-tauri | Desktop | | |
-| tauri-plugin-opener | Open URLs and system settings pages | src-tauri | Desktop | | |
-| tauri-plugin-single-instance | Only one Vidya instance on the office computer | src-tauri | Desktop | | |
+| tauri-plugin-dialog | Save and open file dialogs | src-tauri | Desktop | 2.7.3 | P1.3 |
+| tauri-plugin-opener | Open URLs and system settings pages | src-tauri | Desktop | 2.5.5 | P1.3 |
+| tauri-plugin-single-instance | Only one Vidya instance on the office computer | src-tauri | Desktop | 2.4.4 | P1.3 |
 | tauri-plugin-autostart | Start at login | src-tauri | Desktop | | |
 | tauri-plugin-notification | Approval requests, backup warnings | src-tauri | | | |
-| tauri-plugin-log | Logging to file, no personal data | src-tauri | | | |
+| tauri-plugin-log | Logging to file, no personal data | src-tauri | | 2.9.1 | P1.3 |
 | serde, serde_json | Serialisation | all | `derive` feature | serde 1.0.229, serde_json 1.0.151 | P1.1 |
-| thiserror | Error types | all library crates | | | |
+| thiserror | Error types | all library crates | | 2.0.20 | P1.3 |
 | chrono | Dates and times | core, db, services | `serde` feature; no `now()` inside core (pass time in) | | |
 | uuid | UUID v7 IDs | core, db | `v7`, `serde` features | | |
 | rusqlite | SQLite access | vidya-db | Feature `bundled-sqlcipher-vendored-openssl`. Check Windows and Android builds in CI | | |
 | r2d2, r2d2_sqlite | Connection pool | vidya-db | r2d2_sqlite version must match rusqlite | | |
 | argon2 | Password and backup key hashing | services, backup, provider | | | |
 | rand | Random bytes, tokens | services, license, backup | Use the OS-backed generator | | |
-| zeroize | Wipe secrets from memory | services, license, backup | | | |
+| zeroize | Wipe secrets from memory | services, license, backup | | 1.9.0 | P1.3 |
 | sha2 | SHA-256 | license, sync, server | | | |
 | base32 | Crockford base32 for codes | vidya-license | Verify the Crockford alphabet option exists | | |
 | ed25519-dalek | Signatures (license, device keys) | license, server, client | `rand_core` feature where keys are generated | | |
@@ -74,8 +74,8 @@ Rules:
 |---|---|---|---|
 | @tauri-apps/cli | Tauri CLI | 2.11.4 | P1.1 |
 | @tauri-apps/api | `invoke` and events | 2.11.1 | P1.1 |
-| @tauri-apps/plugin-dialog | Dialog JS API | | |
-| @tauri-apps/plugin-opener | Opener JS API | | |
+| @tauri-apps/plugin-dialog | Dialog JS API | 2.7.3 | P1.3 |
+| @tauri-apps/plugin-opener | Opener JS API | 2.5.5 | P1.3 |
 | @tauri-apps/plugin-notification | Notification JS API | | |
 | vite | Frontend build | 8.3.0 | P1.1 |
 | vitest | Frontend tests | 4.1.11 | P1.1 |
