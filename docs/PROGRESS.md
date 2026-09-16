@@ -7,8 +7,8 @@ Agents update this file at the end of every session. The developer ticks the man
 |---|---|---|---|---|
 | P1.1 | Workspace, tooling and CI | done | 2026-09-15 | `npm run verify` + `VERIFY_DENY=1` pass. Pending developer manual checks (window, CI green, Windows installer). |
 | P1.2 | Frontend port of the prototype | done | 2026-09-16 | All prototype screens ported; 94-item parity checklist; 71 tests; `VERIFY_DENY=1 npm run verify` passes. Pending developer side-by-side check. |
-| P1.3 | Desktop shell and security settings | in progress | 2026-09-16 | Implementation, universal `.app`, verified 3,182,807-byte DMG, and full verification complete. Windows installer size awaits CI. |
-| P2.1 | vidya-core domain rules | not started | | |
+| P1.3 | Desktop shell and security settings | done | 2026-09-16 | Full verification and all CI jobs pass. Universal DMG: 3,182,807 bytes. Windows NSIS installer: 1,222,379 bytes. Pending developer manual checks. |
+| P2.1 | vidya-core domain rules | done | 2026-09-17 | Pure domain modules complete; 31 core tests pass, including required vectors and property tests; full verification passes. |
 | P2.2 | Permission matrix | not started | | |
 | P2.3 | Encrypted database and migrations | not started | | |
 | P2.4 | Platform secrets, folders and app start | not started | | |
@@ -64,18 +64,25 @@ Status values: not started, in progress, done, blocked.
 - [ ] **P1.2** Run `npm run tauri dev`, load the sample school, then sign in as `sunita`, `anita`, and `sierra` with password `vidya123`. Exercise every screen and tick [PARITY.md](PARITY.md) while comparing it with `reference/VidyaSchoolApp_step1.html` in Chrome.
 - [ ] **P1.3** Mount `target/universal-apple-darwin/release/bundle/dmg/Vidya_0.1.0_universal.dmg`, right-click `Vidya.app` → Open, and confirm every screen has no CSP console violations. The DMG uses Tauri's supported CI layout because Finder's cosmetic AppleScript races the macOS 26 volume unmount.
 - [ ] **P1.3** In the running Mac app, confirm Cmd+C/Cmd+V in the username field, Cmd+Q, all application/Edit/Window menu items, one window after launching twice, a log file under the app log directory, and no Inspect action or devtools shortcut in the release build.
+- [ ] **P2.1** Read `crates/vidya-core/tests/vectors.rs`; spot-check three fee calculations and three amount-in-words results by hand.
 
 ## Check on Android phone
 
 ## Session log
 (Newest first. Paste each session summary here.)
 
-### 2026-09-16 — P1.3 Desktop shell and security settings (in progress)
+### 2026-09-17 — P2.1 vidya-core domain rules
+- Implemented pure domain modules for localisable errors, roles/actors, Indian money, amount-in-words, dates/sessions, validation, fees/payments, marks/grades, attendance, usernames, supplied-byte secret formatting, and hybrid logical clocks.
+- Added matching embedded core locales, exact table-driven vectors, three-or-more valid/invalid cases for every validator, and proptest coverage for money round trips, non-negative fees/balances and HLC text ordering.
+- `cargo test -p vidya-core` → 31 passed; forbidden `now()`/`SystemTime`/`f32`/`f64` scan → no matches; `npm run verify` → ALL CHECKS PASSED.
+
+### 2026-09-16 — P1.3 Desktop shell and security settings
 - Added the strict CSP and explicit main-window capability, command allowlist manifest, desktop plugins, macOS native menus, release context-menu protection, platform trait/fake skeleton, generated icon set, and macOS/Windows bundle configuration.
 - Built a 6.8 MB universal `Vidya.app`; `lipo` confirms `arm64` and `x86_64`, and its Info.plist confirms macOS 11.0, Education category and copyright metadata.
 - Launched the release app twice: the second process exited successfully while the first remained, and `~/Library/Logs/in.vidya.school/Vidya.log` was created.
 - `VERIFY_DENY=1 npm run verify` → ALL CHECKS PASSED (71 frontend tests; 462 matching translation keys; Rust format, clippy, tests and dependency audit pass).
-- The normal Finder-decorated DMG path raced the macOS 26 volume unmount. Tauri's supported `CI=true` path skipped only Finder cosmetic positioning and produced a checksum-valid 3,182,807-byte universal DMG with the standard Applications link. Windows installer size awaits CI.
+- The normal Finder-decorated DMG path raced the macOS 26 volume unmount. Tauri's supported `CI=true` path skipped only Finder cosmetic positioning and produced a checksum-valid 3,182,807-byte universal DMG with the standard Applications link.
+- CI run 35087674060 passed macOS verification, Windows verification/NSIS packaging, and cargo-deny. The downloaded `Vidya_0.1.0_x64-setup.exe` is 1,222,379 bytes (artifact ZIP reported by CI: 1,203,570 bytes).
 
 ### 2026-09-16 — P1.2 Frontend port of the prototype
 - Completed the setup wizard, credential slips, pre-school restore, attendance, marks, reports, staff logins, activity, backup and settings screens; registered all desktop views and the client-safe mobile subset.

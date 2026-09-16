@@ -20,7 +20,7 @@ Rules:
 | tauri-plugin-log | Logging to file, no personal data | src-tauri | | 2.9.1 | P1.3 |
 | serde, serde_json | Serialisation | all | `derive` feature | serde 1.0.229, serde_json 1.0.151 | P1.1 |
 | thiserror | Error types | all library crates | | 2.0.20 | P1.3 |
-| chrono | Dates and times | core, db, services | `serde` feature; no `now()` inside core (pass time in) | | |
+| chrono | Dates and times | core, db, services | `serde` feature; no `now()` inside core (pass time in) | 0.4.45 | P2.1 |
 | uuid | UUID v7 IDs | core, db | `v7`, `serde` features | | |
 | rusqlite | SQLite access | vidya-db | Feature `bundled-sqlcipher-vendored-openssl`. Check Windows and Android builds in CI | | |
 | r2d2, r2d2_sqlite | Connection pool | vidya-db | r2d2_sqlite version must match rusqlite | | |
@@ -55,12 +55,12 @@ Rules:
 | jni | Only if a Kotlin plugin cannot do the job | Android | Prefer a Tauri mobile plugin in Kotlin | | |
 
 ## Rust — development only
-| Crate | Purpose |
-|---|---|
-| tempfile | Temporary databases in tests |
-| proptest | Property tests for money, fees, HLC, merge rules |
-| insta | Snapshot tests for DTOs and exports |
-| tokio (test feature) | Async tests |
+| Crate | Purpose | Installed version | Added in |
+|---|---|---|---|
+| tempfile | Temporary databases in tests | | |
+| proptest | Property tests for money, fees, HLC, merge rules | 1.11.0 | P2.1 |
+| insta | Snapshot tests for DTOs and exports | | |
+| tokio (test feature) | Async tests | | |
 
 ## Tools (installed on the MacBook or in CI, not linked into the app)
 | Tool | Purpose |
