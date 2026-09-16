@@ -8,6 +8,7 @@ pub mod hlc;
 pub mod i18n;
 pub mod marks;
 pub mod money;
+pub mod permissions;
 pub mod roles;
 pub mod secrets;
 pub mod usernames;

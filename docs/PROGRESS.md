@@ -9,7 +9,7 @@ Agents update this file at the end of every session. The developer ticks the man
 | P1.2 | Frontend port of the prototype | done | 2026-09-16 | All prototype screens ported; 94-item parity checklist; 71 tests; `VERIFY_DENY=1 npm run verify` passes. Pending developer side-by-side check. |
 | P1.3 | Desktop shell and security settings | done | 2026-09-16 | Full verification and all CI jobs pass. Universal DMG: 3,182,807 bytes. Windows NSIS installer: 1,222,379 bytes. Pending developer manual checks. |
 | P2.1 | vidya-core domain rules | done | 2026-09-17 | Pure domain modules complete; 31 core tests pass, including required vectors and property tests; full verification passes. |
-| P2.2 | Permission matrix | not started | | |
+| P2.2 | Permission matrix | done | 2026-09-17 | 39-action exhaustive role matrix, scope helpers and machine-checked document parity complete; 39 core tests pass. |
 | P2.3 | Encrypted database and migrations | not started | | |
 | P2.4 | Platform secrets, folders and app start | not started | | |
 | P2.5 | Services foundation, repositories and change log | not started | | |
@@ -70,6 +70,11 @@ Status values: not started, in progress, done, blocked.
 
 ## Session log
 (Newest first. Paste each session summary here.)
+
+### 2026-09-17 — P2.2 Permission matrix
+- Added all 39 documented actions in order, exact string parsing, an explicit no-wildcard role/action access matrix, section scope helpers and UI permission-name generation.
+- Added a machine-readable parity test against `docs/PERMISSIONS.md` plus principal, accountant and assigned-section teacher behavior tests.
+- Deliberately changed one document cell: the test failed with the exact action, role, document value and code value; restored the cell and reran green. `cargo test -p vidya-core` → 39 passed; `npm run verify` → ALL CHECKS PASSED.
 
 ### 2026-09-17 — P2.1 vidya-core domain rules
 - Implemented pure domain modules for localisable errors, roles/actors, Indian money, amount-in-words, dates/sessions, validation, fees/payments, marks/grades, attendance, usernames, supplied-byte secret formatting, and hybrid logical clocks.
