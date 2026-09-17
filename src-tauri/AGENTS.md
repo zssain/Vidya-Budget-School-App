@@ -4,6 +4,8 @@ Read the root `AGENTS.md` first. These rules add to it.
 
 This crate is **thin glue**. It must not contain business rules or SQL.
 
+Server code runs only with a ServerPermit (D29). Never add a way to start the server that bypasses LicenseService.
+
 ## What belongs here
 - `src/lib.rs` — builds the Tauri app, registers plugins, state and every command in one `generate_handler!` list
 - `src/state.rs` — `AppState` holding the service container, session store and platform

@@ -5,11 +5,12 @@ Agents update this file at the end of every session. The developer ticks the man
 ## Status
 | Prompt | Title | Status | Date | Notes |
 |---|---|---|---|---|
-| P1.1 | Workspace, tooling and CI | done | 2026-09-15 | `npm run verify` + `VERIFY_DENY=1` pass. Pending developer manual checks (window, CI green, Windows installer). |
-| P1.2 | Frontend port of the prototype | done | 2026-09-16 | All prototype screens ported; 94-item parity checklist; 71 tests; `VERIFY_DENY=1 npm run verify` passes. Pending developer side-by-side check. |
-| P1.3 | Desktop shell and security settings | done | 2026-09-16 | Full verification and all CI jobs pass. Universal DMG: 3,182,807 bytes. Windows NSIS installer: 1,222,379 bytes. Pending developer manual checks. |
-| P2.1 | vidya-core domain rules | done | 2026-09-17 | Pure domain modules complete; 31 core tests pass, including required vectors and property tests; full verification passes. |
-| P2.2 | Permission matrix | done | 2026-09-17 | 39-action exhaustive role matrix, scope helpers and machine-checked document parity complete; 39 core tests pass. |
+| P0.1 | Apply Edition 2 to the specification | done | 2026-09-17 | 45 prompts installed; React, size, licensed-server and local-backup specifications reconciled. Developer approval of D27–D31 remains. |
+| P1.1 | Workspace, tooling, size gate and CI | not started | | Edition 1 implementation exists; Edition 2 requirements must be applied and reverified. |
+| P1.2 | React port of the prototype | not started | | Edition 1 plain-JavaScript port exists and must be migrated to React. |
+| P1.3 | Desktop shell and security settings | not started | | Edition 1 shell exists; Edition 2 separate-build size gates must be applied. |
+| P2.1 | vidya-core domain rules | not started | | Edition 1 implementation exists and must be checked against Edition 2. |
+| P2.2 | Permission matrix | not started | | Edition 1 implementation exists; Edition 2 adds backup.run and office-computer context. |
 | P2.3 | Encrypted database and migrations | not started | | |
 | P2.4 | Platform secrets, folders and app start | not started | | |
 | P2.5 | Services foundation, repositories and change log | not started | | |
@@ -23,16 +24,16 @@ Agents update this file at the end of every session. The developer ticks the man
 | P3.6 | Settings | not started | | |
 | P3.7 | Home screens, reports, activity and Excel export | not started | | |
 | P4.1 | License codes crate | not started | | |
-| P4.2 | Device ID, activation and principal reset | not started | | |
+| P4.2 | Device ID, activation, server permit and principal reset | not started | | |
 | P4.3 | Provider Tool | not started | | |
 | P4.4 | Setup wizard, login slips and recovery sheet | not started | | |
 | P4.5 | Student import from Excel | not started | | |
 | P5.1 | Printing and Hindi spike (decide how documents are made) | not started | | |
 | P5.2 | Documents: receipts, report cards, registers, TC | not started | | |
-| P6.1 | Local and pen drive backups, restore | not started | | |
-| P6.2 | Google Drive backup | not started | | |
+| P6.1 | Encrypted backups, automatic backups and restore | not started | | |
+| P6.2 | Backup drives: sync backups to local and removable drives | not started | | |
 | P6.3 | New academic session | not started | | |
-| P7.1 | LAN server and background running | not started | | |
+| P7.1 | Licensed LAN server and background running | not started | | |
 | P7.2 | Discovery, firewall and connection check | not started | | |
 | P7.3 | Phone approval, signed requests and device management | not started | | |
 | P7.4 | Sync engine core | not started | | |
@@ -43,12 +44,12 @@ Agents update this file at the end of every session. The developer ticks the man
 | P8.4 | Phone sync, offline work and removal | not started | | |
 | P8.5 | Phone screens, PDFs and privacy protections | not started | | |
 | P9.1 | Full Hindi | not started | | |
-| P10.1 | Size audit and Windows installer | not started | | |
+| P10.1 | Size gate and Windows installer | not started | | |
 | P10.2 | Mac signing and notarization | not started | | |
 | P10.3 | Android signing and release pipeline | not started | | |
 | P10.4 | Security and privacy review | not started | | |
 | P10.5 | Load test and real-device testing | not started | | |
-| P10.6 | Play Store and Google verification | not started | | |
+| P10.6 | Play Store listing and review access | not started | | |
 
 Status values: not started, in progress, done, blocked.
 
@@ -59,10 +60,11 @@ Status values: not started, in progress, done, blocked.
 - [ ] **P1.3** After P1.3 is pushed, record the NSIS installer size from the **Windows — verify and installer** CI log. Install it per-machine in the Windows 11 VM, launch Vidya twice and confirm only one window/process remains, then uninstall it from Settings → Apps.
 
 ## Check on MacBook
+- [ ] **P0.1** Read D27–D31 in `docs/DECISIONS.md` and approve them. Confirm teachers should remain unable to run backups at the office computer (the default is no).
 - [ ] **P1.1** Run `npm run tauri dev`; a Vidya window opens showing "Vidya" and a version.
 - [ ] **P1.1** After pushing, confirm all three CI jobs (macos, windows, deny) are green in the GitHub Actions tab.
 - [ ] **P1.2** Run `npm run tauri dev`, load the sample school, then sign in as `sunita`, `anita`, and `sierra` with password `vidya123`. Exercise every screen and tick [PARITY.md](PARITY.md) while comparing it with `reference/VidyaSchoolApp_step1.html` in Chrome.
-- [ ] **P1.3** Mount `target/universal-apple-darwin/release/bundle/dmg/Vidya_0.1.0_universal.dmg`, right-click `Vidya.app` → Open, and confirm every screen has no CSP console violations. The DMG uses Tauri's supported CI layout because Finder's cosmetic AppleScript races the macOS 26 volume unmount.
+- [ ] **P1.3** Build the Edition 2 Apple Silicon and Intel DMGs, mount the build for this Mac, right-click `Vidya.app` → Open, and confirm every screen has no CSP console violations.
 - [ ] **P1.3** In the running Mac app, confirm Cmd+C/Cmd+V in the username field, Cmd+Q, all application/Edit/Window menu items, one window after launching twice, a log file under the app log directory, and no Inspect action or devtools shortcut in the release build.
 - [ ] **P2.1** Read `crates/vidya-core/tests/vectors.rs`; spot-check three fee calculations and three amount-in-words results by hand.
 
@@ -70,6 +72,13 @@ Status values: not started, in progress, done, blocked.
 
 ## Session log
 (Newest first. Paste each session summary here.)
+
+### 2026-09-17 — P0.1 Apply Edition 2 to the specification
+- Installed the Edition 2 book at `docs/PROMPTS_BOOK.md` and split all 45 prompt files, including the new P0.1 and replacement P6.2 backup-drives prompt.
+- Added D27–D31 and reconciled AGENTS, UI, architecture, permissions, API, backup format, platforms, dependencies, data defaults, product wording and testing guidance.
+- Removed active cloud-backup, external-authorization, legacy renderer and universal-build assumptions; retained only the historical D15/D30 supersession note and explicit forbidden-rendering rule text.
+- Added the empty `docs/SIZE.md` ledger and restored `.claude/commands/run.md` with the Edition 2 prompt path.
+- Edition 1 code verification is intentionally deferred to P1.1/P1.2 because P0.1 permits document changes only and the new permission/API documents now intentionally lead the old implementation.
 
 ### 2026-09-17 — P2.2 Permission matrix
 - Added all 39 documented actions in order, exact string parsing, an explicit no-wildcard role/action access matrix, section scope helpers and UI permission-name generation.
@@ -92,7 +101,7 @@ Status values: not started, in progress, done, blocked.
 ### 2026-09-16 — P1.2 Frontend port of the prototype
 - Completed the setup wizard, credential slips, pre-school restore, attendance, marks, reports, staff logins, activity, backup and settings screens; registered all desktop views and the client-safe mobile subset.
 - Expanded locales to 462 matching keys, added mocked-command screen tests plus real mock-DTO integration coverage (71 tests total), and created `docs/PARITY.md` with 94 comparison items.
-- Safe-template checks: no inline event handlers in JavaScript; `innerHTML` remains confined to `src/core/html.js`.
+- Edition 1 safe-template checks passed; Edition 2 supersedes that renderer with React components and a complete raw-DOM-write ban.
 - `VERIFY_DENY=1 npm run verify` → ALL CHECKS PASSED. Developer side-by-side UI parity check remains pending.
 
 ### 2026-09-15 — P1.1 Workspace, tooling and CI

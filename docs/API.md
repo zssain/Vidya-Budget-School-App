@@ -28,7 +28,7 @@ Every command listed here must exist in three places, checked by `scripts/check-
 ## App and setup
 | Command | Permission | Input → Output | Notes |
 |---|---|---|---|
-| `app_status` | no session | → `AppStatusDto { hasSchool, licensed, deviceLocked, wizardStep, platform, version, schoolName?, schoolCode? }` | First call on start |
+| `app_status` | no session | → `AppStatusDto { hasSchool, licensed, serverAllowed, deviceLocked, wizardStep, platform, version, schoolName?, schoolCode? }` | First call on start |
 | `get_device_id` **D** | no session | → `{ deviceId }` | |
 | `activate` **D** | no session, only before setup | `{ code }` → `LicenseDto` | |
 | `wizard_save_step` **D** | no session, only while no school | `{ step, data }` → `WizardStateDto` | |
@@ -138,18 +138,22 @@ Every command listed here must exist in three places, checked by `scripts/check-
 | Command | Permission | Input → Output |
 |---|---|---|
 | `backup_status` **D** | backup.manage | → `BackupStatusDto` |
+| `run_backup_now` **D** | backup.run | → `BackupResultDto` |
 | `backup_save_file` **D** | backup.manage | `{ backupPassword, path }` → `BackupResultDto` |
-| `backup_list_removable` **D** | backup.manage | → `[RemovableDriveDto]` |
+| `list_removable_drives` **D** | backup.run | → `[RemovableDriveDto { volumeId, label, mountPath, removable, network, freeBytes, totalBytes }]` |
 | `backup_to_pendrive` **D** | backup.manage | `{ driveId }` → `BackupResultDto` |
 | `backup_enable_auto` **D** | backup.manage | `{ backupPassword }` → `BackupStatusDto` |
 | `backup_change_password` **D** | backup.manage | `{ current, new }` → `()` |
 | `restore_inspect` **D** | backup.manage or no school | `{ path, backupPassword }` → `RestorePreviewDto` |
 | `restore_commit` **D** | backup.manage or no school | `{ previewId }` → `()` then app restarts |
 | `backup_test_latest` **D** | backup.manage | → `BackupVerifyDto` |
-| `drive_connect` **D** | backup.manage | → `{ email }` |
-| `drive_disconnect` **D** | backup.manage | → `()` |
-| `drive_list_backups` **D** | backup.manage | → `[DriveFileDto]` |
-| `drive_restore_download` **D** | backup.manage or no school | `{ fileId }` → `{ path }` |
+| `list_backup_destinations` **D** | backup.run | → `[BackupDestinationDto { id, kind, label, path, state, lastSyncedAt?, lastError?, backupCount, freeBytes?, sameDiskWarning }]` |
+| `add_backup_destination` **D** | backup.manage | `{ path, confirmSameDisk? }` → `BackupDestinationDto` |
+| `remove_backup_destination` **D** | backup.manage | `{ destinationId }` → `()`; files remain on the destination |
+| `sync_backup_destinations` **D** | backup.run | → `[DestinationSyncResultDto { destinationId, copied, state, error? }]` |
+| `list_destination_backups` **D** | backup.manage | `{ destinationId }` → `[DestinationBackupDto { name, kind, createdAt, size, sha256, schemaVersion, appVersion, exists }]` |
+| `copy_latest_backup_once` **D** | backup.run | `{ volumeId }` → `DestinationSyncResultDto` |
+| `set_staff_backup_allowed` **D** | backup.manage | `{ allowed }` → `BackupStatusDto` |
 
 ## Devices and LAN (desktop)
 | Command | Permission | Input → Output |
@@ -196,4 +200,4 @@ All routes except discovery and sign-in require headers: `Authorization: Bearer 
 | `GET /sync/live` (WebSocket) | "new changes up to seq N" | broadcaster |
 | `POST /students` | Add student (online-only, allocates admission number) | `StudentService::add` |
 | `GET /time` | Server time for clock offset | — |
-| `GET /health` | Returns school code and version, no session | — |
+| `GET /health` | Returns `{ schoolCode, version, fp, licensed: true }`, no session. A server without a permit does not exist | — |

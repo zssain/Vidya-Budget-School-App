@@ -412,8 +412,8 @@ CREATE TABLE auth_cache (
 -- ---------- backups (office computer) ----------
 CREATE TABLE backups_log (
   id          TEXT PRIMARY KEY,
-  kind        TEXT NOT NULL CHECK (kind IN ('daily','monthly','manual','pendrive','drive','safety','verify')),
-  location    TEXT NOT NULL,          -- file path or Drive file id
+  kind        TEXT NOT NULL CHECK (kind IN ('daily','monthly','manual','pendrive','safety','verify')),
+  location    TEXT NOT NULL,          -- local file path
   created_at  TEXT NOT NULL,
   size_bytes  INTEGER,
   verified_at TEXT,
@@ -449,4 +449,4 @@ CREATE TRIGGER trg_log_no_delete BEFORE DELETE ON change_log BEGIN SELECT RAISE(
 - `exams` for the first session: Unit Test 1 (25), Half Yearly (100), Unit Test 2 (25), Annual (100).
 - Subjects by class: Nursery, LKG, UKG → Hindi, English, Numbers, Drawing. I to V → Hindi, English, Mathematics, EVS, Drawing. VI to VIII → Hindi, English, Mathematics, Science, Social Science, Computer. IX to XII → Hindi, English, Mathematics, Science, Social Science.
 - `counters`: `adm_no` 0, `tc_no` 0, `receipt:PC` 0.
-- `app_settings`: session_timeout_minutes 30, receipt_paper a4, print_language en, keep_running_in_tray 1, start_at_login 1, keep_awake 1.
+- `app_settings`: session_timeout_minutes 30, receipt_paper a4, print_language en, keep_running_in_tray 1, start_at_login 1, keep_awake 1, backup_staff_can_run "1", backup_destinations "[]" (JSON array).

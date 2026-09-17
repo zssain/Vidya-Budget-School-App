@@ -23,7 +23,7 @@ Exact permissions are in `PERMISSIONS.md`.
 3. Enter marks and print report cards for a whole class.
 4. Know who owes how much at any moment.
 5. Produce the numbers asked for in UDISE+ forms and inspections.
-6. Never lose data: encrypted backups on the computer, pen drive and Google Drive.
+6. Never lose data: encrypted backups on the computer, external or pen drives and a school-network folder.
 7. Work with no internet at all.
 
 ## Out of scope for version 1

@@ -1,6 +1,6 @@
 # Vidya starter kit — read this first
 
-This kit turns Claude Code into a careful builder for Vidya. It contains the rules the agent must follow, the complete specification, and 44 small, detailed build prompts. You run them one at a time.
+This Edition 2 kit turns a coding agent into a careful builder for Vidya. It contains the rules the agent must follow, the complete specification, and 45 small, detailed build prompts. Run them one at a time.
 
 ## What is in the kit
 
@@ -10,14 +10,14 @@ This kit turns Claude Code into a careful builder for Vidya. It contains the rul
 | `CLAUDE.md` | Loads `AGENTS.md` for Claude Code, plus Claude-specific habits | Claude Code, automatically |
 | `src/`, `src-tauri/`, `crates/`, `provider/` | Only `AGENTS.md` and `CLAUDE.md` files with rules for that part of the code | The agent, when working there |
 | `docs/PRODUCT.md` … `docs/TESTING_STRATEGY.md` | The specification: product, architecture, decisions, allowed libraries, database schema, permissions, commands, sync, license codes, backups, UI, platforms, testing | The agent; you when curious |
-| `docs/prompts/P1.1.md` … `P10.6.md` | The 44 build prompts | The agent, through `/run` |
+| `docs/prompts/P0.1.md` … `P10.6.md` | The 45 build prompts | The agent, through `/run` |
 | `docs/PROGRESS.md` | Status of every prompt, checks for you, session log | You and the agent |
 | `docs/KNOWN_ISSUES.md` | Anything unfinished or risky | You and the agent |
 | `.claude/commands/` | Shortcuts: `/run`, `/verify`, `/finish`, `/status`, `/fix` | You type them in Claude Code |
 | `.claude/agents/` | Helper agents: `spec-checker`, `security-reviewer`, `dependency-verifier` | Claude Code uses them |
 | `scripts/doctor.sh` | Checks your MacBook has the tools installed | You |
 | `reference/VidyaSchoolApp_step1.html` | The working prototype | The agent; you for comparing |
-| `VIDYA_PROMPTS_BOOK.md` | All 44 prompts in one file, for reading and printing | You |
+| `docs/PROMPTS_BOOK.md` | All 45 Edition 2 prompts in one file, for reading and printing | You |
 
 ## How the kit stops the agent from guessing
 
@@ -55,7 +55,7 @@ This kit turns Claude Code into a careful builder for Vidya. It contains the rul
    ```
    claude
    ```
-7. Type `/run P1.1`.
+7. Type `/run P0.1`.
 
 ## Your routine for every prompt
 
@@ -77,12 +77,13 @@ This kit turns Claude Code into a careful builder for Vidya. It contains the rul
 
 | Phase | Prompts | Result |
 |---|---|---|
-| 1 Foundation | P1.1–P1.3 | Project skeleton, prototype screens in the desktop app, Windows builds from GitHub |
+| 0 Specification | P0.1 | Edition 2 rules and specifications |
+| 1 Foundation | P1.1–P1.3 | Project skeleton, React prototype screens, size gates and Windows builds from GitHub |
 | 2 Core and database | P2.1–P2.7 | Business rules, permissions, encrypted database, sign-in against real data |
 | 3 School features | P3.1–P3.7 | Staff logins, students, fees, attendance, marks, settings, reports, Excel |
 | 4 Licensing and setup | P4.1–P4.5 | Activation codes, Provider Tool, setup wizard, Excel import |
 | 5 Documents | P5.1–P5.2 | Hindi printing proof, all printed documents |
-| 6 Backups and year end | P6.1–P6.3 | Local, pen drive and Google Drive backups, new academic session |
+| 6 Backups and year end | P6.1–P6.3 | Encrypted local and removable-drive backups, new academic session |
 | 7 Local network and sync | P7.1–P7.5 | Office computer as server, phone approval, sync engine |
 | 8 Android | P8.1–P8.5 | Phone app with offline work and sync |
 | 9 Language | P9.1 | Full Hindi, reviewed by a person |
@@ -98,7 +99,7 @@ This kit turns Claude Code into a careful builder for Vidya. It contains the rul
 | P4.3 | FileVault switched on; a pen drive; a long passphrase written on paper and stored safely |
 | P4.4 | Your business name and support phone number for the recovery sheet |
 | P5.2 | Photos of real receipts, report cards, attendance registers and a transfer certificate |
-| P6.2 | Google Cloud project with the Drive API and a Desktop OAuth client |
+| P6.2 | A pen drive or external disk; a network folder if the school uses one |
 | P7.1 onwards | Home Wi-Fi without guest mode or client isolation |
 | P8.1 | Android Studio; an Android phone with USB debugging |
 | P9.1 | A Hindi-speaking reviewer (teacher or school clerk) |
@@ -113,7 +114,7 @@ Real fee structures (terms, monthly fees, late fees, sibling discounts) and your
 
 ## Rules for you
 
-- Never paste passwords, the Provider passphrase, signing keys, keystore passwords or Google client secrets into Claude Code. Prompts tell you where to put them.
+- Never paste passwords, the Provider passphrase, signing keys or keystore passwords into a coding-agent chat. Prompts tell you where to put them.
 - Do not skip prompts or run two at once. Each depends on the ones before it.
 - Do not let the agent continue if `npm run verify` fails.
 - If the agent asks for a decision, take your time. Decisions are recorded in `docs/DECISIONS.md`.

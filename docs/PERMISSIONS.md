@@ -36,6 +36,7 @@ The table below is **machine-checked**: a test in `vidya-core` parses this table
 | settings.edit | yes | no | no |
 | session.change | yes | no | no |
 | backup.manage | yes | no | no |
+| backup.run | yes | yes | no |
 | devices.view | yes | no | no |
 | devices.approve | yes | no | no |
 | devices.manage | yes | no | no |
@@ -43,6 +44,17 @@ The table below is **machine-checked**: a test in `vidya-core` parses this table
 | license.view | yes | no | no |
 | account.change_own_password | yes | yes | yes |
 | account.set_own_language | yes | yes | yes |
+
+## Office computer only
+These actions are refused for requests from phones, whatever the role.
+- `backup.run`
+- `backup.manage`
+- `session.change`
+- `students.import`
+- `settings.edit`
+- `users.manage`
+- `devices.approve`
+- `devices.manage`
 
 ## Rules the table cannot express
 1. **setup.run** is allowed only when the database has no school, and only on the office computer. No session exists yet, so it is not a role action.
@@ -52,7 +64,7 @@ The table below is **machine-checked**: a test in `vidya-core` parses this table
 5. **Reads are filtered, not just blocked.** A teacher calling a student list gets a DTO type without fee fields (`StudentTeacherDto`). The type must not contain the fields at all.
 6. **alerts.view** for accountants shows only fee alerts (`overpayment`).
 7. **Switched-off, locked or must-change-password users** have no permissions except `account.change_own_password` during first sign-in (pending token).
-8. **Phones** additionally cannot perform: setup, license, backup, settings.edit, users.manage, devices.*, session.change, reports.* — these commands are not compiled into the Android build.
+8. **Phones** additionally cannot perform: setup, license, the office-computer-only actions above, devices.*, or reports.* — these commands are not compiled into the Android build where possible and are always refused by services.
 9. **Concession field** sent by a non-principal is an error (`permission`), not silently ignored.
 10. **students.add on a phone** requires a live connection to the office computer (admission number allocation).
 

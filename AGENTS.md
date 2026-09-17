@@ -12,7 +12,15 @@ Offline school management software for small schools in India, sold as a one-tim
 | Vidya mobile | Android (.apk, .aab) | Staff phones. Client only. Syncs with the office computer on school Wi-Fi |
 | Provider Tool | macOS | Used only by the seller to issue activation and reset codes |
 
-No cloud. No internet, except the optional encrypted backup to the school's own Google Drive.
+No cloud. No internet. Optional encrypted backups go only to storage chosen by the school.
+
+## Edition 2 rules
+
+1. **Size budget.** No shipped file may be larger than 30 MB, and no installed app may take more than 30 MB on disk. A warning is raised at 25 MB. Any prompt that adds a Rust crate or npm package runs `npm run size` (from P1.3) and records the result in `docs/SIZE.md`. If a change crosses the warning line, stop and report.
+2. **React rendering.** Use components and JSX text only. `dangerouslySetInnerHTML`, `innerHTML`, `outerHTML`, `insertAdjacentHTML` and `document.write` are banned everywhere with no exceptions. Event handlers are passed only as React props. No business rules in components.
+3. **Server rule.** Only a licensed office computer runs server code. Mobile builds do not compile server crates at all.
+4. **Network rule.** Vidya never needs the internet. The only network traffic is between the office computer and approved phones on private addresses.
+5. **Backup rule.** Backups are always encrypted files. Plain copies exist only in private temporary folders and are deleted in every code path.
 
 ## 2. Sources of truth (in this order)
 
@@ -75,12 +83,12 @@ Rules:
 - Use floating point for money.
 - UPDATE or DELETE receipts, receipt cancellations, transfer certificates or the change log.
 - Store a password, backup password, private key or database key in plain text, logs or error messages.
-- Put the license private key, signing keys, Google client secret or any secret in the repository.
+- Put the license private key, signing keys or any secret in the repository.
 - Delete, skip (`#[ignore]`, `.skip`) or weaken a test to make it pass. If a test is wrong, explain why before changing it.
 - Leave `todo!()`, `unimplemented!()`, `unwrap()` on user data, or silent placeholder behaviour in code paths the user can reach. List any unavoidable placeholder in `docs/KNOWN_ISSUES.md`.
 - Change `AGENTS.md` or `docs/DECISIONS.md` unless the prompt tells you to.
 - Add a new top-level folder, crate or framework not in `docs/ARCHITECTURE.md`.
-- Use `innerHTML` with anything except the `html` template helper (see `docs/UI_GUIDE.md`).
+- Use `dangerouslySetInnerHTML`, `innerHTML`, `outerHTML`, `insertAdjacentHTML` or `document.write` anywhere.
 
 ## 6. Code rules
 
@@ -94,7 +102,7 @@ Rules:
 - Platform-specific code only in `src-tauri/src/platform/` behind the `Platform` trait.
 
 **JavaScript**
-- Plain ES modules, no framework. ESLint and Prettier must pass.
+- React with JSX in plain JavaScript. ESLint and Prettier must pass.
 - Views never call `invoke` directly. They call functions in `src/api/commands.js`.
 - All user-facing text through `t('key')`.
 

@@ -13,15 +13,14 @@ Copy the `:root` variables from the prototype exactly: blues, orange, green, red
 ## Components to build once (src/components/)
 button (primary, outline, quiet, ok, warn, small, large), input, select, chip bar, stat card, card with header, table, empty state, note (blue, green, orange, red), pill, modal, confirm dialog, toast, receipt preview, attendance card, marks input, progress bar, credential slip.
 
-## Safe HTML
-`src/core/html.js` exports:
-- `html` tagged template: escapes every interpolated value (`&<>"'`), joins arrays, and returns a `SafeHtml` object.
-- `raw(safeHtml)` for nesting results of `html`.
-- `render(el, safeHtml)` sets `el.innerHTML`.
-Never assign `innerHTML` anywhere else. ESLint rule `no-restricted-properties` blocks `innerHTML` and `outerHTML` outside `core/html.js`.
-
-## Events
-`src/core/dom.js` exports `delegate(root, { actionName: (event, element) => {} })` reading `data-action` and `data-*` attributes. No inline handlers.
+## React rendering rules
+1. Text is rendered as JSX children or attribute values. React escapes it.
+2. Never use `dangerouslySetInnerHTML`, `innerHTML`, `outerHTML`, `insertAdjacentHTML` or `document.write`. ESLint blocks them with no exception list.
+3. Never build URLs for `href` or `src` from user data, except `tel:` links made by `src/core/links.js`, which only accepts 10 digits.
+4. Use class names from the CSS files. Use inline `style={{…}}` objects only for computed values (for example progress width). Never write style strings.
+5. Components get data from hooks in `src/core/useCommand.js`. They never call `invoke` directly and never compute fees, grades, percentages or permissions.
+6. Every visible string comes from `t('key')` (from the `useT()` hook).
+7. Printing renders a document component into the print root through `usePrint()`. It never builds HTML strings.
 
 ## Wording rules
 - Sentence case everywhere. Short, plain words. Active voice.
@@ -43,4 +42,4 @@ Never assign `innerHTML` anywhere else. ESLint rule `no-restricted-properties` b
 Visible keyboard focus, labels for every input, `aria-live` for toasts, colour never the only signal (text labels on pills), respect `prefers-reduced-motion`.
 
 ## Print
-Documents are HTML templates in `src/print/` using `print.css` (A4, A5, 80 mm). See P5.1 and P5.2 for how they become PDFs or print jobs.
+Documents are React components in `src/print/` using `print.css` (A4, A5, 80 mm). See P5.1 and P5.2 for how they become PDFs or print jobs.

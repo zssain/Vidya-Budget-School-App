@@ -3,7 +3,7 @@
 Implemented in `crates/vidya-backup`.
 
 ## File name
-`vidya-<schoolcode>-<YYYY-MM-DD>-<HHMM>-<kind>.vidyabak` (local time), kind = daily, monthly, manual, pendrive, drive, safety.
+`vidya-<schoolcode>-<YYYY-MM-DD>-<HHMM>-<kind>.vidyabak` (local time), kind = daily, monthly, manual, pendrive, safety, verify.
 
 ## Version 2 container
 | Part | Size | Content |
@@ -57,4 +57,28 @@ JSON file: `{ format: "vidya-backup", v: 1, kdf: { alg: "PBKDF2-SHA256", iter, s
 
 ## Retention
 - Local: 30 newest daily, 12 newest monthly (first backup of each month), all manual and safety backups for 90 days.
-- Google Drive: 30 daily and 12 monthly files created by the app.
+
+## Backup destinations
+
+- Folder layout: `<destination root>/Vidya Backups/<schoolcode>/`.
+- Files are written as `<name>.vidyabak.partial`, flushed, renamed, then read back and checked against SHA-256.
+- `manifest.json` in the same folder has this form and contains no names of people and nothing decrypted:
+  ```json
+  {
+    "version": 1,
+    "schoolCode": "vaani",
+    "files": [
+      {
+        "name": "vidya-vaani-2026-09-15-1830-daily.vidyabak",
+        "kind": "daily",
+        "createdAt": "2026-09-15T13:00:00Z",
+        "size": 1234,
+        "sha256": "...",
+        "schemaVersion": 1,
+        "appVersion": "1.0.0"
+      }
+    ]
+  }
+  ```
+- Retention at each destination is the same as for local backups: 30 daily, 12 monthly and 5 safety copies.
+- Files not listed in the manifest are never deleted.

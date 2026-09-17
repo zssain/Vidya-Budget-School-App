@@ -10,7 +10,7 @@
 | License | vectors | `vidya-license/tests` | Encode, decode, tamper, device, expiry, nonce |
 | Sync | simulation harness | `vidya-sync/tests`, `vidya-server/tests` | Convergence, clash rules, role filtering, idempotency |
 | Backup | round trip | `vidya-backup/tests` | Encrypt, decrypt, wrong password, damaged file, v1 import |
-| Frontend | Vitest + jsdom | `src/**/*.test.js` | `html` escaping, format, i18n, each view renders with mocked API and handles errors |
+| Frontend | Vitest + React Testing Library + jsdom | `src/**/*.test.{js,jsx}` | React text escaping, hooks, format, i18n, each view renders with mocked API and handles errors |
 | API drift | node script | `scripts/check-api-drift.mjs` | Commands in Rust, JS and API.md match |
 | i18n | node script | `scripts/check-i18n.mjs` | Keys in both languages, no untranslated view text |
 | Desktop smoke | manual checklist | `docs/PROGRESS.md` | Each prompt |

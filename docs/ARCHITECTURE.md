@@ -16,8 +16,9 @@ vidya/
 ├── rust-toolchain.toml
 ├── src/                       frontend (shared by desktop and mobile)
 │   ├── index.html
-│   ├── main-desktop.js        registers all desktop views
-│   ├── main-mobile.js         registers teacher and accountant views only
+│   ├── main.jsx               selects the platform entry point
+│   ├── main-desktop.jsx       registers all desktop views
+│   ├── main-mobile.jsx        registers teacher and accountant views only
 │   ├── core/  api/  views/  components/  styles/  locales/
 ├── src-tauri/                 Tauri app crate "vidya-app"
 │   ├── tauri.conf.json (+ platform-specific config files)
@@ -51,7 +52,7 @@ vidya/
             ┌────────────────────────────────────────┐
             │ vidya-core  (pure rules, no I/O)       │
             └────────────────────────────────────────┘
- vidya-license → vidya-core          vidya-backup → vidya-db
+ vidya-license → vidya-core          vidya-backup → vidya-db (encrypted files, local destinations, restore)
  vidya-client  → vidya-sync, vidya-services (local writes on phone)
  vidya-export  → vidya-services (reads DTOs)
  vidya-testkit → everything (dev-dependency only)
@@ -72,10 +73,10 @@ Tauri process
 ├── Window (WebView) ── invoke ──► commands ──► services ──► SQLCipher database file
 ├── Session store (in memory): token → Actor
 ├── Background tasks (tokio)
-│   ├── LAN server (axum + rustls) on port 47631
-│   ├── Discovery: mDNS advertise + UDP responder on 47632
+│   ├── Licensed LAN server (axum + rustls) on port 47631
+│   ├── Licensed discovery: mDNS advertise + UDP responder on 47632
 │   ├── Sync live notifier (WebSocket broadcaster)
-│   ├── Backup scheduler (daily local copy, Drive upload when online)
+│   ├── Backup scheduler (daily encrypted local backup and destination sync)
 │   └── Keep-awake during school hours
 └── Tray / menu bar icon (window can close, process keeps running)
 ```
@@ -93,15 +94,45 @@ Tauri process (Android)
 ```
 Services run in **server mode** on the office computer (writes are final) and **client mode** on phones (writes are applied locally and queued; the server may reject them, which rolls them back). The mode is a field of the service container, not separate code.
 
-## 6. Data flow examples
+## 6. Frontend tree
+
+`main.jsx` selects `main-desktop.jsx` or `main-mobile.jsx`. Each renders:
+
+```
+AppProviders (I18n, Session, Router, Toast, Modal, Print)
+└── Shell
+    └── View
+```
+
+Views and components use React and JSX. `src/api/commands.js` is the only bridge to Rust. Components receive data through the hooks in `src/core/useCommand.js`; business rules remain in Rust.
+
+## 7. Licensed server path
+
+Only a valid license for the current office computer can create the capability required by server code:
+
+```
+LicenseService::server_permit() → vidya_server::start(permit, …)
+```
+
+Without a `ServerPermit`, the LAN server, discovery responders, approval flow and sync endpoints do not start. Mobile builds do not compile `vidya-server`.
+
+## 8. Backup architecture
+
+`vidya-backup` implements the encrypted backup file format, local automatic backups, backup destinations and restore. Destinations are a second internal drive, external disk, pen drive or school-network folder. There are no cloud authentication or internet upload paths. Routine backup execution is restricted by D31; destination configuration and restore require `backup.manage`.
+
+## 9. Size budget
+
+D28 limits every shipped download and installed app to 30 MB, with a warning at 25 MB. `docs/SIZE.md` records each measured artifact and installed footprint.
+
+## 10. Data flow examples
 **Collect fee on the office computer:** view → `commands.collectFee` → `fees::collect_fee` command → `FeeService::collect(actor, input)` → `authorize(FeesCollect)` → `core::fees::validate_payment` → transaction: next receipt number, insert receipt, change-log entry → commit → `ReceiptDto` → view shows receipt.
 
 **Collect fee on a phone:** same until `FeeService::collect` in client mode → local transaction inserts receipt with the phone's prefix (T1-0001) and an outbox change → UI shows receipt → sync loop pushes → server runs `FeeService::apply_remote_change` → permission and validation again → accepted or rejected → phone marks acknowledged or rolls back.
 
-## 7. Error flow
+## 11. Error flow
 Library errors (`thiserror`) → `ServiceError { kind, message_key, params, field }` → at the boundary: `AppError` JSON for Tauri, same JSON body with HTTP status for LAN. See `API.md`.
 
-## 8. Where each spec is implemented
+## 12. Where each spec is implemented
 | Spec | Code |
 |---|---|
 | DATA_MODEL.md | `crates/vidya-db/migrations/`, `crates/vidya-db/src/repo/` |

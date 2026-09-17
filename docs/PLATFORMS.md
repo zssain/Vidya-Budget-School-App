@@ -3,6 +3,21 @@
 All platform code lives in `src-tauri/src/platform/` behind this trait (extend only with the developer's approval):
 
 ```rust
+pub struct VolumeInfo {
+    pub volume_id: String,
+    pub label: String,
+    pub removable: bool,
+    pub network: bool,
+    pub physical_disk_id: Option<String>,
+    pub free_bytes: u64,
+    pub total_bytes: u64,
+}
+
+pub struct MountedVolume {
+    pub mount_path: PathBuf,
+    pub info: VolumeInfo,
+}
+
 pub trait Platform: Send + Sync {
     fn name(&self) -> &'static str;                        // "windows" | "macos" | "android"
     fn data_dir(&self) -> Result<PathBuf, PlatformError>;
@@ -13,14 +28,15 @@ pub trait Platform: Send + Sync {
     fn delete_secret(&self, name: &str) -> Result<(), PlatformError>;
     fn device_values(&self) -> Result<(String, String), PlatformError>; // desktop: for Device ID
     fn set_keep_awake(&self, on: bool) -> Result<(), PlatformError>;    // desktop
-    fn removable_drives(&self) -> Result<Vec<RemovableDrive>, PlatformError>; // desktop
+    fn volume_info(&self, path: &Path) -> Result<VolumeInfo, PlatformError>; // desktop
+    fn removable_drives(&self) -> Result<Vec<MountedVolume>, PlatformError>; // desktop
     fn network_diagnostics(&self) -> NetworkDiagnostics;                // desktop
 }
 ```
 
 | Concern | Windows | macOS | Android |
 |---|---|---|---|
-| App file | NSIS `.exe` installer | Universal `.dmg` with `Vidya.app` | `.apk` per ABI, `.aab` |
+| App file | NSIS `.exe` installer | Separate Apple Silicon and Intel `.dmg` files unless a universal build fits D28 | `.apk` per ABI, `.aab` |
 | Built on | GitHub Actions `windows-latest` | MacBook, and `macos-latest` in CI | MacBook, and `ubuntu-latest` in CI |
 | Tested on | Windows 11 ARM VM (bridged), real PC before release | MacBook | Real phone over USB |
 | Data folder | `C:\ProgramData\Vidya\data` | `~/Library/Application Support/in.vidya.school/data` | App private storage from Tauri path API |
@@ -39,6 +55,18 @@ pub trait Platform: Send + Sync {
 | Screenshots blocked | no | no | `FLAG_SECURE` on sensitive screens |
 | Signing | Authenticode (P10.1) | Developer ID + notarization (P10.2) | Release keystore (P10.3) |
 | Uninstall keeps data | Yes, uninstaller must not remove ProgramData | Yes (Trash only removes the app) | No, Android removes app data |
+
+## Size budgets
+
+| Platform artifact | Maximum | Warning |
+|---|---:|---:|
+| Windows installer download | 30 MB | 25 MB |
+| Windows installed app | 30 MB | 25 MB |
+| macOS Apple Silicon DMG and installed app | 30 MB each | 25 MB |
+| macOS Intel DMG and installed app | 30 MB each | 25 MB |
+| Android APK and AAB | 30 MB each | 25 MB |
+
+School data and the operating system's web engine are excluded from installed-app measurements. See D28 and `SIZE.md`.
 
 ## Testing Windows-only code without a Windows PC
 1. Unit-test logic that surrounds the Windows call with a fake `Platform`.

@@ -12,7 +12,7 @@ Read the root `AGENTS.md` first. These rules add to it.
 | `vidya-sync` | Change envelopes, merge rules, protocol DTOs | Database access, network |
 | `vidya-server` | axum LAN server, TLS, discovery responder, rate limits, request signing checks | Business rules (call services) |
 | `vidya-client` | Discovery client, pinned HTTPS client, sync loop for Android | Business rules |
-| `vidya-backup` | Backup file format, local rotation, pen drive, Google Drive upload and restore | UI |
+| `vidya-backup` | Backup file format, local automatic backups, backup destinations and restore | UI |
 | `vidya-export` | Excel export and import, PDF helpers | Business rules |
 | `vidya-testkit` | Sample school generator, simulation harness, test fixtures (dev-dependency only) | Production code |
 
@@ -24,6 +24,8 @@ Read the root `AGENTS.md` first. These rules add to it.
 
 ## Adding dependencies
 External crates must already be listed in `docs/DEPENDENCIES.md`. To add a new one, stop and ask (purpose, alternatives, size, licence, last release). To wire an allowed crate into the workspace:
+
+Every new dependency: check size impact with `cargo bloat` or the size script, and record it in docs/SIZE.md.
 
 1. Run `cargo add <crate> -p <member>` in the member that needs it (never write a version from memory).
 2. Read the resolved version in `Cargo.lock`.
