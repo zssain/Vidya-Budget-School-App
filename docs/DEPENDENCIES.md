@@ -21,11 +21,11 @@ Rules:
 | serde, serde_json | Serialisation | all | `derive` feature | serde 1.0.229, serde_json 1.0.151 | P1.1 | |
 | thiserror | Error types | all library crates | | 2.0.20 | P1.3 | |
 | chrono | Dates and times | core, db, services | `serde` feature; no `now()` inside core (pass time in) | 0.4.45 | P2.1 | |
-| uuid | UUID v7 IDs | core, db | `v7`, `serde` features | | | |
+| uuid | UUID v7 IDs | services | `v7`, `serde` features; `Uuid::now_v7()` | 1.26.1 | P2.5 | in P2.5 Mac size row |
 | rusqlite | SQLite access | vidya-db | Apple: `bundled-sqlcipher`/CommonCrypto; other targets: `bundled-sqlcipher-vendored-openssl`. Check Windows and Android builds in CI | 0.40.2 | P2.3 | Fully linked Mac ARM DMG +0.57 MB |
 | r2d2, r2d2_sqlite | Connection pool | vidya-db | r2d2_sqlite 0.35.0 resolves rusqlite 0.40.2 | 0.8.10, 0.35.0 | P2.3 | Included in SQLCipher size measurement |
-| argon2 | Password and backup key hashing | services, backup, provider | | | | |
-| rand | Random bytes, tokens | services, license, backup | Use the OS-backed generator | | | |
+| argon2 | Password and backup key hashing | services | Argon2id m=19456,t=2,p=1; `hash_password_with_salt`; salt from our own `Random` (rand-version independent) | 0.6.0 | P2.5 | in P2.5 Mac size row |
+| rand | Random bytes, tokens | services, testkit | 0.9 API: `OsRng.try_fill_bytes`, `StdRng::seed_from_u64`, `random_range`/`random_bool`. Pinned to 0.9 (not 0.10) for argon2 0.6 | 0.9.5 | P2.5 | in P2.5 Mac size row |
 | zeroize | Wipe secrets from memory | services, license, backup | | 1.9.0 | P1.3 | |
 | sha2 | SHA-256 | license, sync, server | | | | |
 | base32 | Crockford base32 for codes | vidya-license | Verify the Crockford alphabet option exists | | | |
@@ -41,7 +41,7 @@ Rules:
 | reqwest | HTTPS client | vidya-client | `rustls-tls`, no default features; custom certificate verifier for pinning | | | |
 | rust_xlsxwriter | Excel export | vidya-export | | | | |
 | calamine | Excel import | vidya-export | | | | |
-| tracing | Structured logs inside crates | all | Bridge to tauri-plugin-log | | | |
+| tracing | Structured logs inside crates | services | `default-features = false`, `std`; used for internal-error refs | 0.1.44 | P2.5 | in P2.5 Mac size row |
 
 ## Rust — platform specific
 | Crate | Purpose | Platform | Notes to verify | Installed version | Added in | Size impact |
@@ -58,7 +58,7 @@ Rules:
 |---|---|---|---|---|
 | tempfile | Temporary databases in tests | 3.27.0 | P2.3 | Dev only |
 | proptest | Property tests for money, fees, HLC, merge rules | 1.11.0 | P2.1 | |
-| insta | Snapshot tests for DTOs and exports | | | |
+| insta | Snapshot tests for DTOs and exports | 1.48.0 | P2.5 | Dev only (`json` feature) |
 | tokio (test feature) | Async tests | | | |
 
 ## Tools (installed on the MacBook or in CI, not linked into the app)

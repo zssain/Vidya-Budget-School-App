@@ -2,6 +2,8 @@
   "attendance.error.future": "Attendance cannot be marked for a future date.",
   "attendance.error.past_read_only": "Past attendance is read-only.",
   "date.error.invalid": "Enter a valid date in YYYY-MM-DD format.",
+  "db.error.unlock": "Vidya could not unlock its data on this computer.",
+  "errors.internal": "Something went wrong ({ref}). Please try again.",
   "fees.error.amount": "Enter an amount greater than zero.",
   "fees.error.cheque_reference": "Enter a cheque reference of at least 4 characters.",
   "fees.error.no_balance": "There is no fee balance to collect.",

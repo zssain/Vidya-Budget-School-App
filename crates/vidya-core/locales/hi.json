@@ -2,6 +2,8 @@
   "attendance.error.future": "Attendance cannot be marked for a future date.",
   "attendance.error.past_read_only": "Past attendance is read-only.",
   "date.error.invalid": "Enter a valid date in YYYY-MM-DD format.",
+  "db.error.unlock": "विद्या इस कंप्यूटर पर अपना डेटा नहीं खोल सकी।",
+  "errors.internal": "कुछ गड़बड़ हो गई ({ref})। कृपया फिर कोशिश करें।",
   "fees.error.amount": "Enter an amount greater than zero.",
   "fees.error.cheque_reference": "Enter a cheque reference of at least 4 characters.",
   "fees.error.no_balance": "There is no fee balance to collect.",

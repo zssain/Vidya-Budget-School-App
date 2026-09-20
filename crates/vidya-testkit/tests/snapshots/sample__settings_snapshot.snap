@@ -1,0 +1,442 @@
+---
+source: crates/vidya-testkit/tests/sample.rs
+expression: settings
+---
+{
+  "school": {
+    "name": "Vaani Public School",
+    "address": "Station Road, Vidyanagar",
+    "udise": "",
+    "board": "State Board",
+    "phone": "9000000000",
+    "sessionName": "2026-27"
+  },
+  "session": {
+    "id": "id-00000001",
+    "name": "2026-27",
+    "startsOn": "2026-04-01",
+    "endsOn": "2027-03-31",
+    "terms": 3,
+    "transportFeePerTerm": 900
+  },
+  "classes": [
+    {
+      "id": "id-00000002",
+      "name": "Nursery",
+      "sortOrder": 0,
+      "sections": [
+        {
+          "id": "id-00000008",
+          "name": "A"
+        }
+      ],
+      "subjects": [
+        {
+          "id": "id-00000003",
+          "name": "Hindi"
+        },
+        {
+          "id": "id-00000004",
+          "name": "English"
+        },
+        {
+          "id": "id-00000005",
+          "name": "Mathematics"
+        },
+        {
+          "id": "id-00000006",
+          "name": "Science"
+        },
+        {
+          "id": "id-00000007",
+          "name": "Social Studies"
+        }
+      ],
+      "feePlan": {
+        "tuition": 2000,
+        "exam": 300,
+        "other": 400
+      }
+    },
+    {
+      "id": "id-00000009",
+      "name": "I",
+      "sortOrder": 1,
+      "sections": [
+        {
+          "id": "id-00000015",
+          "name": "A"
+        },
+        {
+          "id": "id-00000016",
+          "name": "B"
+        }
+      ],
+      "subjects": [
+        {
+          "id": "id-00000010",
+          "name": "Hindi"
+        },
+        {
+          "id": "id-00000011",
+          "name": "English"
+        },
+        {
+          "id": "id-00000012",
+          "name": "Mathematics"
+        },
+        {
+          "id": "id-00000013",
+          "name": "Science"
+        },
+        {
+          "id": "id-00000014",
+          "name": "Social Studies"
+        }
+      ],
+      "feePlan": {
+        "tuition": 2100,
+        "exam": 300,
+        "other": 400
+      }
+    },
+    {
+      "id": "id-00000017",
+      "name": "II",
+      "sortOrder": 2,
+      "sections": [
+        {
+          "id": "id-00000023",
+          "name": "A"
+        },
+        {
+          "id": "id-00000024",
+          "name": "B"
+        }
+      ],
+      "subjects": [
+        {
+          "id": "id-00000018",
+          "name": "Hindi"
+        },
+        {
+          "id": "id-00000019",
+          "name": "English"
+        },
+        {
+          "id": "id-00000020",
+          "name": "Mathematics"
+        },
+        {
+          "id": "id-00000021",
+          "name": "Science"
+        },
+        {
+          "id": "id-00000022",
+          "name": "Social Studies"
+        }
+      ],
+      "feePlan": {
+        "tuition": 2200,
+        "exam": 300,
+        "other": 400
+      }
+    },
+    {
+      "id": "id-00000025",
+      "name": "III",
+      "sortOrder": 3,
+      "sections": [
+        {
+          "id": "id-00000031",
+          "name": "A"
+        },
+        {
+          "id": "id-00000032",
+          "name": "B"
+        }
+      ],
+      "subjects": [
+        {
+          "id": "id-00000026",
+          "name": "Hindi"
+        },
+        {
+          "id": "id-00000027",
+          "name": "English"
+        },
+        {
+          "id": "id-00000028",
+          "name": "Mathematics"
+        },
+        {
+          "id": "id-00000029",
+          "name": "Science"
+        },
+        {
+          "id": "id-00000030",
+          "name": "Social Studies"
+        }
+      ],
+      "feePlan": {
+        "tuition": 2300,
+        "exam": 300,
+        "other": 400
+      }
+    },
+    {
+      "id": "id-00000033",
+      "name": "IV",
+      "sortOrder": 4,
+      "sections": [
+        {
+          "id": "id-00000039",
+          "name": "A"
+        },
+        {
+          "id": "id-00000040",
+          "name": "B"
+        }
+      ],
+      "subjects": [
+        {
+          "id": "id-00000034",
+          "name": "Hindi"
+        },
+        {
+          "id": "id-00000035",
+          "name": "English"
+        },
+        {
+          "id": "id-00000036",
+          "name": "Mathematics"
+        },
+        {
+          "id": "id-00000037",
+          "name": "Science"
+        },
+        {
+          "id": "id-00000038",
+          "name": "Social Studies"
+        }
+      ],
+      "feePlan": {
+        "tuition": 2400,
+        "exam": 300,
+        "other": 400
+      }
+    },
+    {
+      "id": "id-00000041",
+      "name": "V",
+      "sortOrder": 5,
+      "sections": [
+        {
+          "id": "id-00000047",
+          "name": "A"
+        },
+        {
+          "id": "id-00000048",
+          "name": "B"
+        }
+      ],
+      "subjects": [
+        {
+          "id": "id-00000042",
+          "name": "Hindi"
+        },
+        {
+          "id": "id-00000043",
+          "name": "English"
+        },
+        {
+          "id": "id-00000044",
+          "name": "Mathematics"
+        },
+        {
+          "id": "id-00000045",
+          "name": "Science"
+        },
+        {
+          "id": "id-00000046",
+          "name": "Social Studies"
+        }
+      ],
+      "feePlan": {
+        "tuition": 2500,
+        "exam": 300,
+        "other": 400
+      }
+    },
+    {
+      "id": "id-00000049",
+      "name": "VI",
+      "sortOrder": 6,
+      "sections": [
+        {
+          "id": "id-00000055",
+          "name": "A"
+        },
+        {
+          "id": "id-00000056",
+          "name": "B"
+        }
+      ],
+      "subjects": [
+        {
+          "id": "id-00000050",
+          "name": "Hindi"
+        },
+        {
+          "id": "id-00000051",
+          "name": "English"
+        },
+        {
+          "id": "id-00000052",
+          "name": "Mathematics"
+        },
+        {
+          "id": "id-00000053",
+          "name": "Science"
+        },
+        {
+          "id": "id-00000054",
+          "name": "Social Studies"
+        }
+      ],
+      "feePlan": {
+        "tuition": 2600,
+        "exam": 300,
+        "other": 400
+      }
+    },
+    {
+      "id": "id-00000057",
+      "name": "VII",
+      "sortOrder": 7,
+      "sections": [
+        {
+          "id": "id-00000063",
+          "name": "A"
+        },
+        {
+          "id": "id-00000064",
+          "name": "B"
+        }
+      ],
+      "subjects": [
+        {
+          "id": "id-00000058",
+          "name": "Hindi"
+        },
+        {
+          "id": "id-00000059",
+          "name": "English"
+        },
+        {
+          "id": "id-00000060",
+          "name": "Mathematics"
+        },
+        {
+          "id": "id-00000061",
+          "name": "Science"
+        },
+        {
+          "id": "id-00000062",
+          "name": "Social Studies"
+        }
+      ],
+      "feePlan": {
+        "tuition": 2700,
+        "exam": 300,
+        "other": 400
+      }
+    },
+    {
+      "id": "id-00000065",
+      "name": "VIII",
+      "sortOrder": 8,
+      "sections": [
+        {
+          "id": "id-00000071",
+          "name": "A"
+        },
+        {
+          "id": "id-00000072",
+          "name": "B"
+        }
+      ],
+      "subjects": [
+        {
+          "id": "id-00000066",
+          "name": "Hindi"
+        },
+        {
+          "id": "id-00000067",
+          "name": "English"
+        },
+        {
+          "id": "id-00000068",
+          "name": "Mathematics"
+        },
+        {
+          "id": "id-00000069",
+          "name": "Science"
+        },
+        {
+          "id": "id-00000070",
+          "name": "Social Studies"
+        }
+      ],
+      "feePlan": {
+        "tuition": 2800,
+        "exam": 300,
+        "other": 400
+      }
+    }
+  ],
+  "exams": [
+    {
+      "id": "id-00000073",
+      "name": "Unit Test 1",
+      "maxMarks": 25
+    },
+    {
+      "id": "id-00000074",
+      "name": "Half Yearly",
+      "maxMarks": 100
+    }
+  ],
+  "gradeScale": [
+    {
+      "grade": "A",
+      "minPercent": 80
+    },
+    {
+      "grade": "B",
+      "minPercent": 65
+    },
+    {
+      "grade": "C",
+      "minPercent": 50
+    },
+    {
+      "grade": "D",
+      "minPercent": 33
+    },
+    {
+      "grade": "E",
+      "minPercent": 0
+    }
+  ],
+  "appSettings": {
+    "backup_destinations": "[]",
+    "backup_staff_can_run": "1",
+    "keep_awake": "1",
+    "keep_running_in_tray": "1",
+    "print_language": "en",
+    "receipt_paper": "a4",
+    "session_timeout_minutes": "30",
+    "start_at_login": "1"
+  }
+}

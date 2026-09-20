@@ -3,8 +3,6 @@
 //! Dev-dependency only: never referenced by production code (see
 //! `crates/AGENTS.md`).
 
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn crate_builds() {}
-}
+pub mod sample;
+
+pub use sample::{SampleLogins, SampleSchool};

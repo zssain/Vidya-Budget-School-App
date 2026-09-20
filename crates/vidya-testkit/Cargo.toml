@@ -9,6 +9,9 @@ license.workspace = true
 # workspace crate, and is only ever pulled in by others as a [dev-dependencies]
 # entry (never a normal dependency of production code).
 [dependencies]
+chrono = { workspace = true }
+rand = "0.9"
+rusqlite = { workspace = true }
 vidya-core = { path = "../vidya-core" }
 vidya-db = { path = "../vidya-db" }
 vidya-services = { path = "../vidya-services" }
@@ -18,3 +21,7 @@ vidya-server = { path = "../vidya-server" }
 vidya-client = { path = "../vidya-client" }
 vidya-backup = { path = "../vidya-backup" }
 vidya-export = { path = "../vidya-export" }
+
+[dev-dependencies]
+insta = { version = "1", features = ["json"] }
+tempfile = { workspace = true }
