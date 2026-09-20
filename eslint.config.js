@@ -1,53 +1,63 @@
 import js from '@eslint/js';
+import react from 'eslint-plugin-react';
+import reactHooks from 'eslint-plugin-react-hooks';
 import globals from 'globals';
 
-export default [
-  // Paths ESLint must never lint.
+const restrictedSyntax = [
+  'error',
   {
-    ignores: ['dist', 'target', 'src-tauri/gen', 'reference'],
+    selector: "CallExpression[callee.name='eval']",
+    message: 'Dynamic code evaluation is not allowed.',
   },
-
-  js.configs.recommended,
-
   {
-    files: ['**/*.{js,mjs,cjs}'],
+    selector: "NewExpression[callee.name='Function']",
+    message: 'Dynamic code evaluation is not allowed.',
+  },
+  {
+    selector: "JSXAttribute[name.name='dangerouslySetInnerHTML']",
+    message: 'Render with React components (UI_GUIDE.md).',
+  },
+];
+
+export default [
+  { ignores: ['dist', 'dist-mobile', 'target', 'src-tauri/gen', 'reference'] },
+  js.configs.recommended,
+  react.configs.flat.recommended,
+  react.configs.flat['jsx-runtime'],
+  reactHooks.configs.flat.recommended,
+  {
+    files: ['**/*.{js,jsx,mjs,cjs}'],
     languageOptions: {
       ecmaVersion: 2022,
       sourceType: 'module',
-      globals: {
-        ...globals.browser,
-        ...globals.node,
-      },
+      globals: { ...globals.browser, ...globals.node },
     },
+    settings: { react: { version: 'detect' } },
     rules: {
-      // Force all HTML through the safe `render()` helper.
+      'react/no-danger': 'error',
+      'react/jsx-no-target-blank': 'error',
+      'react/prop-types': 'off',
       'no-restricted-properties': [
         'error',
         {
           property: 'innerHTML',
-          message: 'Use render() from src/core/html.js',
+          message: 'Render with React components (UI_GUIDE.md).',
         },
         {
           property: 'outerHTML',
-          message: 'Use render() from src/core/html.js',
+          message: 'Render with React components (UI_GUIDE.md).',
         },
-      ],
-      // No dynamic code evaluation.
-      'no-restricted-syntax': [
-        'error',
         {
-          selector: "CallExpression[callee.name='eval']",
-          message: 'eval is not allowed',
+          property: 'insertAdjacentHTML',
+          message: 'Render with React components (UI_GUIDE.md).',
+        },
+        {
+          object: 'document',
+          property: 'write',
+          message: 'Render with React components (UI_GUIDE.md).',
         },
       ],
-    },
-  },
-
-  {
-    // The safe HTML helper is the one place allowed to touch innerHTML.
-    files: ['src/core/html.js'],
-    rules: {
-      'no-restricted-properties': 'off',
+      'no-restricted-syntax': restrictedSyntax,
     },
   },
 ];

@@ -3,7 +3,7 @@ use std::{collections::BTreeSet, str::FromStr};
 use vidya_core::{
     error::ErrorKind,
     permissions::{access, authorize, authorize_section, permission_names, scope, Access, Action, Scope},
-    roles::{Actor, Lang, Role},
+    roles::{Actor, Lang, Origin, Role},
 };
 
 const PERMISSIONS_DOC: &str = include_str!("../../../docs/PERMISSIONS.md");
@@ -40,6 +40,21 @@ fn parse_access(value: &str) -> Access {
     }
 }
 
+fn document_office_only() -> BTreeSet<String> {
+    let section = PERMISSIONS_DOC
+        .split("## Office computer only")
+        .nth(1)
+        .expect("Office computer only section should exist")
+        .split("\n## ")
+        .next()
+        .expect("Office computer only section should have content");
+    section
+        .lines()
+        .filter_map(|line| line.strip_prefix("- `").and_then(|line| line.strip_suffix('`')))
+        .map(str::to_owned)
+        .collect()
+}
+
 #[test]
 fn permission_code_equals_the_document() {
     let rows = document_rows();
@@ -74,21 +89,35 @@ fn permission_code_equals_the_document() {
         "permission matrix mismatch:\n{}",
         differences.join("\n")
     );
+
+    let documented_office_only = document_office_only();
+    let coded_office_only = Action::ALL
+        .iter()
+        .copied()
+        .filter(|action| action.office_computer_only())
+        .map(Action::as_str)
+        .map(str::to_owned)
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        documented_office_only, coded_office_only,
+        "office-computer-only actions differ between docs and code"
+    );
 }
 
-fn actor(role: Role, sections: &[&str]) -> Actor {
+fn actor(role: Role, sections: &[&str], origin: Origin) -> Actor {
     Actor {
         user_id: "user-1".into(),
         role,
         section_ids: sections.iter().map(|section| (*section).to_owned()).collect(),
         device_id: "device-1".into(),
         lang: Lang::En,
+        origin,
     }
 }
 
 #[test]
 fn teacher_is_limited_to_assigned_sections() {
-    let teacher = actor(Role::Teacher, &["V-A"]);
+    let teacher = actor(Role::Teacher, &["V-A"], Origin::OfficeComputer);
     assert!(authorize_section(&teacher, Action::MarksEnter, "V-A").is_ok());
     let denied = authorize_section(&teacher, Action::MarksEnter, "V-B").unwrap_err();
     assert_eq!(denied.kind, ErrorKind::Permission);
@@ -105,7 +134,7 @@ fn teacher_is_limited_to_assigned_sections() {
 
 #[test]
 fn teacher_without_sections_gets_specific_error() {
-    let teacher = actor(Role::Teacher, &[]);
+    let teacher = actor(Role::Teacher, &[], Origin::OfficeComputer);
     let error = scope(&teacher, Action::StudentsView).unwrap_err();
     assert_eq!(error.kind, ErrorKind::Permission);
     assert_eq!(error.message_key, "permission.no_sections");
@@ -113,7 +142,7 @@ fn teacher_without_sections_gets_specific_error() {
 
 #[test]
 fn own_action_requires_section_authorizer() {
-    let teacher = actor(Role::Teacher, &["V-A"]);
+    let teacher = actor(Role::Teacher, &["V-A"], Origin::OfficeComputer);
     let error = authorize(&teacher, Action::MarksEnter).unwrap_err();
     assert_eq!(error.kind, ErrorKind::Internal);
     assert_eq!(error.message_key, "permission.needs_section");
@@ -121,7 +150,7 @@ fn own_action_requires_section_authorizer() {
 
 #[test]
 fn accountant_permissions_match_required_behaviour() {
-    let accountant = actor(Role::Accountant, &[]);
+    let accountant = actor(Role::Accountant, &[], Origin::OfficeComputer);
     assert_eq!(scope(&accountant, Action::StudentsView), Ok(Scope::All));
     assert_eq!(
         authorize(&accountant, Action::FeesCancelReceipt)
@@ -135,19 +164,45 @@ fn accountant_permissions_match_required_behaviour() {
             .kind,
         ErrorKind::Permission
     );
+    assert!(authorize(&accountant, Action::BackupRun).is_ok());
+
+    let phone_accountant = actor(Role::Accountant, &[], Origin::Phone);
+    let error = authorize(&phone_accountant, Action::BackupRun).unwrap_err();
+    assert_eq!(error.kind, ErrorKind::Permission);
+    assert_eq!(error.message_key, "permission.office_computer_only");
 }
 
 #[test]
 fn principal_has_all_actions_with_all_scope() {
-    let principal = actor(Role::Principal, &[]);
+    let principal = actor(Role::Principal, &[], Origin::OfficeComputer);
     for action in Action::ALL {
         assert_eq!(scope(&principal, *action), Ok(Scope::All), "{}", action.as_str());
     }
 }
 
 #[test]
+fn principal_phone_is_refused_only_office_actions() {
+    let principal = actor(Role::Principal, &[], Origin::Phone);
+    for action in Action::ALL {
+        let result = scope(&principal, *action);
+        if action.office_computer_only() {
+            let error = result.unwrap_err();
+            assert_eq!(error.kind, ErrorKind::Permission, "{}", action.as_str());
+            assert_eq!(
+                error.message_key,
+                "permission.office_computer_only",
+                "{}",
+                action.as_str()
+            );
+        } else {
+            assert_eq!(result, Ok(Scope::All), "{}", action.as_str());
+        }
+    }
+}
+
+#[test]
 fn teacher_ui_has_no_forbidden_permission_groups() {
-    let permissions = permission_names(Role::Teacher);
+    let permissions = permission_names(Role::Teacher, Origin::OfficeComputer);
     for prefix in ["fees.", "users.", "settings.", "backup.", "reports."] {
         assert!(
             permissions
@@ -156,6 +211,12 @@ fn teacher_ui_has_no_forbidden_permission_groups() {
             "teacher permission unexpectedly starts with {prefix}: {permissions:?}"
         );
     }
+}
+
+#[test]
+fn phone_permission_names_hide_office_only_actions() {
+    let permissions = permission_names(Role::Accountant, Origin::Phone);
+    assert!(!permissions.contains(&"backup.run"));
 }
 
 #[test]

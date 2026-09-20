@@ -1,9 +1,17 @@
 /* Print rules and the print document container. Copied verbatim from the prototype. */
 
 @media print {
+  #app {
+    display: none !important;
+  }
+  #print-root {
+    display: block !important;
+  }
   .nav,
   .top,
   .tabbar,
+  .modal-back,
+  .toast,
   .noprint {
     display: none !important;
   }
@@ -18,6 +26,10 @@
     border: 2px solid #000;
     max-width: 100%;
   }
+}
+
+#print-root {
+  display: none;
 }
 
 #printArea {

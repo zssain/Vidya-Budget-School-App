@@ -26,13 +26,13 @@ export function permissionError() {
   };
 }
 export function userError(message, field) {
-  return { kind: 'validation', message, field };
+  return { kind: 'validation', messageKey: 'errors.generic', message, field };
 }
 export function authError(message) {
-  return { kind: 'auth', message };
+  return { kind: 'auth', messageKey: 'errors.generic', message };
 }
 export function notFound(message) {
-  return { kind: 'not_found', message: message || 'Not found.' };
+  return { kind: 'not_found', messageKey: 'errors.generic', message: message || 'Not found.' };
 }
 
 // ---- Small helpers ----
@@ -181,6 +181,7 @@ const ROLE_CAN = {
     'fees.view',
     'fees.collect',
     'daybook.view',
+    'backup.run',
   ]),
   teacher: new Set(['students.view', 'attendance.mark', 'marks.enter', 'reportcard.view']),
 };

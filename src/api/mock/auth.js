@@ -18,9 +18,18 @@ const PERMS = {
     'users.manage',
     'activity.view',
     'backup.manage',
+    'backup.run',
     'settings.edit',
   ],
-  accountant: ['students.view', 'students.add', 'students.edit', 'fees.view', 'fees.collect', 'daybook.view'],
+  accountant: [
+    'students.view',
+    'students.add',
+    'students.edit',
+    'fees.view',
+    'fees.collect',
+    'daybook.view',
+    'backup.run',
+  ],
   teacher: ['students.view', 'attendance.mark', 'marks.enter', 'reportcard.view'],
 };
 

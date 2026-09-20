@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     error::{DomainError, ErrorKind},
-    roles::{Actor, Role},
+    roles::{Actor, Origin, Role},
 };
 
 /// Every role-controlled action, in the same order as `docs/PERMISSIONS.md`.
@@ -42,6 +42,7 @@ pub enum Action {
     SettingsEdit,
     SessionChange,
     BackupManage,
+    BackupRun,
     DevicesView,
     DevicesApprove,
     DevicesManage,
@@ -86,6 +87,7 @@ impl Action {
         Self::SettingsEdit,
         Self::SessionChange,
         Self::BackupManage,
+        Self::BackupRun,
         Self::DevicesView,
         Self::DevicesApprove,
         Self::DevicesManage,
@@ -130,6 +132,7 @@ impl Action {
             Self::SettingsEdit => "settings.edit",
             Self::SessionChange => "session.change",
             Self::BackupManage => "backup.manage",
+            Self::BackupRun => "backup.run",
             Self::DevicesView => "devices.view",
             Self::DevicesApprove => "devices.approve",
             Self::DevicesManage => "devices.manage",
@@ -137,6 +140,52 @@ impl Action {
             Self::LicenseView => "license.view",
             Self::AccountChangeOwnPassword => "account.change_own_password",
             Self::AccountSetOwnLanguage => "account.set_own_language",
+        }
+    }
+
+    /// Returns whether this action must never be accepted from a phone.
+    pub const fn office_computer_only(self) -> bool {
+        match self {
+            Self::StudentsImport
+            | Self::UsersManage
+            | Self::SettingsEdit
+            | Self::SessionChange
+            | Self::BackupManage
+            | Self::BackupRun
+            | Self::DevicesApprove
+            | Self::DevicesManage => true,
+            Self::StudentsView
+            | Self::StudentsViewFees
+            | Self::StudentsViewContact
+            | Self::StudentsAdd
+            | Self::StudentsEdit
+            | Self::StudentsSetConcession
+            | Self::StudentsMarkLeft
+            | Self::StudentsExport
+            | Self::StudentsIssueTc
+            | Self::AttendanceView
+            | Self::AttendanceMarkToday
+            | Self::AttendanceEditPast
+            | Self::AttendancePrintRegister
+            | Self::MarksView
+            | Self::MarksEnter
+            | Self::ReportcardView
+            | Self::ReportcardPrint
+            | Self::FeesView
+            | Self::FeesCollect
+            | Self::FeesCancelReceipt
+            | Self::FeesDaybook
+            | Self::FeesExport
+            | Self::ReportsView
+            | Self::ReportsExport
+            | Self::UsersView
+            | Self::ActivityView
+            | Self::SettingsView
+            | Self::DevicesView
+            | Self::AlertsView
+            | Self::LicenseView
+            | Self::AccountChangeOwnPassword
+            | Self::AccountSetOwnLanguage => false,
         }
     }
 }
@@ -197,6 +246,7 @@ pub const fn access(role: Role, action: Action) -> Access {
             Action::SettingsEdit => Access::Yes,
             Action::SessionChange => Access::Yes,
             Action::BackupManage => Access::Yes,
+            Action::BackupRun => Access::Yes,
             Action::DevicesView => Access::Yes,
             Action::DevicesApprove => Access::Yes,
             Action::DevicesManage => Access::Yes,
@@ -238,6 +288,7 @@ pub const fn access(role: Role, action: Action) -> Access {
             Action::SettingsEdit => Access::No,
             Action::SessionChange => Access::No,
             Action::BackupManage => Access::No,
+            Action::BackupRun => Access::Yes,
             Action::DevicesView => Access::No,
             Action::DevicesApprove => Access::No,
             Action::DevicesManage => Access::No,
@@ -279,6 +330,7 @@ pub const fn access(role: Role, action: Action) -> Access {
             Action::SettingsEdit => Access::No,
             Action::SessionChange => Access::No,
             Action::BackupManage => Access::No,
+            Action::BackupRun => Access::No,
             Action::DevicesView => Access::No,
             Action::DevicesApprove => Access::No,
             Action::DevicesManage => Access::No,
@@ -305,8 +357,21 @@ fn no_sections() -> DomainError {
     DomainError::new(ErrorKind::Permission, "permission.no_sections")
 }
 
+fn office_computer_only() -> DomainError {
+    DomainError::new(ErrorKind::Permission, "permission.office_computer_only")
+}
+
+fn check_origin(actor: &Actor, action: Action) -> Result<(), DomainError> {
+    if action.office_computer_only() && actor.origin == Origin::Phone {
+        Err(office_computer_only())
+    } else {
+        Ok(())
+    }
+}
+
 /// Returns whether an actor may act and the row scope services must enforce.
 pub fn scope(actor: &Actor, action: Action) -> Result<Scope, DomainError> {
+    check_origin(actor, action)?;
     match access(actor.role, action) {
         Access::Yes => Ok(Scope::All),
         Access::No => Err(denied()),
@@ -317,6 +382,7 @@ pub fn scope(actor: &Actor, action: Action) -> Result<Scope, DomainError> {
 
 /// Authorizes an action against a specific section.
 pub fn authorize_section(actor: &Actor, action: Action, section_id: &str) -> Result<(), DomainError> {
+    check_origin(actor, action)?;
     match access(actor.role, action) {
         Access::Yes => Ok(()),
         Access::No => Err(denied()),
@@ -328,6 +394,7 @@ pub fn authorize_section(actor: &Actor, action: Action, section_id: &str) -> Res
 
 /// Authorizes an action that does not require a section target.
 pub fn authorize(actor: &Actor, action: Action) -> Result<(), DomainError> {
+    check_origin(actor, action)?;
     match access(actor.role, action) {
         Access::Yes => Ok(()),
         Access::No => Err(denied()),
@@ -340,11 +407,12 @@ pub fn authorize(actor: &Actor, action: Action) -> Result<(), DomainError> {
 }
 
 /// Lists every permission name visible to a role's UI.
-pub fn permission_names(role: Role) -> Vec<&'static str> {
+pub fn permission_names(role: Role, origin: Origin) -> Vec<&'static str> {
     Action::ALL
         .iter()
         .copied()
         .filter(|action| access(role, *action) != Access::No)
+        .filter(|action| origin == Origin::OfficeComputer || !action.office_computer_only())
         .map(Action::as_str)
         .collect()
 }

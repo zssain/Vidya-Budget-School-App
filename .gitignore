@@ -1,14 +1,17 @@
 # Dependencies and build output
 node_modules/
 dist/
+dist-mobile/
 target/
 coverage/
+size-report.json
 
 # macOS
 .DS_Store
 
 # Vidya backups
 *.vidyabak
+*.vidyabak.partial
 
 # Environment and secrets
 .env

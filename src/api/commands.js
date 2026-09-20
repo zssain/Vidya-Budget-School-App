@@ -2,6 +2,7 @@
 // implementations are temporary (removed from P2.7 onward). Views call ONLY
 // these functions, never invoke() or the mock directly.
 
+import { invoke } from '@tauri-apps/api/core';
 import { mock } from './mock/index.js';
 import { toAppError } from './errors.js';
 import { clearToken, setToken } from './session.js';
@@ -15,8 +16,14 @@ async function call(name, arg) {
 }
 
 // ---- App and setup ----
+// app_status is the first command backed by real Rust (P2.4). Every other
+// command still uses the mock until its own prompt (P2.6, P2.7, P3.x...).
 export async function appStatus() {
-  return call('app_status');
+  try {
+    return await invoke('app_status');
+  } catch (e) {
+    throw toAppError(e);
+  }
 }
 export async function getDeviceId() {
   return call('get_device_id');
@@ -187,6 +194,9 @@ export async function saveDeviceCode(input) {
 // ---- Backup ----
 export async function backupStatus() {
   return call('backup_status');
+}
+export async function runBackupNow() {
+  return call('run_backup_now');
 }
 export async function backupSaveFile(input) {
   return call('backup_save_file', input);

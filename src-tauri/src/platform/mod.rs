@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use zeroize::Zeroizing;
 
@@ -9,14 +9,27 @@ mod fake;
 #[cfg(target_os = "macos")]
 mod macos;
 #[cfg(target_os = "windows")]
-mod windows;
+pub mod windows;
 
 #[cfg(test)]
 pub use fake::FakePlatform;
 
-/// Placeholder populated with drive details in P6.1.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RemovableDrive;
+pub struct VolumeInfo {
+    pub volume_id: String,
+    pub label: String,
+    pub removable: bool,
+    pub network: bool,
+    pub physical_disk_id: Option<String>,
+    pub free_bytes: u64,
+    pub total_bytes: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MountedVolume {
+    pub mount_path: PathBuf,
+    pub info: VolumeInfo,
+}
 
 /// Placeholder populated with diagnostic results in P7.2.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -46,20 +59,33 @@ pub trait Platform: Send + Sync {
     fn delete_secret(&self, name: &str) -> Result<(), PlatformError>;
     fn device_values(&self) -> Result<(String, String), PlatformError>;
     fn set_keep_awake(&self, on: bool) -> Result<(), PlatformError>;
-    fn removable_drives(&self) -> Result<Vec<RemovableDrive>, PlatformError>;
+    fn volume_info(&self, path: &Path) -> Result<VolumeInfo, PlatformError>;
+    fn removable_drives(&self) -> Result<Vec<MountedVolume>, PlatformError>;
     fn network_diagnostics(&self) -> NetworkDiagnostics;
 }
 
-pub fn current() -> Box<dyn Platform> {
+/// Build the platform implementation for this operating system.
+///
+/// `app_data_dir` is the Tauri-resolved application data directory for the
+/// bundle identifier `in.vidya.school` (macOS: `~/Library/Application
+/// Support/in.vidya.school`). macOS and Android put their data folders inside
+/// it; Windows ignores it and uses the machine-wide `ProgramData` folder.
+pub fn current(app_data_dir: PathBuf) -> Box<dyn Platform> {
     #[cfg(target_os = "macos")]
-    return Box::new(macos::MacosPlatform);
+    return Box::new(macos::MacosPlatform::new(app_data_dir));
 
     #[cfg(target_os = "windows")]
-    return Box::new(windows::WindowsPlatform);
+    {
+        let _ = app_data_dir;
+        return Box::new(windows::WindowsPlatform);
+    }
 
     #[cfg(target_os = "android")]
-    return Box::new(android::AndroidPlatform);
+    return Box::new(android::AndroidPlatform::new(app_data_dir));
 
     #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "android")))]
-    panic!("Vidya supports only macOS, Windows and Android");
+    {
+        let _ = app_data_dir;
+        panic!("Vidya supports only macOS, Windows and Android");
+    }
 }

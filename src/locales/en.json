@@ -248,7 +248,11 @@
     "addAnyway": "Add anyway"
   },
   "fees": {
-    "pill": { "rteFree": "RTE free", "paid": "Paid", "due": "due" },
+    "pill": {
+      "rteFree": "RTE free",
+      "paid": "Paid",
+      "due": "due"
+    },
     "sessionInfo": "Session {session}, {terms} term(s). Receipts from this device are numbered {prefix}-0001 onwards.",
     "dayBook": "Day book",
     "duesList": "Dues list",
@@ -266,7 +270,12 @@
     "balance": "Balance",
     "noMatch": "No students match",
     "duesDownloaded": "Dues list downloaded.",
-    "filter": { "dues": "Dues", "fullyPaid": "Fully paid", "rte": "RTE", "all": "All" },
+    "filter": {
+      "dues": "Dues",
+      "fullyPaid": "Fully paid",
+      "rte": "RTE",
+      "all": "All"
+    },
     "findStudent": "Find the student",
     "searchStudent": "Name, admission no., father or mobile",
     "noStudentFound": "No student found",
@@ -347,7 +356,12 @@
     "category": "Social category",
     "feeStatus": "Fee status",
     "downloaded": "Class summary downloaded.",
-    "fee": { "paid": "Fully paid", "part": "Part paid", "due": "Nothing paid", "rte": "RTE free" }
+    "fee": {
+      "paid": "Fully paid",
+      "part": "Part paid",
+      "due": "Nothing paid",
+      "rte": "RTE free"
+    }
   },
   "users": {
     "subtitle": "Create logins, assign classes and reset passwords.",
@@ -370,7 +384,12 @@
     "switchOn": "Switch on",
     "switchOffTitle": "Switch off this login?",
     "switchOffMessage": "They will not be able to sign in. Their past work stays in the records.",
-    "status": { "active": "Active", "off": "Off", "locked": "Locked", "pending": "Password pending" }
+    "status": {
+      "active": "Active",
+      "off": "Off",
+      "locked": "Locked",
+      "pending": "Password pending"
+    }
   },
   "backup": {
     "subtitle": "Keep copies of your school data somewhere other than this device.",
@@ -380,10 +399,11 @@
     "changesSince": "{n} changes since last backup",
     "fileHelp": "Save a backup file, then copy it to a pen drive and keep it away from this computer.",
     "saveFile": "Save backup file",
+    "runNow": "Back up now",
     "restoreFile": "Restore from a backup file",
-    "drive": "Google Drive backup",
+    "drive": "Backup drives",
     "windowsApp": "Windows app",
-    "driveHelp": "The office PC can upload an encrypted backup to the school's Google Drive every day.",
+    "driveHelp": "The office computer copies encrypted backups to folders and drives chosen by the principal.",
     "daily": "Automatic daily copies",
     "dailyHelp": "A copy is kept on the computer every day for 30 days.",
     "password": "Backup password",
@@ -495,5 +515,18 @@
     "generic": "Something went wrong: {message}",
     "permission": "You do not have permission to do this.",
     "noAccess": "You do not have access to that page."
+  },
+  "startup": {
+    "opening": "Opening Vidya…",
+    "errorTitle": "Vidya could not start",
+    "copyDetails": "Copy details",
+    "copied": "Copied",
+    "error": {
+      "DataFolder": "Vidya could not create its data folder. Restart the computer and try again.",
+      "SecureStorage": "Vidya could not open the computer’s secure storage.",
+      "WrongKey": "Vidya’s data could not be unlocked on this computer. If the computer was replaced, restore a backup.",
+      "Migration": "This data was made by a newer version of Vidya. Install the latest version.",
+      "Unknown": "Vidya could not start. Restart the computer and try again."
+    }
   }
 }

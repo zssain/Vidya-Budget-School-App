@@ -22,8 +22,8 @@ Rules:
 | thiserror | Error types | all library crates | | 2.0.20 | P1.3 | |
 | chrono | Dates and times | core, db, services | `serde` feature; no `now()` inside core (pass time in) | 0.4.45 | P2.1 | |
 | uuid | UUID v7 IDs | core, db | `v7`, `serde` features | | | |
-| rusqlite | SQLite access | vidya-db | Feature `bundled-sqlcipher-vendored-openssl`. Check Windows and Android builds in CI | | | |
-| r2d2, r2d2_sqlite | Connection pool | vidya-db | r2d2_sqlite version must match rusqlite | | | |
+| rusqlite | SQLite access | vidya-db | Apple: `bundled-sqlcipher`/CommonCrypto; other targets: `bundled-sqlcipher-vendored-openssl`. Check Windows and Android builds in CI | 0.40.2 | P2.3 | Fully linked Mac ARM DMG +0.57 MB |
+| r2d2, r2d2_sqlite | Connection pool | vidya-db | r2d2_sqlite 0.35.0 resolves rusqlite 0.40.2 | 0.8.10, 0.35.0 | P2.3 | Included in SQLCipher size measurement |
 | argon2 | Password and backup key hashing | services, backup, provider | | | | |
 | rand | Random bytes, tokens | services, license, backup | Use the OS-backed generator | | | |
 | zeroize | Wipe secrets from memory | services, license, backup | | 1.9.0 | P1.3 | |
@@ -46,17 +46,17 @@ Rules:
 ## Rust — platform specific
 | Crate | Purpose | Platform | Notes to verify | Installed version | Added in | Size impact |
 |---|---|---|---|---|---|---|
-| windows | DPAPI (CryptProtectData), SetThreadExecutionState | Windows | Enable only the needed `Win32_*` features | | | |
+| windows | DPAPI (CryptProtectData/CryptUnprotectData), known folder, BCryptGenRandom | Windows | Features enabled: `Win32_Security_Cryptography`, `Win32_UI_Shell`, `Win32_System_Com`, `Win32_System_Memory`, `Win32_Foundation`. Verified symbols against source | 0.61.3 | P2.4 | Windows-only; measured in CI |
 | winreg | Read MachineGuid | Windows | | | | |
 | wmi | Read system UUID | Windows | | | | |
-| security-framework | Keychain items | macOS | Check how to set "this device only" accessibility | | | |
+| security-framework | Keychain generic passwords, SecRandom | macOS | "This device only" accessibility not exposed by `passwords::set_generic_password`; using default (see KNOWN_ISSUES) | 3.7.0 | P2.4 | macOS-only; links system Security.framework (negligible) |
 | core-foundation, io-kit-sys | IOPlatformUUID, power assertions | macOS | Verify function bindings exist; otherwise declare `extern "C"` with `#[link(name = "IOKit", kind = "framework")]` and say so | | | |
 | jni | Only if a Kotlin plugin cannot do the job | Android | Prefer a Tauri mobile plugin in Kotlin | | | |
 
 ## Rust — development only
 | Crate | Purpose | Installed version | Added in | Size impact |
 |---|---|---|---|---|
-| tempfile | Temporary databases in tests | | | |
+| tempfile | Temporary databases in tests | 3.27.0 | P2.3 | Dev only |
 | proptest | Property tests for money, fees, HLC, merge rules | 1.11.0 | P2.1 | |
 | insta | Snapshot tests for DTOs and exports | | | |
 | tokio (test feature) | Async tests | | | |
@@ -71,8 +71,8 @@ Rules:
 ## JavaScript
 | Package | Purpose | Installed version | Added in | Size impact |
 |---|---|---|---|---|
-| react | UI components and rendering | | | |
-| react-dom | Render React into the WebView DOM | | | |
+| react | UI components and rendering | 19.3.0 | P1.1 | Included in P1.1 artifact measurement |
+| react-dom | Render React into the WebView DOM | 19.3.0 | P1.1 | Included in P1.1 artifact measurement |
 | @tauri-apps/cli | Tauri CLI | 2.11.4 | P1.1 | |
 | @tauri-apps/api | `invoke` and events | 2.11.1 | P1.1 | |
 | @tauri-apps/plugin-dialog | Dialog JS API | 2.7.3 | P1.3 | |
@@ -81,14 +81,14 @@ Rules:
 | vite | Frontend build | 8.3.0 | P1.1 | |
 | vitest | Frontend tests | 4.1.11 | P1.1 | |
 | jsdom | DOM for tests | 29.1.1 | P1.1 | |
-| eslint, @eslint/js, globals | Linting | eslint 10.10.0, @eslint/js 10.0.1, globals 17.12.0 | P1.1 | |
+| eslint, @eslint/js, globals | Linting | eslint 9.39.5, @eslint/js 9.39.5, globals 17.12.0 | P1.1 | Development only |
 | prettier | Formatting | 3.9.6 | P1.1 | |
-| @vitejs/plugin-react | Vite JSX transform and React development support | | | |
-| eslint-plugin-react | React lint rules | | | |
-| eslint-plugin-react-hooks | React Hooks lint rules | | | |
-| @testing-library/react | React component tests | | | |
-| @testing-library/user-event | User interaction tests | | | |
-| @testing-library/jest-dom | DOM matchers for component tests | | | |
+| @vitejs/plugin-react | Vite JSX transform and React development support | 6.1.1 | P1.1 | Development only |
+| eslint-plugin-react | React lint rules | 7.37.5 | P1.1 | Development only |
+| eslint-plugin-react-hooks | React Hooks lint rules | 7.1.1 | P1.1 | Development only |
+| @testing-library/react | React component tests | 16.3.3 | P1.1 | Development only |
+| @testing-library/user-event | User interaction tests | 14.6.7 | P1.1 | Development only |
+| @testing-library/jest-dom | DOM matchers for component tests | 7.0.1 | P1.1 | Development only |
 
 React and ReactDOM are the only frontend runtime libraries. No router, state, form, CSS-in-JS or other runtime JavaScript libraries. No CSS frameworks, internet icon fonts or chart libraries (bars are plain CSS like the prototype).
 

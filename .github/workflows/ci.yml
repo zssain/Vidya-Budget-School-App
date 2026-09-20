@@ -6,12 +6,12 @@ on:
 
 jobs:
   macos:
-    name: macOS — verify
+    name: macOS — verify, package and size
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version-file: '.nvmrc'
           cache: 'npm'
@@ -25,14 +25,30 @@ jobs:
       - run: npm ci
 
       - run: npm run verify
+
+      - name: Show SQLCipher version and provider
+        run: cargo test -p vidya-db sqlcipher_is_linked -- --nocapture
+
+      - name: Build Apple Silicon DMG
+        run: npm run tauri build -- --target aarch64-apple-darwin --bundles dmg
+
+      - name: Enforce size budget
+        run: node scripts/check-size.mjs
+
+      - name: Upload macOS size report
+        uses: actions/upload-artifact@v7
+        with:
+          name: size-macos
+          path: size-report.json
+          if-no-files-found: error
 
   windows:
     name: Windows — verify and installer
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version-file: '.nvmrc'
           cache: 'npm'
@@ -47,21 +63,35 @@ jobs:
 
       - run: npm run verify
 
+      - name: Show SQLCipher version and provider
+        run: cargo test -p vidya-db sqlcipher_is_linked -- --nocapture
+
       - name: Build NSIS installer
         run: npm run tauri build -- --bundles nsis
 
+      - name: Enforce size budget
+        run: node scripts/check-size.mjs
+
       - name: Upload Windows installer
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: vidya-windows-installer
           path: target/release/bundle/nsis/*.exe
           retention-days: 14
+          if-no-files-found: error
+
+      - name: Upload Windows size report
+        uses: actions/upload-artifact@v7
+        with:
+          name: size-windows
+          path: size-report.json
+          if-no-files-found: error
 
   deny:
     name: cargo-deny
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       # cargo-deny reads the dependency graph via `cargo metadata`, so a Rust
       # toolchain must be on PATH.

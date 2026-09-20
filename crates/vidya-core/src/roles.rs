@@ -19,6 +19,14 @@ pub enum Lang {
     Hi,
 }
 
+/// Trusted origin of a request after boundary authentication.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Origin {
+    OfficeComputer,
+    Phone,
+}
+
 /// Trusted server-side identity and scope passed into services.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Actor {
@@ -27,4 +35,5 @@ pub struct Actor {
     pub section_ids: BTreeSet<String>,
     pub device_id: String,
     pub lang: Lang,
+    pub origin: Origin,
 }

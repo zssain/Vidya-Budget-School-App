@@ -356,7 +356,12 @@
     "category": "Social category",
     "feeStatus": "Fee status",
     "downloaded": "Class summary downloaded.",
-    "fee": { "paid": "Fully paid", "part": "Part paid", "due": "Nothing paid", "rte": "RTE free" }
+    "fee": {
+      "paid": "Fully paid",
+      "part": "Part paid",
+      "due": "Nothing paid",
+      "rte": "RTE free"
+    }
   },
   "users": {
     "subtitle": "Create logins, assign classes and reset passwords.",
@@ -379,7 +384,12 @@
     "switchOn": "Switch on",
     "switchOffTitle": "Switch off this login?",
     "switchOffMessage": "They will not be able to sign in. Their past work stays in the records.",
-    "status": { "active": "Active", "off": "Off", "locked": "Locked", "pending": "Password pending" }
+    "status": {
+      "active": "Active",
+      "off": "Off",
+      "locked": "Locked",
+      "pending": "Password pending"
+    }
   },
   "backup": {
     "subtitle": "Keep copies of your school data somewhere other than this device.",
@@ -389,10 +399,11 @@
     "changesSince": "{n} changes since last backup",
     "fileHelp": "Save a backup file, then copy it to a pen drive and keep it away from this computer.",
     "saveFile": "Save backup file",
+    "runNow": "Back up now",
     "restoreFile": "Restore from a backup file",
-    "drive": "Google Drive backup",
+    "drive": "Backup drives",
     "windowsApp": "Windows app",
-    "driveHelp": "The office PC can upload an encrypted backup to the school's Google Drive every day.",
+    "driveHelp": "The office computer copies encrypted backups to folders and drives chosen by the principal.",
     "daily": "Automatic daily copies",
     "dailyHelp": "A copy is kept on the computer every day for 30 days.",
     "password": "Backup password",
@@ -504,5 +515,18 @@
     "generic": "Something went wrong: {message}",
     "permission": "You do not have permission to do this.",
     "noAccess": "You do not have access to that page."
+  },
+  "startup": {
+    "opening": "विद्या खुल रही है…",
+    "errorTitle": "विद्या शुरू नहीं हो सकी",
+    "copyDetails": "जानकारी कॉपी करें",
+    "copied": "कॉपी हो गया",
+    "error": {
+      "DataFolder": "विद्या अपना डेटा फ़ोल्डर नहीं बना सकी। कंप्यूटर को दोबारा चालू करके फिर कोशिश करें।",
+      "SecureStorage": "विद्या कंप्यूटर की सुरक्षित स्टोरेज नहीं खोल सकी।",
+      "WrongKey": "इस कंप्यूटर पर विद्या का डेटा नहीं खुल सका। अगर कंप्यूटर बदला गया है, तो बैकअप से पुनर्स्थापित करें।",
+      "Migration": "यह डेटा विद्या के नए संस्करण से बना है। नया संस्करण इंस्टॉल करें।",
+      "Unknown": "विद्या शुरू नहीं हो सकी। कंप्यूटर को दोबारा चालू करके फिर कोशिश करें।"
+    }
   }
 }

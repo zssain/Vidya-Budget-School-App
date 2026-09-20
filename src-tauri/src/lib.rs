@@ -4,7 +4,9 @@
 //! shared state and every command in one `generate_handler!` list. No business
 //! rules or SQL live here (see `src-tauri/AGENTS.md`).
 
+pub mod commands;
 pub mod platform;
+pub mod state;
 
 #[cfg(target_os = "macos")]
 fn macos_menu(app: &tauri::AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
@@ -43,7 +45,7 @@ fn macos_menu(app: &tauri::AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::
 }
 
 fn log_plugin() -> tauri::plugin::TauriPlugin<tauri::Wry> {
-    use tauri_plugin_log::{log::LevelFilter, Target, TargetKind};
+    use tauri_plugin_log::{log::LevelFilter, RotationStrategy, Target, TargetKind};
 
     let level = if cfg!(debug_assertions) {
         LevelFilter::Debug
@@ -60,11 +62,26 @@ fn log_plugin() -> tauri::plugin::TauriPlugin<tauri::Wry> {
         .clear_targets()
         .targets(targets)
         .level(level)
+        .max_file_size(2_000_000)
+        .rotation_strategy(RotationStrategy::KeepSome(5))
         .build()
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Run the harmless in-memory probe in release too, so the size gate
+    // measures the linked SQLCipher backend before the main DB is wired up.
+    let cipher_status = vidya_db::sqlcipher_version();
+    #[cfg(debug_assertions)]
+    match cipher_status {
+        Ok((version, provider)) => {
+            tauri_plugin_log::log::debug!("SQLCipher {version}, provider {provider}")
+        }
+        Err(error) => tauri_plugin_log::log::error!("Could not query SQLCipher version: {error}"),
+    }
+    #[cfg(not(debug_assertions))]
+    drop(cipher_status);
+
     let builder = tauri::Builder::default();
 
     // The single-instance plugin must be registered before every other plugin.
@@ -89,7 +106,27 @@ pub fn run() {
     let builder = builder.menu(macos_menu);
 
     builder
-        .invoke_handler(tauri::generate_handler![])
+        .manage(state::AppState::new())
+        .setup(|app| {
+            use tauri::Manager;
+            // Resolve the app data directory, then run the start sequence (data
+            // folder → key → open database) on a blocking thread so the window
+            // never freezes. The result is published to AppState for app_status.
+            let state = app.state::<state::AppState>().inner().clone();
+            let data_dir = app.path().app_data_dir().map_err(|e| e.to_string());
+            tauri::async_runtime::spawn_blocking(move || {
+                let result = match data_dir {
+                    Ok(dir) => state::start(platform::current(dir)),
+                    Err(detail_for_log) => state::StartupState::Failed {
+                        kind: state::StartupFailure::DataFolder,
+                        detail_for_log,
+                    },
+                };
+                state.set(result);
+            });
+            Ok(())
+        })
+        .invoke_handler(tauri::generate_handler![commands::app::app_status])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

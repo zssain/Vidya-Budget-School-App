@@ -426,11 +426,11 @@ fn default_scale() -> Vec<GradeBand> {
         },
         GradeBand {
             grade: "B".into(),
-            min_percent: 70,
+            min_percent: 65,
         },
         GradeBand {
             grade: "C".into(),
-            min_percent: 60,
+            min_percent: 50,
         },
         GradeBand {
             grade: "D".into(),
@@ -465,7 +465,11 @@ fn marks_and_grade_vectors() {
     for (percent, grade) in [
         (800, "A"),
         (799, "B"),
+        (650, "B"),
+        (649, "C"),
         (616, "C"),
+        (500, "C"),
+        (499, "D"),
         (450, "D"),
         (330, "D"),
         (329, "E"),

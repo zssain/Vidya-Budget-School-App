@@ -1,6 +1,6 @@
 use std::{
     collections::HashMap,
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{
         atomic::{AtomicBool, Ordering},
         Mutex,
@@ -9,21 +9,31 @@ use std::{
 
 use zeroize::Zeroizing;
 
-use super::{NetworkDiagnostics, Platform, PlatformError, RemovableDrive};
+use super::{MountedVolume, NetworkDiagnostics, Platform, PlatformError, VolumeInfo};
 
 pub struct FakePlatform {
     data_dir: PathBuf,
+    db_key: [u8; 32],
     secrets: Mutex<HashMap<String, Vec<u8>>>,
     awake: AtomicBool,
 }
 
-impl Default for FakePlatform {
-    fn default() -> Self {
+impl FakePlatform {
+    /// A fake platform rooted at `data_dir` that returns `db_key` from
+    /// `load_or_create_db_key` (so a test can simulate a replaced key).
+    pub fn new(data_dir: PathBuf, db_key: [u8; 32]) -> Self {
         Self {
-            data_dir: std::env::temp_dir().join("vidya-platform-test"),
+            data_dir,
+            db_key,
             secrets: Mutex::new(HashMap::new()),
             awake: AtomicBool::new(false),
         }
+    }
+}
+
+impl Default for FakePlatform {
+    fn default() -> Self {
+        Self::new(std::env::temp_dir().join("vidya-platform-test"), [7; 32])
     }
 }
 
@@ -32,13 +42,16 @@ impl Platform for FakePlatform {
         "fake"
     }
     fn data_dir(&self) -> Result<PathBuf, PlatformError> {
+        // Real platforms create the data folder inside data_dir(); the fake does
+        // the same so Db::open can create the database file.
+        std::fs::create_dir_all(&self.data_dir)?;
         Ok(self.data_dir.clone())
     }
     fn backups_dir(&self) -> Result<PathBuf, PlatformError> {
         Ok(self.data_dir.join("backups"))
     }
     fn load_or_create_db_key(&self) -> Result<Zeroizing<[u8; 32]>, PlatformError> {
-        Ok(Zeroizing::new([7; 32]))
+        Ok(Zeroizing::new(self.db_key))
     }
     fn store_secret(&self, name: &str, secret: &[u8]) -> Result<(), PlatformError> {
         self.secrets
@@ -70,7 +83,18 @@ impl Platform for FakePlatform {
         self.awake.store(on, Ordering::SeqCst);
         Ok(())
     }
-    fn removable_drives(&self) -> Result<Vec<RemovableDrive>, PlatformError> {
+    fn volume_info(&self, _path: &Path) -> Result<VolumeInfo, PlatformError> {
+        Ok(VolumeInfo {
+            volume_id: "fake-volume".into(),
+            label: "Fake volume".into(),
+            removable: false,
+            network: false,
+            physical_disk_id: Some("fake-disk".into()),
+            free_bytes: 512,
+            total_bytes: 1024,
+        })
+    }
+    fn removable_drives(&self) -> Result<Vec<MountedVolume>, PlatformError> {
         Ok(Vec::new())
     }
     fn network_diagnostics(&self) -> NetworkDiagnostics {

@@ -11,13 +11,18 @@ license = "LicenseRef-Proprietary"
 [workspace.dependencies]
 chrono = { version = "0.4.45", default-features = false, features = ["std", "serde"] }
 proptest = "1.11.0"
+r2d2 = "0.8.10"
+r2d2_sqlite = "0.35.0"
+rusqlite = "0.40.2"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.151"
+tempfile = "3.27.0"
 thiserror = "2.0.20"
+zeroize = "1.9.0"
 
 [profile.release]
 codegen-units = 1
 lto = true
-opt-level = "s"
+opt-level = "z"
 panic = "abort"
 strip = true

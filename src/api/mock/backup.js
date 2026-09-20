@@ -5,7 +5,7 @@ const restores = new Map();
 let restoreSeq = 0;
 
 export function backupStatus() {
-  db.need('backup.manage');
+  db.need('backup.run');
   const since = db.state.DB.meta.seq - (db.state.DB.meta.lastBackupSeq || 0);
   return {
     lastBackupAt: db.state.DB.meta.lastBackupAt,
@@ -13,6 +13,15 @@ export function backupStatus() {
     changesSince: since,
     overdue: db.backupOverdue(),
   };
+}
+
+export function runBackupNow() {
+  db.need('backup.run');
+  const at = db.nowISO();
+  db.commit('backup', 'Automatic backup run');
+  db.state.DB.meta.lastBackupAt = at;
+  db.state.DB.meta.lastBackupSeq = db.state.DB.meta.seq;
+  return { createdAt: at, filename: `vidya-${db.CODE()}-${db.todayKey()}.vidyabak` };
 }
 
 export async function backupSaveFile({ backupPassword }) {

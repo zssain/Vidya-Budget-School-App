@@ -20,6 +20,7 @@
   "permission.denied": "You do not have permission to do that.",
   "permission.needs_section": "This action must be checked for a specific section.",
   "permission.no_sections": "No sections are assigned to this login.",
+  "permission.office_computer_only": "This action is available only on the office computer.",
   "permission.unknown_action": "The requested permission is not recognised.",
   "session.error.invalid": "Enter a session like 2026-27.",
   "validation.class_name": "Class name must be 1 to 12 letters, digits or spaces.",

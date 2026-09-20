@@ -23,6 +23,12 @@ npm run tauri dev
 
 A **Vidya** window opens showing the app version.
 
+> **macOS accounts:** Vidya's data lives under the signed-in Mac user account
+> (`~/Library/Application Support/in.vidya.school`) and its database key is in
+> that user's login Keychain. The school must always sign in to the **same Mac
+> account**; a different account cannot open the data. On Windows the data is
+> machine-wide (`C:\ProgramData\Vidya`), so any Windows account works.
+
 ## Verify
 
 Everything that must pass before a change is done — Rust fmt, clippy, tests, JS lint, JS tests, API drift and i18n checks:
@@ -32,6 +38,12 @@ npm run verify
 ```
 
 To also run the licence/advisory audit locally: `VERIFY_DENY=1 npm run verify` (requires `cargo install cargo-deny --locked`).
+
+Every download and installed app has a hard 30 MB limit and a warning at 25 MB. Measure available build outputs with:
+
+```sh
+npm run size
+```
 
 ## Get the Windows installer
 
@@ -47,7 +59,7 @@ There is no Windows PC in this setup; Windows is built for you by GitHub Actions
 | Path               | What                                                               |
 | ------------------ | ------------------------------------------------------------------ |
 | `docs/`            | The full specification (product, architecture, data model, API, …) |
-| `docs/prompts/`    | The 44 build prompts, `P1.1.md` … `P10.6.md`                       |
+| `docs/prompts/`    | The 45 build prompts, `P0.1.md` … `P10.6.md`                       |
 | `docs/PROGRESS.md` | Build status and the manual checks for each prompt                 |
 | `src/`             | Web frontend (shared by desktop and mobile)                        |
 | `src-tauri/`       | Tauri app crate (`vidya-app`)                                      |

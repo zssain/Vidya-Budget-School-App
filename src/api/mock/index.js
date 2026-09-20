@@ -75,6 +75,7 @@ export const mock = {
   save_device_code: settings.saveDeviceCode,
 
   backup_status: backup.backupStatus,
+  run_backup_now: backup.runBackupNow,
   backup_save_file: backup.backupSaveFile,
   restore_inspect: backup.restoreInspect,
   restore_commit: backup.restoreCommit,

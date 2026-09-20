@@ -39,6 +39,7 @@ export function feeTotals() {
     unpaid: list.filter((s) => db.feeState(s) === 'due').length,
     part: list.filter((s) => db.feeState(s) === 'part').length,
     payingCount: list.length,
+    pctCollected: due ? Math.round((paid / due) * 100) : 0,
   };
 }
 
@@ -112,6 +113,10 @@ export function getFeeAccount({ studentId }) {
     transportFee: db.state.DB.transportFee,
     concession: s.concession || 0,
     oneTerm: db.termFee(s.cls) + (s.transport ? db.state.DB.transportFee : 0),
+    oneTermPayable: Math.min(
+      db.balanceOf(s),
+      db.termFee(s.cls) + (s.transport ? db.state.DB.transportFee : 0),
+    ),
     receipts: db.state.DB.receipts
       .filter((r) => r.adm === s.adm)
       .slice()

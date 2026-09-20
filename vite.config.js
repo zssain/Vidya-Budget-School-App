@@ -1,3 +1,4 @@
+import react from '@vitejs/plugin-react';
 import { defineConfig } from 'vitest/config';
 
 // Tauri 2 + Vite configuration.
@@ -6,18 +7,20 @@ import { defineConfig } from 'vitest/config';
 // binds to a reachable host and HMR points back at it.
 const host = process.env.TAURI_DEV_HOST;
 
-export default defineConfig({
+export default defineConfig(({ mode }) => ({
   // The frontend lives in src/; index.html is src/index.html.
   root: 'src',
 
   // Vite options tailored for Tauri development.
   // Prevent Vite from clearing the screen so Rust/Tauri errors stay visible.
   clearScreen: false,
+  plugins: [react()],
 
   build: {
     // Emit the built site to <project>/dist (relative to root = src).
-    outDir: '../dist',
+    outDir: mode === 'mobile' ? '../dist-mobile' : '../dist',
     emptyOutDir: true,
+    sourcemap: false,
   },
 
   server: {
@@ -43,6 +46,7 @@ export default defineConfig({
     // independent of Vite's `root: 'src'` above.
     root: import.meta.dirname,
     environment: 'jsdom',
-    include: ['src/**/*.test.js', 'scripts/**/*.test.js'],
+    setupFiles: ['./src/test/setup.js'],
+    include: ['src/**/*.test.{js,jsx}', 'scripts/**/*.test.js'],
   },
-});
+}));
