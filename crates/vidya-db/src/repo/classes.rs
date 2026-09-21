@@ -65,6 +65,18 @@ pub fn section_label(conn: &Connection, section_id: &str) -> Result<Option<Strin
         .optional()?)
 }
 
+/// The class id of an active section, or `None` if it does not exist or is inactive.
+pub fn active_section_class(conn: &Connection, section_id: &str) -> Result<Option<String>, DbError> {
+    use rusqlite::OptionalExtension;
+    Ok(conn
+        .query_row(
+            "SELECT class_id FROM sections WHERE id = ?1 AND active = 1",
+            [section_id],
+            |row| row.get(0),
+        )
+        .optional()?)
+}
+
 /// Whether a section exists and is active.
 pub fn section_is_active(conn: &Connection, section_id: &str) -> Result<bool, DbError> {
     let count: i64 = conn.query_row(

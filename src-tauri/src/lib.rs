@@ -147,6 +147,11 @@ pub fn run() {
         commands::users::reset_user_password,
         commands::users::unlock_user,
         commands::users::set_user_active,
+        commands::students::list_students,
+        commands::students::get_student,
+        commands::students::add_student,
+        commands::students::update_student,
+        commands::students::mark_student_left,
     ]);
     #[cfg(not(debug_assertions))]
     let builder = builder.invoke_handler(tauri::generate_handler![
@@ -164,6 +169,11 @@ pub fn run() {
         commands::users::reset_user_password,
         commands::users::unlock_user,
         commands::users::set_user_active,
+        commands::students::list_students,
+        commands::students::get_student,
+        commands::students::add_student,
+        commands::students::update_student,
+        commands::students::mark_student_left,
     ]);
 
     builder

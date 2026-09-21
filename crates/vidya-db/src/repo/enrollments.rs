@@ -74,6 +74,63 @@ pub fn get_for_student(
         .optional()?)
 }
 
+/// The highest roll used in a section this session across **all** statuses, so
+/// rolls are never reused. Returns 0 for an empty section.
+pub fn max_roll(conn: &Connection, session_id: &str, section_id: &str) -> Result<i64, DbError> {
+    Ok(conn.query_row(
+        "SELECT COALESCE(MAX(roll), 0) FROM enrollments WHERE session_id = ?1 AND section_id = ?2",
+        rusqlite::params![session_id, section_id],
+        |row| row.get(0),
+    )?)
+}
+
+/// Updates an enrollment's class/section/roll and the RTE/transport/concession
+/// flags (used when moving a student or editing office fields).
+#[allow(clippy::too_many_arguments)]
+pub fn update(
+    tx: &Transaction<'_>,
+    id: &str,
+    class_id: &str,
+    section_id: &str,
+    roll: i64,
+    rte: bool,
+    transport: bool,
+    concession: i64,
+    hlc: &str,
+) -> Result<(), DbError> {
+    tx.execute(
+        "UPDATE enrollments SET class_id = ?2, section_id = ?3, roll = ?4, rte = ?5, transport = ?6,
+         concession = ?7, updated_hlc = ?8 WHERE id = ?1",
+        rusqlite::params![
+            id,
+            class_id,
+            section_id,
+            roll,
+            i64::from(rte),
+            i64::from(transport),
+            concession,
+            hlc
+        ],
+    )?;
+    Ok(())
+}
+
+/// Sets an enrollment's status (and left date/reason when leaving).
+pub fn set_status(
+    tx: &Transaction<'_>,
+    id: &str,
+    status: &str,
+    left_on: Option<&str>,
+    left_reason: &str,
+    hlc: &str,
+) -> Result<(), DbError> {
+    tx.execute(
+        "UPDATE enrollments SET status = ?2, left_on = ?3, left_reason = ?4, updated_hlc = ?5 WHERE id = ?1",
+        rusqlite::params![id, status, left_on, left_reason, hlc],
+    )?;
+    Ok(())
+}
+
 /// Active enrollments of a section in a session, ordered by roll.
 pub fn list_active_in_section(
     conn: &Connection,

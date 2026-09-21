@@ -63,3 +63,38 @@ pub fn sum_paid(conn: &Connection, session_id: &str, student_id: &str) -> Result
 pub fn count(conn: &Connection) -> Result<i64, DbError> {
     Ok(conn.query_row("SELECT count(*) FROM receipts", [], |row| row.get(0))?)
 }
+
+/// A receipt summary for the student detail (with a cancelled flag).
+#[derive(Debug, Clone)]
+pub struct ReceiptSummary {
+    pub id: String,
+    pub receipt_no: String,
+    pub paid_on: String,
+    pub amount: i64,
+    pub mode: String,
+    pub cancelled: bool,
+}
+
+/// Receipts for a student in a session, newest first, each flagged cancelled.
+pub fn list_for_student(
+    conn: &Connection,
+    session_id: &str,
+    student_id: &str,
+) -> Result<Vec<ReceiptSummary>, DbError> {
+    let mut stmt = conn.prepare(
+        "SELECT r.id, r.receipt_no, r.paid_on, r.amount, r.mode,
+                EXISTS (SELECT 1 FROM receipt_cancellations c WHERE c.receipt_id = r.id)
+         FROM receipts r WHERE r.session_id = ?1 AND r.student_id = ?2 ORDER BY r.paid_on DESC, r.receipt_no DESC",
+    )?;
+    let rows = stmt.query_map(rusqlite::params![session_id, student_id], |row| {
+        Ok(ReceiptSummary {
+            id: row.get(0)?,
+            receipt_no: row.get(1)?,
+            paid_on: row.get(2)?,
+            amount: row.get(3)?,
+            mode: row.get(4)?,
+            cancelled: row.get::<_, i64>(5)? != 0,
+        })
+    })?;
+    rows.collect::<rusqlite::Result<Vec<_>>>().map_err(DbError::from)
+}

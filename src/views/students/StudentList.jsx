@@ -4,86 +4,79 @@ import { ChipBar } from '../../components/ChipBar.jsx';
 import { DataTable } from '../../components/DataTable.jsx';
 import { EmptyState } from '../../components/EmptyState.jsx';
 import { Pill } from '../../components/Pill.jsx';
+import { formatRupees } from '../../core/format.js';
 import { useT } from '../../core/i18n.jsx';
 import { useRouter } from '../../core/router.jsx';
 import { useCurrentUser } from '../../core/session.jsx';
 import { useQuery } from '../../core/useCommand.js';
-import { useToast } from '../../core/ui.jsx';
-import { downloadCommandResult } from '../../core/download.js';
 import * as commands from '../../api/commands.js';
 
 export function StudentList() {
   const t = useT();
   const router = useRouter();
-  const { toast } = useToast();
-  const { user, can } = useCurrentUser();
+  const { can } = useCurrentUser();
   const [filter, setFilter] = useState({ q: '', sectionId: 'All', status: 'active' });
-  const query = useQuery(() => commands.listStudents(filter), [filter.q, filter.sectionId, filter.status]);
-  const sections = useMemo(
+  const query = useQuery(
     () =>
-      user.role === 'teacher'
-        ? user.sections
-        : [...new Set((query.data || []).map((student) => student.ck).filter(Boolean))],
-    [query.data, user],
+      commands.listStudents({
+        q: filter.q,
+        sectionId: filter.sectionId === 'All' ? undefined : filter.sectionId,
+        status: filter.status,
+      }),
+    [filter.q, filter.sectionId, filter.status],
   );
+  const items = query.data?.items || [];
+  const isOffice = items[0]?.shape === 'office';
+  const sections = useMemo(() => {
+    const map = new Map();
+    for (const s of query.data?.items || []) map.set(s.sectionId, `${s.className}-${s.sectionName}`);
+    return [...map.entries()].map(([id, label]) => ({ id, label }));
+  }, [query.data]);
   const columns = [
     { key: 'roll', label: t('students.roll') },
     {
       key: 'name',
       label: t('students.name'),
-      render: (student) => (
+      render: (s) => (
         <div>
-          <span className="b">{student.name}</span>
+          <span className="b">{s.name}</span>
           <div className="xs mut num">
-            {student.adm}
-            {student.rte ? ' | RTE' : ''}
-            {student.transport ? ` | ${t('students.bus')}` : ''}
+            {s.admNo}
+            {isOffice && s.rte ? ' | RTE' : ''}
+            {isOffice && s.transport ? ` | ${t('students.bus')}` : ''}
           </div>
         </div>
       ),
     },
-    { key: 'ck', label: t('students.class'), render: (student) => <Pill kind="p-blue">{student.ck}</Pill> },
+    {
+      key: 'className',
+      label: t('students.class'),
+      render: (s) => <Pill kind="p-blue">{`${s.className}-${s.sectionName}`}</Pill>,
+    },
     { key: 'father', label: t('students.father') },
     { key: 'mobile', label: t('students.mobile') },
   ];
-  if (can('fees.view'))
+  if (isOffice)
     columns.push({
-      key: 'balance',
+      key: 'fee',
       label: t('nav.fees'),
-      render: (student) => (
-        <Pill kind={student.feeState === 'paid' ? 'p-green' : 'p-orange'}>{student.balance}</Pill>
+      render: (s) => (
+        <Pill kind={s.fee.state === 'paid' || s.fee.state === 'rte' ? 'p-green' : 'p-orange'}>
+          {formatRupees(s.fee.balance)}
+        </Pill>
       ),
     });
-  const exportList = async () => {
-    try {
-      downloadCommandResult(await commands.exportStudentsXlsx({}));
-      toast(t('students.downloaded'), { kind: 'ok' });
-    } catch (error) {
-      toast(error.message, { kind: 'error' });
-    }
-  };
   return (
     <section className="view">
       <div className="inner stack">
         <div className="spread wrap g12">
           <div>
             <h1>{t('nav.students')}</h1>
-            <p className="sm mut">
-              {user.role === 'teacher'
-                ? t('students.yourClasses')
-                : t('students.activeCount', { n: query.data?.length || 0 })}
-            </p>
+            <p className="sm mut">{t('students.activeCount', { n: items.length })}</p>
           </div>
-          <div className="row g8">
-            {user.role !== 'teacher' && (
-              <Button kind="outline" onClick={exportList}>
-                {t('students.excel')}
-              </Button>
-            )}
-            {can('students.add') && (
-              <Button onClick={() => router.go('student-form')}>{t('common.addStudent')}</Button>
-            )}
-          </div>
+          {can('students.add') && (
+            <Button onClick={() => router.go('student-form')}>{t('common.addStudent')}</Button>
+          )}
         </div>
         <div className="card cb">
           <input
@@ -96,12 +89,12 @@ export function StudentList() {
           <ChipBar
             items={[
               { value: 'All', label: t('students.all') },
-              ...sections.map((value) => ({ value, label: value })),
+              ...sections.map((s) => ({ value: s.id, label: s.label })),
             ]}
             value={filter.sectionId}
             onChange={(sectionId) => setFilter((old) => ({ ...old, sectionId }))}
           />
-          {user.role !== 'teacher' && (
+          {isOffice && (
             <Button
               kind="quiet"
               onClick={() =>
@@ -117,13 +110,13 @@ export function StudentList() {
             {query.error.message}
           </div>
         )}
-        {query.data?.length ? (
+        {items.length ? (
           <div className="card">
             <DataTable
               columns={columns}
-              rows={query.data.slice(0, 150)}
-              rowKey="adm"
-              onRow={(student) => router.go('student', { studentId: student.adm })}
+              rows={items}
+              rowKey="id"
+              onRow={(student) => router.go('student', { studentId: student.id })}
             />
           </div>
         ) : (

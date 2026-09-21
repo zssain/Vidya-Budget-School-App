@@ -5,6 +5,7 @@
 pub mod app;
 pub mod auth;
 pub mod error;
+pub mod students;
 pub mod users;
 
 pub use error::AppError;

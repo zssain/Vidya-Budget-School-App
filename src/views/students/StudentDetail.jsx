@@ -23,6 +23,7 @@ export function StudentDetail({ studentId }) {
         </div>
       </section>
     );
+  const isOffice = student.shape === 'office';
   return (
     <section className="view">
       <div className="inner stack">
@@ -33,23 +34,20 @@ export function StudentDetail({ studentId }) {
             </Button>
             <h1>{student.name}</h1>
             <p className="mut">
-              {t('students.classRoll', { ck: student.ck, roll: student.roll })} · {student.adm}
+              {student.className}-{student.sectionName} · {t('students.roll')} {student.roll} ·{' '}
+              {student.admNo}
             </p>
           </div>
-          <div className="row g8">
-            {can('students.edit') && (
-              <Button kind="outline" onClick={() => router.go('student-form', { studentId: student.adm })}>
-                {t('common.edit')}
-              </Button>
-            )}
-            <Button onClick={() => router.go('reportcard', { studentId: student.adm })}>
-              {t('students.reportCard')}
+          {can('students.edit') && (
+            <Button kind="outline" onClick={() => router.go('student-form', { studentId: student.id })}>
+              {t('common.edit')}
             </Button>
-          </div>
+          )}
         </div>
         {student.status === 'left' && (
           <div className="note n-orange">
-            {t('students.leftSchool')} · {formatDate(student.leftOn)}
+            {t('students.leftSchool')}
+            {student.leftOn ? ` · ${formatDate(student.leftOn)}` : ''}
           </div>
         )}
         <div className="card cb">
@@ -73,54 +71,49 @@ export function StudentDetail({ studentId }) {
             <p>
               <span className="mut">{t('students.dob')}</span>
               <br />
-              <b>{formatDate(student.dob)}</b>
+              <b>{student.dob ? formatDate(student.dob) : '—'}</b>
             </p>
             <p>
               <span className="mut">{t('students.gender')}</span>
               <br />
               <b>{student.gender}</b>
             </p>
-            <p>
-              <span className="mut">{t('students.category')}</span>
-              <br />
-              <Pill>{student.cat}</Pill>
-            </p>
+            {isOffice && (
+              <p>
+                <span className="mut">{t('students.category')}</span>
+                <br />
+                <Pill>{student.category}</Pill>
+              </p>
+            )}
           </div>
         </div>
-        {can('fees.view') && (
+        {isOffice && (
           <div className="card cb">
             <h2>{t('students.feesSession')}</h2>
             {student.rte ? (
               <div className="note n-green">{t('students.rteNote')}</div>
             ) : (
               <div className="stats">
-                <StatCard label={t('students.totalDue')} value={formatRupees(student.feeDue)} />
-                <StatCard label={t('fees.collected')} value={formatRupees(student.paid)} />
-                <StatCard label={t('fees.balance')} value={formatRupees(student.balance)} />
+                <StatCard label={t('students.totalDue')} value={formatRupees(student.fee.due)} />
+                <StatCard label={t('fees.collected')} value={formatRupees(student.fee.paid)} />
+                <StatCard label={t('fees.balance')} value={formatRupees(student.fee.balance)} />
               </div>
             )}
           </div>
         )}
-        <div className="card cb">
-          <h2>{t('students.attendanceMarks')}</h2>
-          <div className="stats">
-            <StatCard
-              label={t('students.thisMonth')}
-              value={student.attendanceMonth?.pct == null ? '—' : `${student.attendanceMonth.pct}%`}
-            />
-            <StatCard
-              label={t('students.thisSession')}
-              value={student.attendanceSession?.pct == null ? '—' : `${student.attendanceSession.pct}%`}
-            />
-            {student.exams?.map((exam) => (
-              <StatCard
-                key={exam.id}
-                label={exam.name}
-                value={exam.entered ? `${exam.pct}% · ${exam.grade}` : t('students.noMarksYet')}
-              />
+        {isOffice && student.receipts?.length > 0 && (
+          <div className="card cb">
+            <h2>{t('students.receipts')}</h2>
+            {student.receipts.map((r) => (
+              <div className="spread xs" key={r.id}>
+                <span className={r.cancelled ? 'strike' : ''}>
+                  {r.receiptNo} · {formatDate(r.paidOn)} · {r.mode}
+                </span>
+                <b className={r.cancelled ? 'strike' : ''}>{formatRupees(r.amount)}</b>
+              </div>
             ))}
           </div>
-        </div>
+        )}
       </div>
     </section>
   );

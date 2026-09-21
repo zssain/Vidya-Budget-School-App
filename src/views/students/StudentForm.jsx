@@ -4,63 +4,84 @@ import { Field } from '../../components/Field.jsx';
 import { useT } from '../../core/i18n.jsx';
 import { useRouter } from '../../core/router.jsx';
 import { useCurrentUser } from '../../core/session.jsx';
-import { useMutation } from '../../core/useCommand.js';
+import { useMutation, useQuery } from '../../core/useCommand.js';
 import { useConfirm, useToast } from '../../core/ui.jsx';
 import * as commands from '../../api/commands.js';
 
 const empty = {
   name: '',
   gender: 'Male',
-  cls: '',
-  sec: 'A',
+  sectionId: '',
   father: '',
   mother: '',
   mobile: '',
   dob: '',
-  cat: 'General',
-  village: '',
+  category: 'General',
+  locality: '',
   concession: 0,
   status: 'active',
   leftOn: '',
-  leftReason: '',
+  reason: '',
   rte: false,
   transport: false,
-  aadhaar: false,
-  apaar: false,
+  aadhaarCollected: false,
+  apaarCreated: false,
 };
+
 export function StudentForm({ studentId }) {
   const t = useT();
   const router = useRouter();
-  const { user } = useCurrentUser();
+  const { can } = useCurrentUser();
   const { toast } = useToast();
   const confirm = useConfirm();
-  const firstClass = user.schoolClasses?.[0];
-  const [form, setForm] = useState(() => ({
-    ...empty,
-    cls: firstClass?.name || '',
-    sec: firstClass?.sections[0] || 'A',
-  }));
+  const settings = useQuery(() => commands.getSettings(), []);
+  const [form, setForm] = useState(empty);
   const [loaded, setLoaded] = useState(!studentId);
   const mutation = useMutation(studentId ? commands.updateStudent : commands.addStudent);
-  const classes = useMemo(() => user.schoolClasses || [], [user.schoolClasses]);
-  const sections = useMemo(
-    () => classes.find((item) => item.name === form.cls)?.sections || classes[0]?.sections || ['A'],
-    [classes, form.cls],
-  );
+  const leaving = useMutation(commands.markStudentLeft);
+  const sections = useMemo(() => {
+    const classes = settings.data?.classes || [];
+    return classes.flatMap((c) =>
+      (c.sections || []).map((s) => ({ id: s.id, label: `${c.name}-${s.name}` })),
+    );
+  }, [settings.data]);
   useEffect(() => {
     if (studentId)
       commands.getStudent({ studentId }).then((student) => {
-        setForm({ ...empty, ...student });
+        setForm({ ...empty, ...student, leftOn: '', reason: '' });
         setLoaded(true);
       });
   }, [studentId]);
   const change = (name, value) => setForm((old) => ({ ...old, [name]: value }));
+  const payload = () => ({
+    name: form.name,
+    gender: form.gender,
+    dob: form.dob,
+    father: form.father,
+    mother: form.mother,
+    mobile: form.mobile,
+    category: form.category,
+    locality: form.locality,
+    sectionId: form.sectionId,
+    rte: form.rte,
+    transport: form.transport,
+    concession: Number(form.concession) || 0,
+    aadhaarCollected: form.aadhaarCollected,
+    apaarCreated: form.apaarCreated,
+  });
   const save = async (event, confirmDuplicate = false) => {
     event.preventDefault();
+    if (studentId && form.status === 'left') {
+      const result = await leaving.run({ studentId, leftOn: form.leftOn, reason: form.reason });
+      toast(t('students.saved'), { kind: 'ok' });
+      router.go('student', { studentId: result.id });
+      return;
+    }
     try {
-      const result = await mutation.run({ ...form, studentId, confirmDuplicate });
+      const input = studentId ? { ...payload(), studentId } : { ...payload(), confirmDuplicate };
+      const result = await mutation.run(input);
       toast(t(studentId ? 'students.saved' : 'students.added'), { kind: 'ok' });
-      router.go('student', { studentId: result.adm || result.id });
+      router.go('student', { studentId: result.id });
     } catch (error) {
       if (
         error.kind === 'conflict' &&
@@ -74,14 +95,14 @@ export function StudentForm({ studentId }) {
         void save(event, true);
     }
   };
-  if (!loaded) return null;
+  if (!loaded || settings.loading) return null;
   return (
     <section className="view">
       <div className="inner stack">
         <div className="spread">
           <div>
             <h1>{t(studentId ? 'students.editTitle' : 'students.newAdmission')}</h1>
-            <p className="mut">{studentId || t('students.admAuto')}</p>
+            <p className="mut">{studentId ? form.admNo : t('students.admAuto')}</p>
           </div>
           <Button kind="quiet" onClick={router.back}>
             {t('common.back')}
@@ -100,6 +121,7 @@ export function StudentForm({ studentId }) {
               label={t('students.genderLabel')}
               value={form.gender}
               onChange={(e) => change('gender', e.target.value)}
+              error={mutation.fieldError('gender')}
             >
               {['Male', 'Female', 'Other'].map((value) => (
                 <option key={value}>{value}</option>
@@ -107,23 +129,18 @@ export function StudentForm({ studentId }) {
             </Field>
             <Field
               as="select"
-              label={t('students.classLabel')}
-              value={form.cls}
-              onChange={(e) => change('cls', e.target.value)}
-              error={mutation.fieldError('cls')}
+              label={t('students.classSectionLabel')}
+              value={form.sectionId}
+              onChange={(e) => change('sectionId', e.target.value)}
+              error={mutation.fieldError('sectionId')}
             >
-              {classes.map((item) => (
-                <option key={item.name}>{item.name}</option>
-              ))}
-            </Field>
-            <Field
-              as="select"
-              label={t('students.sectionLabel')}
-              value={form.sec}
-              onChange={(e) => change('sec', e.target.value)}
-            >
-              {sections.map((value) => (
-                <option key={value}>{value}</option>
+              <option value="" disabled>
+                {t('students.choose')}
+              </option>
+              {sections.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.label}
+                </option>
               ))}
             </Field>
             <Field
@@ -136,6 +153,7 @@ export function StudentForm({ studentId }) {
               label={t('students.motherLabel')}
               value={form.mother}
               onChange={(e) => change('mother', e.target.value)}
+              error={mutation.fieldError('mother')}
             />
             <Field
               label={t('students.mobileLabel')}
@@ -155,8 +173,9 @@ export function StudentForm({ studentId }) {
             <Field
               as="select"
               label={t('students.categoryLabel')}
-              value={form.cat}
-              onChange={(e) => change('cat', e.target.value)}
+              value={form.category}
+              onChange={(e) => change('category', e.target.value)}
+              error={mutation.fieldError('category')}
             >
               {['General', 'OBC', 'SC', 'ST'].map((value) => (
                 <option key={value}>{value}</option>
@@ -164,10 +183,10 @@ export function StudentForm({ studentId }) {
             </Field>
             <Field
               label={t('students.localityLabel')}
-              value={form.village}
-              onChange={(e) => change('village', e.target.value)}
+              value={form.locality}
+              onChange={(e) => change('locality', e.target.value)}
             />
-            {user.role === 'principal' && (
+            {can('students.set_concession') && (
               <Field
                 label={t('students.concessionLabel')}
                 inputMode="numeric"
@@ -177,7 +196,7 @@ export function StudentForm({ studentId }) {
               />
             )}
           </div>
-          {studentId && (
+          {studentId && can('students.mark_left') && (
             <div className="fgrid">
               <Field
                 as="select"
@@ -193,13 +212,15 @@ export function StudentForm({ studentId }) {
                   <Field
                     label={t('students.leftOnLabel')}
                     type="date"
-                    value={form.leftOn || ''}
+                    value={form.leftOn}
                     onChange={(e) => change('leftOn', e.target.value)}
+                    error={leaving.fieldError('leftOn')}
                   />
                   <Field
                     label={t('students.reasonLabel')}
-                    value={form.leftReason || ''}
-                    onChange={(e) => change('leftReason', e.target.value)}
+                    value={form.reason}
+                    onChange={(e) => change('reason', e.target.value)}
+                    error={leaving.fieldError('reason')}
                   />
                 </>
               )}
@@ -209,8 +230,8 @@ export function StudentForm({ studentId }) {
             {[
               ['rte', 'students.rteSeat'],
               ['transport', 'students.usesBus'],
-              ['aadhaar', 'students.aadhaarCollected'],
-              ['apaar', 'students.apaarCreated'],
+              ['aadhaarCollected', 'students.aadhaarCollected'],
+              ['apaarCreated', 'students.apaarCreated'],
             ].map(([name, key]) => (
               <label className="row g8" key={name}>
                 <input
@@ -222,17 +243,24 @@ export function StudentForm({ studentId }) {
               </label>
             ))}
           </div>
-          {user.role !== 'principal' && <div className="note n-blue">{t('students.concessionNote')}</div>}
+          {!can('students.set_concession') && (
+            <div className="note n-blue">{t('students.concessionNote')}</div>
+          )}
           {mutation.error && !mutation.error.field && (
             <div className="err" role="alert">
               {mutation.error.message}
+            </div>
+          )}
+          {leaving.error && !leaving.error.field && (
+            <div className="err" role="alert">
+              {leaving.error.message}
             </div>
           )}
           <div className="row g8 end">
             <Button kind="outline" type="button" onClick={router.back}>
               {t('common.cancel')}
             </Button>
-            <Button type="submit" disabled={mutation.pending}>
+            <Button type="submit" disabled={mutation.pending || leaving.pending}>
               {t('common.save')}
             </Button>
           </div>

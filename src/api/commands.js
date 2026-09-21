@@ -102,18 +102,24 @@ export async function homeTeacher() {
   return call('home_teacher');
 }
 
-// ---- Students ----
+// ---- Students (real Rust; P3.2) ----
 export async function listStudents(filter) {
-  return call('list_students', filter);
+  return run('list_students', authed({ filter: filter || {} }));
 }
 export async function getStudent(input) {
-  return call('get_student', input);
+  return run('get_student', authed({ studentId: input.studentId }));
 }
 export async function addStudent(input) {
-  return call('add_student', input);
+  return run('add_student', authed({ input }));
 }
 export async function updateStudent(input) {
-  return call('update_student', input);
+  return run('update_student', authed({ input }));
+}
+export async function markStudentLeft(input) {
+  return run(
+    'mark_student_left',
+    authed({ studentId: input.studentId, leftOn: input.leftOn, reason: input.reason }),
+  );
 }
 export async function exportStudentsXlsx(input) {
   return call('export_students_xlsx', input);

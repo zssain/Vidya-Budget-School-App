@@ -14,20 +14,13 @@ use vidya_db::Db;
 use vidya_services::auth::{AuthService, SessionStore};
 use vidya_services::env::{FixedClock, SeededRandom, SeqIds};
 use vidya_services::error::ServiceError;
+use vidya_services::services::students::{StudentFilter, StudentInput, StudentService, UpdateStudentInput};
 use vidya_services::services::users::{CreateUserInput, UpdateUserInput, UserService};
 use vidya_services::{Mode, Services};
 use vidya_testkit::SampleSchool;
 
 /// Actions whose permission case is added by a later prompt (with its id).
 const NOT_YET_IMPLEMENTED: &[Action] = &[
-    // P3.2 students
-    Action::StudentsView,
-    Action::StudentsViewFees,
-    Action::StudentsViewContact,
-    Action::StudentsAdd,
-    Action::StudentsEdit,
-    Action::StudentsSetConcession,
-    Action::StudentsMarkLeft,
     // P3.3 fees / alerts
     Action::FeesView,
     Action::FeesCollect,
@@ -80,6 +73,7 @@ struct Harness {
     principal_phone: Actor,
     accountant_phone: Actor,
     va_section: String,
+    va_student: String,
 }
 
 fn actor(user_id: &str, role: Role, sections: Vec<String>, origin: Origin) -> Actor {
@@ -137,8 +131,19 @@ impl Harness {
         let sierra = uid("sierra");
         let va = section("V", "A");
         let via = section("VI", "A");
+        let va_student = services
+            .db
+            .read(|conn| {
+                Ok(conn.query_row(
+                    "SELECT student_id FROM enrollments WHERE section_id = ?1 AND status = 'active' LIMIT 1",
+                    [&va],
+                    |row| row.get::<_, String>(0),
+                )?)
+            })
+            .unwrap();
 
         Self {
+            va_student,
             principal: actor(&sunita, Role::Principal, vec![], Origin::OfficeComputer),
             accountant: actor(&anita, Role::Accountant, vec![], Origin::OfficeComputer),
             teacher_own: actor(&sierra, Role::Teacher, vec![va.clone()], Origin::OfficeComputer),
@@ -156,6 +161,9 @@ impl Harness {
     }
     fn auth(&self) -> AuthService<'_> {
         AuthService::new(&self.services, &self.sessions)
+    }
+    fn students(&self) -> StudentService<'_> {
+        StudentService::new(&self.services)
     }
 
     fn labelled(&self) -> [(&'static str, &Actor); 6] {
@@ -220,6 +228,46 @@ fn create_input() -> CreateUserInput {
     }
 }
 
+fn student_input(section: &str, concession: i64) -> StudentInput {
+    StudentInput {
+        name: "Matrix Test".to_owned(),
+        gender: "Male".to_owned(),
+        dob: String::new(),
+        father: "Raj Kumar".to_owned(),
+        mother: String::new(),
+        mobile: "9876543210".to_owned(),
+        category: "General".to_owned(),
+        locality: String::new(),
+        section_id: section.to_owned(),
+        rte: false,
+        transport: false,
+        concession,
+        aadhaar_collected: false,
+        apaar_created: false,
+        confirm_duplicate: true,
+    }
+}
+
+fn update_input(student_id: &str, section: &str) -> UpdateStudentInput {
+    UpdateStudentInput {
+        student_id: student_id.to_owned(),
+        name: "Matrix Test".to_owned(),
+        gender: "Male".to_owned(),
+        dob: String::new(),
+        father: "Raj Kumar".to_owned(),
+        mother: String::new(),
+        mobile: "9876543210".to_owned(),
+        category: "General".to_owned(),
+        locality: String::new(),
+        section_id: section.to_owned(),
+        rte: false,
+        transport: false,
+        concession: 0,
+        aadhaar_collected: false,
+        apaar_created: false,
+    }
+}
+
 #[test]
 fn permission_matrix() {
     let h = Harness::new();
@@ -269,6 +317,41 @@ fn permission_matrix() {
     h.check(Action::UsersManage, None, |h, a| {
         h.users().set_active(a, &sierra, true).map(|_| ())
     });
+
+    // P3.2 — students.
+    let va = h.va_section.clone();
+    let va_student = h.va_student.clone();
+    case!(Action::StudentsView, Some(&va), |h, a| {
+        h.students()
+            .list(
+                a,
+                StudentFilter {
+                    section_id: Some(va.clone()),
+                    ..Default::default()
+                },
+            )
+            .map(|_| ())
+    });
+    case!(Action::StudentsAdd, None, |h, a| h
+        .students()
+        .add(a, student_input(&va, 0))
+        .map(|_| ()));
+    case!(Action::StudentsSetConcession, None, |h, a| h
+        .students()
+        .add(a, student_input(&va, 1000))
+        .map(|_| ()));
+    case!(Action::StudentsEdit, None, |h, a| h
+        .students()
+        .update(a, update_input(&va_student, &va))
+        .map(|_| ()));
+    case!(Action::StudentsMarkLeft, None, |h, a| h
+        .students()
+        .mark_left(a, &va_student, "2026-09-19", "moved")
+        .map(|_| ()));
+    // view_fees and view_contact are enforced by DTO shape (tested in
+    // tests/students.rs), not by an authorize call.
+    covered.insert(Action::StudentsViewFees.as_str());
+    covered.insert(Action::StudentsViewContact.as_str());
 
     // Coverage: every action has a case, except those a later prompt adds.
     let pending: BTreeSet<&str> = NOT_YET_IMPLEMENTED.iter().map(|a| a.as_str()).collect();

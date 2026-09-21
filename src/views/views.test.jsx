@@ -4,6 +4,31 @@ import { describe, expect, it, vi } from 'vitest';
 import { renderApp } from '../test/render.jsx';
 vi.mock('../api/commands.js', () => {
   const ok = () => Promise.resolve({ id: 'one', name: "Sierra D'Souza <b>x</b>" });
+  const office = {
+    shape: 'office',
+    id: 'one',
+    admNo: 'ADM/0001',
+    name: "Sierra D'Souza <b>x</b>",
+    gender: 'Female',
+    dob: '2015-01-01',
+    father: 'Parent',
+    mother: '',
+    mobile: '9876543210',
+    locality: '',
+    className: 'V',
+    sectionName: 'A',
+    sectionId: 'sec',
+    roll: 1,
+    status: 'active',
+    category: 'General',
+    rte: false,
+    transport: false,
+    aadhaarCollected: false,
+    apaarCreated: false,
+    admittedOn: '2026-04-01',
+    concession: 0,
+    fee: { due: 100, paid: 0, balance: 100, state: 'due' },
+  };
   return {
     homePrincipal: () =>
       Promise.resolve({
@@ -27,9 +52,11 @@ vi.mock('../api/commands.js', () => {
         topDue: [],
       }),
     homeTeacher: () => Promise.resolve({ name: 'Teacher', classes: [], pending: [] }),
-    listStudents: () => Promise.resolve([{ id: 'one', name: "Sierra D'Souza <b>x</b>" }]),
-    getStudent: ok,
+    listStudents: () => Promise.resolve({ items: [office], truncated: false }),
+    getStudent: () => Promise.resolve({ ...office, receipts: [] }),
     addStudent: vi.fn(),
+    updateStudent: vi.fn(),
+    markStudentLeft: vi.fn(),
     getAttendance: ok,
     getMarksSheet: ok,
     getReportCard: () =>

@@ -31,10 +31,8 @@ export const mock = {
   home_accountant: home.homeAccountant,
   home_teacher: home.homeTeacher,
 
-  list_students: students.listStudents,
-  get_student: students.getStudent,
-  add_student: students.addStudent,
-  update_student: students.updateStudent,
+  // list/get/add/update/mark_left students are real Rust commands (P3.2). Only
+  // the Excel export is still mock, until its own prompt.
   export_students_xlsx: students.exportStudentsXlsx,
 
   get_attendance: attendance.getAttendance,
