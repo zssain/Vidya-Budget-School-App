@@ -71,3 +71,18 @@ pub fn get(conn: &Connection, id: &str) -> Result<Option<SessionRow>, DbError> {
         )
         .optional()?)
 }
+
+/// The session immediately before `starts_on` (by start date), or `None`. Used
+/// to carry forward the previous session's unpaid balance.
+pub fn previous(conn: &Connection, starts_on: &str) -> Result<Option<SessionRow>, DbError> {
+    Ok(conn
+        .query_row(
+            &format!(
+                "SELECT {COLS} FROM academic_sessions WHERE starts_on < ?1 \
+                 ORDER BY starts_on DESC LIMIT 1"
+            ),
+            [starts_on],
+            map,
+        )
+        .optional()?)
+}

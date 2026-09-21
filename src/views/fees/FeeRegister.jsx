@@ -46,7 +46,7 @@ export function FeeRegister() {
             kind="small"
             onClick={(event) => {
               event.stopPropagation();
-              router.go('collect-fee', { studentId: row.adm });
+              router.go('collect-fee', { studentId: row.id });
             }}
           >
             {t('home.collect')}
@@ -131,8 +131,8 @@ export function FeeRegister() {
             <DataTable
               columns={columns}
               rows={data.list.slice(0, 200)}
-              rowKey="adm"
-              onRow={(row) => router.go('student', { studentId: row.adm })}
+              rowKey="id"
+              onRow={(row) => router.go('student', { studentId: row.id })}
             />
           </div>
         ) : (

@@ -150,25 +150,32 @@ export async function getClassReportCards(input) {
   return call('get_class_report_cards', input);
 }
 
-// ---- Fees ----
+// ---- Fees (real Rust; P3.3) ----
 export async function feeRegister(filter) {
-  return call('fee_register', filter);
+  return run('fee_register', authed({ filter: filter || {} }));
 }
 export async function getFeeAccount(input) {
-  return call('get_fee_account', input);
+  return run('get_fee_account', authed({ studentId: input.studentId }));
 }
 export async function collectFee(input) {
-  return call('collect_fee', input);
+  return run('collect_fee', authed({ input }));
 }
 export async function getReceipt(input) {
-  return call('get_receipt', input);
+  return run('get_receipt', authed({ receiptId: input.receiptId }));
 }
 export async function cancelReceipt(input) {
-  return call('cancel_receipt', input);
+  return run('cancel_receipt', authed({ receiptId: input.receiptId, reason: input.reason }));
 }
 export async function dayBook(input) {
-  return call('day_book', input);
+  return run('day_book', authed({ date: input.date }));
 }
+export async function listAlerts() {
+  return run('list_alerts', authed());
+}
+export async function resolveAlert(input) {
+  return run('resolve_alert', authed({ alertId: input.alertId }));
+}
+// Excel export/import is still mock, until its own prompt.
 export async function exportDuesXlsx(input) {
   return call('export_dues_xlsx', input);
 }

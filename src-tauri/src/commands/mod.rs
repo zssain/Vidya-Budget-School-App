@@ -5,6 +5,7 @@
 pub mod app;
 pub mod auth;
 pub mod error;
+pub mod fees;
 pub mod students;
 pub mod users;
 

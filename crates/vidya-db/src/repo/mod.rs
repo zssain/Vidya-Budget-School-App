@@ -3,6 +3,7 @@
 //! parameterised SQL only. No business rules and no permission checks live here
 //! (see `crates/AGENTS.md`); services authorize and validate before calling.
 
+pub mod alerts;
 pub mod app_settings;
 pub mod attendance;
 pub mod cancellations;

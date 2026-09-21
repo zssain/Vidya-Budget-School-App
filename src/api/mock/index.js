@@ -44,12 +44,8 @@ export const mock = {
   get_report_card: marks.getReportCard,
   get_class_report_cards: marks.getClassReportCards,
 
-  fee_register: fees.feeRegister,
-  get_fee_account: fees.getFeeAccount,
-  collect_fee: fees.collectFee,
-  get_receipt: fees.getReceipt,
-  cancel_receipt: fees.cancelReceipt,
-  day_book: fees.dayBook,
+  // register/account/collect/receipt/cancel/day_book are real Rust commands
+  // (P3.3). Only the Excel exports are still mock, until their own prompt.
   export_dues_xlsx: fees.exportDuesXlsx,
   export_daybook_xlsx: fees.exportDaybookXlsx,
 

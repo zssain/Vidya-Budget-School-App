@@ -25,7 +25,7 @@ function AccountForm({ account }) {
         reference,
         note,
       });
-      router.go('receipt', { receiptId: receipt.no });
+      router.go('receipt', { receiptId: receipt.id });
     } catch {
       // The mutation hook exposes field and form errors below.
     }
@@ -136,7 +136,7 @@ export function CollectFee({ studentId }) {
               .sort((a, b) => b.balance - a.balance)
               .slice(0, 30)
               .map((row) => (
-                <button className="btn outline spread" key={row.adm} onClick={() => setSelected(row.adm)}>
+                <button className="btn outline spread" key={row.id} onClick={() => setSelected(row.id)}>
                   <span>
                     <span className="b">{row.name}</span>
                     <br />

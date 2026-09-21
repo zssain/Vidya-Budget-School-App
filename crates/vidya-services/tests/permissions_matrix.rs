@@ -14,6 +14,7 @@ use vidya_db::Db;
 use vidya_services::auth::{AuthService, SessionStore};
 use vidya_services::env::{FixedClock, SeededRandom, SeqIds};
 use vidya_services::error::ServiceError;
+use vidya_services::services::fees::{CollectInput, FeeFilter, FeeService};
 use vidya_services::services::students::{StudentFilter, StudentInput, StudentService, UpdateStudentInput};
 use vidya_services::services::users::{CreateUserInput, UpdateUserInput, UserService};
 use vidya_services::{Mode, Services};
@@ -21,12 +22,6 @@ use vidya_testkit::SampleSchool;
 
 /// Actions whose permission case is added by a later prompt (with its id).
 const NOT_YET_IMPLEMENTED: &[Action] = &[
-    // P3.3 fees / alerts
-    Action::FeesView,
-    Action::FeesCollect,
-    Action::FeesCancelReceipt,
-    Action::FeesDaybook,
-    Action::AlertsView,
     // P3.4 attendance
     Action::AttendanceView,
     Action::AttendanceMarkToday,
@@ -164,6 +159,25 @@ impl Harness {
     }
     fn students(&self) -> StudentService<'_> {
         StudentService::new(&self.services)
+    }
+    fn fees(&self) -> FeeService<'_> {
+        FeeService::new(&self.services)
+    }
+
+    /// An existing, not-yet-cancelled receipt id from the sample school.
+    fn a_live_receipt(&self) -> String {
+        self.services
+            .db
+            .read(|conn| {
+                Ok(conn.query_row(
+                    "SELECT r.id FROM receipts r
+                     WHERE NOT EXISTS (SELECT 1 FROM receipt_cancellations c WHERE c.receipt_id = r.id)
+                     LIMIT 1",
+                    [],
+                    |row| row.get::<_, String>(0),
+                )?)
+            })
+            .expect("a live receipt")
     }
 
     fn labelled(&self) -> [(&'static str, &Actor); 6] {
@@ -352,6 +366,38 @@ fn permission_matrix() {
     // tests/students.rs), not by an authorize call.
     covered.insert(Action::StudentsViewFees.as_str());
     covered.insert(Action::StudentsViewContact.as_str());
+
+    // P3.3 — fees, receipts, day book, alerts.
+    case!(Action::FeesView, None, |h, a| h
+        .fees()
+        .register(a, FeeFilter::default())
+        .map(|_| ()));
+    case!(Action::FeesCollect, None, |h, a| h
+        .fees()
+        .collect(
+            a,
+            CollectInput {
+                student_id: h.va_student.clone(),
+                amount: 100,
+                mode: "Cash".to_owned(),
+                reference: String::new(),
+                note: String::new(),
+            },
+        )
+        .map(|_| ()));
+    let receipt_id = h.a_live_receipt();
+    case!(Action::FeesCancelReceipt, None, |h, a| h
+        .fees()
+        .cancel(a, &receipt_id, "Matrix cancellation")
+        .map(|_| ()));
+    case!(Action::FeesDaybook, None, |h, a| h
+        .fees()
+        .day_book(a, "2026-09-20")
+        .map(|_| ()));
+    case!(Action::AlertsView, None, |h, a| h
+        .fees()
+        .list_alerts(a)
+        .map(|_| ()));
 
     // Coverage: every action has a case, except those a later prompt adds.
     let pending: BTreeSet<&str> = NOT_YET_IMPLEMENTED.iter().map(|a| a.as_str()).collect();

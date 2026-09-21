@@ -106,7 +106,7 @@ export function DayBook() {
                   <button
                     className="feerow"
                     key={receipt.no}
-                    onClick={() => router.go('receipt', { receiptId: receipt.no })}
+                    onClick={() => router.go('receipt', { receiptId: receipt.id })}
                   >
                     <span className={`grow ${receipt.cancelled ? 'cancelled' : ''}`}>
                       <span className="b">{receipt.studentName}</span>

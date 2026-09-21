@@ -152,6 +152,14 @@ pub fn run() {
         commands::students::add_student,
         commands::students::update_student,
         commands::students::mark_student_left,
+        commands::fees::fee_register,
+        commands::fees::get_fee_account,
+        commands::fees::collect_fee,
+        commands::fees::get_receipt,
+        commands::fees::cancel_receipt,
+        commands::fees::day_book,
+        commands::fees::list_alerts,
+        commands::fees::resolve_alert,
     ]);
     #[cfg(not(debug_assertions))]
     let builder = builder.invoke_handler(tauri::generate_handler![
@@ -174,6 +182,14 @@ pub fn run() {
         commands::students::add_student,
         commands::students::update_student,
         commands::students::mark_student_left,
+        commands::fees::fee_register,
+        commands::fees::get_fee_account,
+        commands::fees::collect_fee,
+        commands::fees::get_receipt,
+        commands::fees::cancel_receipt,
+        commands::fees::day_book,
+        commands::fees::list_alerts,
+        commands::fees::resolve_alert,
     ]);
 
     builder
