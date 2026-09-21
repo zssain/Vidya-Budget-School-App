@@ -6,7 +6,7 @@ use serde_json::Value;
 use vidya_core::roles::Actor;
 
 use crate::{error::ServiceError, Services};
-use vidya_db::repo;
+use vidya_db::{repo, DbError};
 
 /// The kind of change, matching the `op` column check constraint.
 #[derive(Debug, Clone, Copy)]
@@ -63,21 +63,30 @@ fn contains_secret(value: &Value) -> bool {
     }
 }
 
-/// Appends one change-log entry inside the caller's transaction. Assigns the
-/// `change_id` (`<device_id>:<counter>`) and the hybrid logical clock, storing
-/// both `change_counter` and `hlc_last` in the same transaction.
-pub fn record(
-    services: &Services,
-    tx: &Transaction<'_>,
-    actor: Option<&Actor>,
-    rec: ChangeRecord<'_>,
-) -> Result<ChangeMeta, ServiceError> {
+/// Rejects a record whose payload or params contain a secret at any depth.
+/// Call this before `write_entry` when a payload could contain user data;
+/// `record` does it for you.
+pub fn ensure_payload_safe(rec: &ChangeRecord<'_>) -> Result<(), ServiceError> {
     if contains_secret(&rec.payload) || contains_secret(&rec.params) {
         return Err(ServiceError::internal(
             "change-log payload contains a forbidden secret field",
         ));
     }
+    Ok(())
+}
 
+/// Writes one change-log row inside the caller's transaction. Assigns the
+/// `change_id` (`<device_id>:<counter>`) and the hybrid logical clock, storing
+/// both `change_counter` and `hlc_last` in the same transaction.
+///
+/// Returns only `DbError`, so it composes inside `Db::write` closures. The
+/// caller must have checked the payload (via `ensure_payload_safe` or `record`).
+pub fn write_entry(
+    services: &Services,
+    tx: &Transaction<'_>,
+    actor: Option<&Actor>,
+    rec: ChangeRecord<'_>,
+) -> Result<ChangeMeta, DbError> {
     let counter = repo::meta::get(tx, "change_counter")?
         .and_then(|value| value.parse::<i64>().ok())
         .unwrap_or(0)
@@ -108,8 +117,7 @@ pub fn record(
             rec.payload.to_string(),
             now
         ],
-    )
-    .map_err(vidya_db::DbError::from)?;
+    )?;
     let seq = tx.last_insert_rowid();
 
     Ok(ChangeMeta {
@@ -117,4 +125,16 @@ pub fn record(
         change_id,
         hlc: hlc_text,
     })
+}
+
+/// Checks the payload for secrets, then writes the entry. Returns a
+/// `ServiceError` (secret refusal is `Internal`).
+pub fn record(
+    services: &Services,
+    tx: &Transaction<'_>,
+    actor: Option<&Actor>,
+    rec: ChangeRecord<'_>,
+) -> Result<ChangeMeta, ServiceError> {
+    ensure_payload_safe(&rec)?;
+    Ok(write_entry(services, tx, actor, rec)?)
 }

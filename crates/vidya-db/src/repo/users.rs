@@ -124,3 +124,66 @@ pub fn sections_for(conn: &Connection, user_id: &str) -> Result<BTreeSet<String>
     }
     Ok(set)
 }
+
+/// Sets the failed-attempt count and lock state (used by sign-in lockout).
+pub fn set_login_state(
+    tx: &Transaction<'_>,
+    user_id: &str,
+    failed_count: i64,
+    locked: bool,
+    locked_until: Option<&str>,
+    hlc: &str,
+) -> Result<(), DbError> {
+    tx.execute(
+        "UPDATE users SET failed_count = ?2, locked = ?3, locked_until = ?4, updated_hlc = ?5 WHERE id = ?1",
+        rusqlite::params![user_id, failed_count, i64::from(locked), locked_until, hlc],
+    )?;
+    Ok(())
+}
+
+/// Records a successful sign-in: clears failures and stamps `last_login_at`.
+pub fn record_login(
+    tx: &Transaction<'_>,
+    user_id: &str,
+    last_login_at: &str,
+    hlc: &str,
+) -> Result<(), DbError> {
+    tx.execute(
+        "UPDATE users SET failed_count = 0, locked_until = NULL, last_login_at = ?2, updated_hlc = ?3 WHERE id = ?1",
+        rusqlite::params![user_id, last_login_at, hlc],
+    )?;
+    Ok(())
+}
+
+/// Sets a new password hash, clears `must_change`, and stamps the change time.
+pub fn set_password(
+    tx: &Transaction<'_>,
+    user_id: &str,
+    password_hash: &str,
+    changed_at: &str,
+    hlc: &str,
+) -> Result<(), DbError> {
+    tx.execute(
+        "UPDATE users SET password_hash = ?2, must_change = 0, password_changed_at = ?3, updated_hlc = ?4 WHERE id = ?1",
+        rusqlite::params![user_id, password_hash, changed_at, hlc],
+    )?;
+    Ok(())
+}
+
+/// Sets the user's interface language.
+pub fn set_language(tx: &Transaction<'_>, user_id: &str, language: &str, hlc: &str) -> Result<(), DbError> {
+    tx.execute(
+        "UPDATE users SET language = ?2, updated_hlc = ?3 WHERE id = ?1",
+        rusqlite::params![user_id, language, hlc],
+    )?;
+    Ok(())
+}
+
+/// Sets whether the user is active (used by tests and P3.1 user management).
+pub fn set_active(tx: &Transaction<'_>, user_id: &str, active: bool, hlc: &str) -> Result<(), DbError> {
+    tx.execute(
+        "UPDATE users SET active = ?2, updated_hlc = ?3 WHERE id = ?1",
+        rusqlite::params![user_id, i64::from(active), hlc],
+    )?;
+    Ok(())
+}

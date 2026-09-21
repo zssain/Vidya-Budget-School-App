@@ -27,7 +27,7 @@ Rules:
 | argon2 | Password and backup key hashing | services | Argon2id m=19456,t=2,p=1; `hash_password_with_salt`; salt from our own `Random` (rand-version independent) | 0.6.0 | P2.5 | in P2.5 Mac size row |
 | rand | Random bytes, tokens | services, testkit | 0.9 API: `OsRng.try_fill_bytes`, `StdRng::seed_from_u64`, `random_range`/`random_bool`. Pinned to 0.9 (not 0.10) for argon2 0.6 | 0.9.5 | P2.5 | in P2.5 Mac size row |
 | zeroize | Wipe secrets from memory | services, license, backup | | 1.9.0 | P1.3 | |
-| sha2 | SHA-256 | license, sync, server | | | | |
+| sha2 | SHA-256 | services, license, sync, server | Pinned 0.10 (matches transitive; avoids a duplicate 0.11). Session-token hashing | 0.10.9 | P2.6 | not yet in shipped path (auth wired in P2.7) |
 | base32 | Crockford base32 for codes | vidya-license | Verify the Crockford alphabet option exists | | | |
 | ed25519-dalek | Signatures (license, device keys) | license, server, client | `rand_core` feature where keys are generated | | | |
 | chacha20poly1305 | XChaCha20-Poly1305 encryption | backup, provider | | | | |

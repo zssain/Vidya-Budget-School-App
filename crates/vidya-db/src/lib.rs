@@ -104,8 +104,9 @@ impl Db {
 
     /// Runs one serialized `BEGIN IMMEDIATE` write transaction.
     ///
-    /// Service callers must authorize, validate, and append a change-log entry
-    /// inside the closure. An error or panic rolls the transaction back.
+    /// Service callers authorize and validate *before* the transaction, then do
+    /// repository writes and the change-log entry inside it (all `DbError`). An
+    /// error or panic rolls the transaction back.
     pub fn write<T>(&self, f: impl FnOnce(&Transaction<'_>) -> Result<T, DbError>) -> Result<T, DbError> {
         let _lock = self
             .write_lock
