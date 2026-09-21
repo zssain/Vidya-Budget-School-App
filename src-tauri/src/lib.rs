@@ -160,6 +160,9 @@ pub fn run() {
         commands::fees::day_book,
         commands::fees::list_alerts,
         commands::fees::resolve_alert,
+        commands::attendance::get_attendance,
+        commands::attendance::save_attendance,
+        commands::attendance::attendance_register,
     ]);
     #[cfg(not(debug_assertions))]
     let builder = builder.invoke_handler(tauri::generate_handler![
@@ -190,6 +193,9 @@ pub fn run() {
         commands::fees::day_book,
         commands::fees::list_alerts,
         commands::fees::resolve_alert,
+        commands::attendance::get_attendance,
+        commands::attendance::save_attendance,
+        commands::attendance::attendance_register,
     ]);
 
     builder

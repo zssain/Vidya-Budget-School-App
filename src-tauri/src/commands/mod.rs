@@ -3,6 +3,7 @@
 //! and returns a DTO. No business rules or SQL live here (see `src-tauri/AGENTS.md`).
 
 pub mod app;
+pub mod attendance;
 pub mod auth;
 pub mod error;
 pub mod fees;

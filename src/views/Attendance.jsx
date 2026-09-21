@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useReducer, useState } from 'react';
 import { Button } from '../components/Button.jsx';
 import { useT } from '../core/i18n.jsx';
 import { usePrint } from '../core/print.jsx';
@@ -8,6 +8,24 @@ import { useToast } from '../core/ui.jsx';
 import * as commands from '../api/commands.js';
 
 const today = () => new Date().toISOString().slice(0, 10);
+
+// UI-only cycling, in the same order as core `next_status`: none/L → P → A → L.
+function nextStatus(current) {
+  if (current === 'P') return 'A';
+  if (current === 'A') return 'L';
+  return 'P';
+}
+function marksReducer(state, action) {
+  switch (action.type) {
+    case 'cycle':
+      return { ...state, [action.id]: nextStatus(state[action.id]) };
+    case 'all':
+      return Object.fromEntries(action.ids.map((id) => [id, 'P']));
+    default:
+      return state;
+  }
+}
+
 function Register({ register }) {
   const t = useT();
   return (
@@ -15,7 +33,7 @@ function Register({ register }) {
       <h2>{register.school?.name}</h2>
       <h3>
         {t('attendance.registerTitle', {
-          section: register.sectionId,
+          section: register.sectionLabel,
           month: register.monthName,
           year: register.year,
         })}
@@ -47,12 +65,13 @@ function Register({ register }) {
     </article>
   );
 }
+
 function AttendanceSheet({ sheet, sectionId, date, reload }) {
   const t = useT();
   const { toast } = useToast();
-  const [marks, setMarks] = useState(sheet.marks);
+  const [marks, dispatch] = useReducer(marksReducer, sheet.marks);
   const mutation = useMutation(commands.saveAttendance);
-  const mark = (studentId, value) => setMarks((old) => ({ ...old, [studentId]: value }));
+  const readOnly = Boolean(sheet.readOnlyReason);
   const save = async () => {
     try {
       await mutation.run({ sectionId, date, marks });
@@ -69,10 +88,10 @@ function AttendanceSheet({ sheet, sectionId, date, reload }) {
         <div className="sm mut">
           {sheet.savedBy ? t('attendance.savedBy', { name: sheet.savedBy }) : t('attendance.notSaved')}
         </div>
-        {!sheet.readOnlyReason && (
+        {!readOnly && (
           <Button
             kind="outline small"
-            onClick={() => setMarks(Object.fromEntries(sheet.students.map((student) => [student.adm, 'P'])))}
+            onClick={() => dispatch({ type: 'all', ids: sheet.students.map((student) => student.id) })}
           >
             {t('common.markAll')}
           </Button>
@@ -80,26 +99,21 @@ function AttendanceSheet({ sheet, sectionId, date, reload }) {
       </div>
       <div className="attgrid">
         {sheet.students.map((student) => (
-          <div className="attcard" key={student.adm}>
-            <div className="grow">
+          <button
+            className={`attcard status-${marks[student.id] || 'none'}`}
+            key={student.id}
+            disabled={readOnly}
+            aria-label={`${student.name} ${marks[student.id] || ''}`}
+            onClick={() => dispatch({ type: 'cycle', id: student.id })}
+          >
+            <span className="grow">
               <span className="b">{student.name}</span>
-              <div className="xs mut">
+              <span className="xs mut">
                 {t('students.roll')} {student.roll} · {student.adm}
-              </div>
-            </div>
-            <div className="seg">
-              {['P', 'A', 'L'].map((value) => (
-                <button
-                  key={value}
-                  className={marks[student.adm] === value ? 'on' : ''}
-                  disabled={Boolean(sheet.readOnlyReason)}
-                  onClick={() => mark(student.adm, value)}
-                >
-                  {value}
-                </button>
-              ))}
-            </div>
-          </div>
+              </span>
+            </span>
+            <span className="seg-badge">{marks[student.id] || '—'}</span>
+          </button>
         ))}
       </div>
       {mutation.error && (
@@ -107,7 +121,7 @@ function AttendanceSheet({ sheet, sectionId, date, reload }) {
           {mutation.error.message}
         </div>
       )}
-      {!sheet.readOnlyReason && (
+      {!readOnly && (
         <Button kind="large" onClick={save} disabled={mutation.pending}>
           {t('common.saveAttendance')}
         </Button>
@@ -115,28 +129,29 @@ function AttendanceSheet({ sheet, sectionId, date, reload }) {
     </>
   );
 }
+
 export function Attendance() {
   const t = useT();
   const { user } = useCurrentUser();
   const { printElement } = usePrint();
-  const sections = useMemo(
-    () =>
-      user.sections?.length
-        ? user.sections
-        : (user.schoolClasses || []).flatMap((item) =>
-            item.sections.map((section) => `${item.name}-${section}`),
-          ),
-    [user],
-  );
-  const [sectionId, setSectionId] = useState(sections[0] || '');
+  const settings = useQuery(() => commands.getSettings(), []);
+  const sections = useMemo(() => {
+    const all = (settings.data?.classes || []).flatMap((c) =>
+      (c.sections || []).map((s) => ({ id: s.id, label: `${c.name}-${s.name}` })),
+    );
+    // Teachers are scoped to their own sections; the office sees all.
+    return user.sections?.length ? all.filter((s) => user.sections.includes(s.id)) : all;
+  }, [settings.data, user.sections]);
+  const [sectionId, setSectionId] = useState('');
   const [date, setDate] = useState(today);
+  const active = sectionId || sections[0]?.id || '';
   const query = useQuery(
-    () => (sectionId ? commands.getAttendance({ sectionId, date }) : Promise.resolve(null)),
-    [sectionId, date],
+    () => (active ? commands.getAttendance({ sectionId: active, date }) : Promise.resolve(null)),
+    [active, date],
   );
   const printRegister = async () => {
-    if (!sectionId) return;
-    const register = await commands.attendanceRegister({ sectionId, month: date.slice(0, 7) });
+    if (!active) return;
+    const register = await commands.attendanceRegister({ sectionId: active, month: date.slice(0, 7) });
     await printElement(<Register register={register} />);
   };
   return (
@@ -155,11 +170,13 @@ export function Attendance() {
           <select
             className="inp"
             aria-label={t('students.class')}
-            value={sectionId}
+            value={active}
             onChange={(event) => setSectionId(event.target.value)}
           >
-            {sections.map((value) => (
-              <option key={value}>{value}</option>
+            {sections.map((section) => (
+              <option key={section.id} value={section.id}>
+                {section.label}
+              </option>
             ))}
           </select>
           <input
@@ -178,9 +195,9 @@ export function Attendance() {
         )}
         {query.data ? (
           <AttendanceSheet
-            key={`${sectionId}-${date}-${query.data.savedAt || ''}`}
+            key={`${active}-${date}-${query.data.savedAt || ''}`}
             sheet={query.data}
-            sectionId={sectionId}
+            sectionId={active}
             date={date}
             reload={query.reload}
           />

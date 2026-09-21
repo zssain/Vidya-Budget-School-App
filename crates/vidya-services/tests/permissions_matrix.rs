@@ -14,6 +14,7 @@ use vidya_db::Db;
 use vidya_services::auth::{AuthService, SessionStore};
 use vidya_services::env::{FixedClock, SeededRandom, SeqIds};
 use vidya_services::error::ServiceError;
+use vidya_services::services::attendance::{AttendanceService, SaveAttendanceInput};
 use vidya_services::services::fees::{CollectInput, FeeFilter, FeeService};
 use vidya_services::services::students::{StudentFilter, StudentInput, StudentService, UpdateStudentInput};
 use vidya_services::services::users::{CreateUserInput, UpdateUserInput, UserService};
@@ -22,11 +23,6 @@ use vidya_testkit::SampleSchool;
 
 /// Actions whose permission case is added by a later prompt (with its id).
 const NOT_YET_IMPLEMENTED: &[Action] = &[
-    // P3.4 attendance
-    Action::AttendanceView,
-    Action::AttendanceMarkToday,
-    Action::AttendanceEditPast,
-    Action::AttendancePrintRegister,
     // P3.5 marks / report cards
     Action::MarksView,
     Action::MarksEnter,
@@ -162,6 +158,9 @@ impl Harness {
     }
     fn fees(&self) -> FeeService<'_> {
         FeeService::new(&self.services)
+    }
+    fn attendance(&self) -> AttendanceService<'_> {
+        AttendanceService::new(&self.services)
     }
 
     /// An existing, not-yet-cancelled receipt id from the sample school.
@@ -397,6 +396,31 @@ fn permission_matrix() {
     case!(Action::AlertsView, None, |h, a| h
         .fees()
         .list_alerts(a)
+        .map(|_| ()));
+
+    // P3.4 — attendance (section-scoped for teachers).
+    let va = h.va_section.clone();
+    let va_student = h.va_student.clone();
+    let att_marks = |date: &str| SaveAttendanceInput {
+        section_id: va.clone(),
+        date: date.to_owned(),
+        marks: std::collections::HashMap::from([(va_student.clone(), "P".to_owned())]),
+    };
+    case!(Action::AttendanceView, Some(&va), |h, a| h
+        .attendance()
+        .sheet(a, &va, "2026-09-20")
+        .map(|_| ()));
+    case!(Action::AttendanceMarkToday, Some(&va), |h, a| h
+        .attendance()
+        .save(a, att_marks("2026-09-20"))
+        .map(|_| ()));
+    case!(Action::AttendanceEditPast, Some(&va), |h, a| h
+        .attendance()
+        .save(a, att_marks("2026-09-19"))
+        .map(|_| ()));
+    case!(Action::AttendancePrintRegister, Some(&va), |h, a| h
+        .attendance()
+        .register(a, &va, "2026-09")
         .map(|_| ()));
 
     // Coverage: every action has a case, except those a later prompt adds.

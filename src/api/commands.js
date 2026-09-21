@@ -125,15 +125,15 @@ export async function exportStudentsXlsx(input) {
   return call('export_students_xlsx', input);
 }
 
-// ---- Attendance ----
+// ---- Attendance (real Rust; P3.4) ----
 export async function getAttendance(input) {
-  return call('get_attendance', input);
+  return run('get_attendance', authed({ sectionId: input.sectionId, date: input.date }));
 }
 export async function saveAttendance(input) {
-  return call('save_attendance', input);
+  return run('save_attendance', authed({ input }));
 }
 export async function attendanceRegister(input) {
-  return call('attendance_register', input);
+  return run('attendance_register', authed({ sectionId: input.sectionId, month: input.month }));
 }
 
 // ---- Marks and report cards ----

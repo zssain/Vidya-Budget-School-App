@@ -57,7 +57,22 @@ vi.mock('../api/commands.js', () => {
     addStudent: vi.fn(),
     updateStudent: vi.fn(),
     markStudentLeft: vi.fn(),
-    getAttendance: ok,
+    getAttendance: () =>
+      Promise.resolve({
+        sectionId: 'sec',
+        sectionLabel: 'V-A',
+        date: '2026-09-20',
+        students: [
+          { id: 'one', adm: 'ADM/0001', roll: 1, name: 'Aman' },
+          { id: 'two', adm: 'ADM/0002', roll: 2, name: 'Bina' },
+        ],
+        marks: {},
+        savedBy: undefined,
+        savedAt: undefined,
+        readOnlyReason: undefined,
+      }),
+    saveAttendance: vi.fn(),
+    attendanceRegister: vi.fn(),
     getMarksSheet: ok,
     getReportCard: () =>
       Promise.resolve({
@@ -128,7 +143,7 @@ vi.mock('../api/commands.js', () => {
     getSettings: () =>
       Promise.resolve({
         school: { name: 'School', addr: '', udise: '', board: '', session: '2026-27', phone: '' },
-        classes: [],
+        classes: [{ id: 'cv', name: 'V', sortOrder: 5, sections: [{ id: 'sec', name: 'A' }], subjects: [] }],
         transportFee: 0,
         terms: 3,
         exams: [],
@@ -225,6 +240,20 @@ describe('feature views', () => {
     await user.type(screen.getByLabelText(/Amount received/), '1');
     await user.click(screen.getByRole('button', { name: 'Save and print receipt' }));
     expect(await screen.findByText('Enter a valid amount.')).toBeInTheDocument();
+  });
+  it('cycles an attendance card P → A → L and marks all present', async () => {
+    const user = userEvent.setup();
+    renderApp(<Attendance />);
+    const card = await screen.findByRole('button', { name: /Aman/ });
+    await user.click(card);
+    expect(await screen.findByRole('button', { name: 'Aman P' })).toBeInTheDocument();
+    await user.click(card);
+    expect(await screen.findByRole('button', { name: 'Aman A' })).toBeInTheDocument();
+    await user.click(card);
+    expect(await screen.findByRole('button', { name: 'Aman L' })).toBeInTheDocument();
+    await user.click(screen.getByRole('button', { name: /Mark all/ }));
+    expect(await screen.findByRole('button', { name: 'Aman P' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Bina P' })).toBeInTheDocument();
   });
   it('keeps the dashboard in the shell scroll surface', async () => {
     const { container } = renderApp(<Home />);
