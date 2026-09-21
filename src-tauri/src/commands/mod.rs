@@ -5,6 +5,7 @@
 pub mod app;
 pub mod auth;
 pub mod error;
+pub mod users;
 
 pub use error::AppError;
 
@@ -44,6 +45,28 @@ pub async fn with_actor<T: Send + 'static>(
             .map_err(|e| AppError::from_service(e, Lang::En))?;
         let lang = actor.lang;
         f(&services, &actor).map_err(|e| AppError::from_service(e, lang))
+    })
+    .await
+    .map_err(|e| AppError::internal(format!("task join: {e}")))?
+}
+
+/// Like [`with_actor`], but also passes the session store (needed by services
+/// that end sessions, e.g. user management).
+pub async fn with_actor_sessions<T: Send + 'static>(
+    state: tauri::State<'_, AppState>,
+    token: String,
+    f: impl FnOnce(&Services, &SessionStore, &Actor) -> Result<T, ServiceError> + Send + 'static,
+) -> Result<T, AppError> {
+    let state = (*state).clone();
+    tauri::async_runtime::spawn_blocking(move || -> Result<T, AppError> {
+        let services = services_of(&state)?;
+        let sessions = state.sessions();
+        let auth = AuthService::new(&services, &sessions);
+        let actor = auth
+            .actor_for_token(&token)
+            .map_err(|e| AppError::from_service(e, Lang::En))?;
+        let lang = actor.lang;
+        f(&services, &sessions, &actor).map_err(|e| AppError::from_service(e, lang))
     })
     .await
     .map_err(|e| AppError::internal(format!("task join: {e}")))?

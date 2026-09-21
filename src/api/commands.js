@@ -181,24 +181,45 @@ export async function listActivity(input) {
   return call('list_activity', input);
 }
 
-// ---- Staff logins ----
+// ---- Staff logins (real Rust; P3.1) ----
 export async function listUsers() {
-  return call('list_users');
+  return run('list_users', authed());
 }
 export async function createUser(input) {
-  return call('create_user', input);
+  return run(
+    'create_user',
+    authed({
+      input: {
+        name: input.name,
+        role: input.role,
+        mobile: input.mobile,
+        sections: input.sectionIds || [],
+        username: input.username,
+      },
+    }),
+  );
 }
 export async function updateUser(input) {
-  return call('update_user', input);
+  return run(
+    'update_user',
+    authed({
+      input: {
+        userId: input.userId,
+        name: input.name,
+        mobile: input.mobile,
+        sections: input.sectionIds || [],
+      },
+    }),
+  );
 }
 export async function resetUserPassword(input) {
-  return call('reset_user_password', input);
+  return run('reset_user_password', authed({ userId: input.userId }));
 }
 export async function unlockUser(input) {
-  return call('unlock_user', input);
+  return run('unlock_user', authed({ userId: input.userId }));
 }
 export async function setUserActive(input) {
-  return call('set_user_active', input);
+  return run('set_user_active', authed({ userId: input.userId, active: input.active }));
 }
 
 // ---- Settings ----

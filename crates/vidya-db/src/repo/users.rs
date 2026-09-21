@@ -187,3 +187,52 @@ pub fn set_active(tx: &Transaction<'_>, user_id: &str, active: bool, hlc: &str) 
     )?;
     Ok(())
 }
+
+/// Updates a user's display name and mobile number.
+pub fn update_profile(
+    tx: &Transaction<'_>,
+    user_id: &str,
+    name: &str,
+    mobile: &str,
+    hlc: &str,
+) -> Result<(), DbError> {
+    tx.execute(
+        "UPDATE users SET name = ?2, mobile = ?3, updated_hlc = ?4 WHERE id = ?1",
+        rusqlite::params![user_id, name, mobile, hlc],
+    )?;
+    Ok(())
+}
+
+/// Resets a user for a fresh temporary password: new hash, `must_change = 1`,
+/// unlocked, failure count cleared.
+pub fn reset_for_temp_password(
+    tx: &Transaction<'_>,
+    user_id: &str,
+    password_hash: &str,
+    hlc: &str,
+) -> Result<(), DbError> {
+    tx.execute(
+        "UPDATE users SET password_hash = ?2, must_change = 1, locked = 0, locked_until = NULL,
+         failed_count = 0, updated_hlc = ?3 WHERE id = ?1",
+        rusqlite::params![user_id, password_hash, hlc],
+    )?;
+    Ok(())
+}
+
+/// Clears the lock and failure count (principal "unlock").
+pub fn unlock(tx: &Transaction<'_>, user_id: &str, hlc: &str) -> Result<(), DbError> {
+    tx.execute(
+        "UPDATE users SET locked = 0, locked_until = NULL, failed_count = 0, updated_hlc = ?2 WHERE id = ?1",
+        rusqlite::params![user_id, hlc],
+    )?;
+    Ok(())
+}
+
+/// The number of active users (for the license `max_users` limit).
+pub fn count_active(conn: &Connection) -> Result<i64, DbError> {
+    Ok(
+        conn.query_row("SELECT count(*) FROM users WHERE active = 1", [], |row| {
+            row.get(0)
+        })?,
+    )
+}

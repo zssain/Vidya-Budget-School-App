@@ -141,6 +141,12 @@ pub fn run() {
         commands::auth::change_password,
         commands::auth::set_language,
         commands::auth::get_settings,
+        commands::users::list_users,
+        commands::users::create_user,
+        commands::users::update_user,
+        commands::users::reset_user_password,
+        commands::users::unlock_user,
+        commands::users::set_user_active,
     ]);
     #[cfg(not(debug_assertions))]
     let builder = builder.invoke_handler(tauri::generate_handler![
@@ -152,6 +158,12 @@ pub fn run() {
         commands::auth::change_password,
         commands::auth::set_language,
         commands::auth::get_settings,
+        commands::users::list_users,
+        commands::users::create_user,
+        commands::users::update_user,
+        commands::users::reset_user_password,
+        commands::users::unlock_user,
+        commands::users::set_user_active,
     ]);
 
     builder

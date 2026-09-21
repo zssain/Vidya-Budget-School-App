@@ -61,6 +61,11 @@ impl ServiceError {
         }
     }
 
+    /// A validation error.
+    pub fn validation(message_key: impl Into<String>) -> Self {
+        Self::new(ErrorKind::Validation, message_key)
+    }
+
     pub fn field(mut self, field: impl Into<String>) -> Self {
         self.field = Some(field.into());
         self

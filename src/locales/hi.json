@@ -388,7 +388,9 @@
       "active": "Active",
       "off": "Off",
       "locked": "Locked",
-      "pending": "Password pending"
+      "pending": "Password pending",
+      "switched_off": "बंद",
+      "must_change": "पासवर्ड बाकी"
     }
   },
   "backup": {

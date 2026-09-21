@@ -8,7 +8,6 @@ import * as attendance from './attendance.js';
 import * as marks from './marks.js';
 import * as fees from './fees.js';
 import * as reports from './reports.js';
-import * as users from './users.js';
 import * as activity from './activity.js';
 import * as backup from './backup.js';
 import * as settings from './settings.js';
@@ -58,13 +57,6 @@ export const mock = {
 
   reports_summary: reports.reportsSummary,
   export_class_summary_xlsx: reports.exportClassSummaryXlsx,
-
-  list_users: users.listUsers,
-  create_user: users.createUser,
-  update_user: users.updateUser,
-  reset_user_password: users.resetUserPassword,
-  unlock_user: users.unlockUser,
-  set_user_active: users.setUserActive,
 
   list_activity: activity.listActivity,
 

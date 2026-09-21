@@ -3,3 +3,4 @@
 pub mod dto;
 pub mod school;
 pub mod settings;
+pub mod users;

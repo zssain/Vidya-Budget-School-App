@@ -53,6 +53,28 @@ pub fn list_active_classes(conn: &Connection) -> Result<Vec<ClassRow>, DbError> 
     rows.collect::<rusqlite::Result<Vec<_>>>().map_err(DbError::from)
 }
 
+/// The display label of a section (`"V-A"`), or `None` if it does not exist.
+pub fn section_label(conn: &Connection, section_id: &str) -> Result<Option<String>, DbError> {
+    use rusqlite::OptionalExtension;
+    Ok(conn
+        .query_row(
+            "SELECT c.name || '-' || s.name FROM sections s JOIN classes c ON c.id = s.class_id WHERE s.id = ?1",
+            [section_id],
+            |row| row.get(0),
+        )
+        .optional()?)
+}
+
+/// Whether a section exists and is active.
+pub fn section_is_active(conn: &Connection, section_id: &str) -> Result<bool, DbError> {
+    let count: i64 = conn.query_row(
+        "SELECT count(*) FROM sections WHERE id = ?1 AND active = 1",
+        [section_id],
+        |row| row.get(0),
+    )?;
+    Ok(count > 0)
+}
+
 /// Active sections of a class ordered by name.
 pub fn list_active_sections(conn: &Connection, class_id: &str) -> Result<Vec<SectionRow>, DbError> {
     let mut stmt = conn.prepare(
