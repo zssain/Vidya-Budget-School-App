@@ -213,6 +213,7 @@ fn insert_and_read_back_each_table() {
                 value: Some(20),
                 absent: false,
                 entered_by: "u1".into(),
+                entered_at: NOW.into(),
             },
             NOW,
             HLC,

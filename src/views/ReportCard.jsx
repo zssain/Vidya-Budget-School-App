@@ -14,10 +14,10 @@ export function ReportCard({ studentId }) {
     [studentId],
   );
   const printClass = async () => {
-    const result = await commands.getClassReportCards({ sectionId: query.data.student.ck });
+    const cards = await commands.getClassReportCards({ sectionId: query.data.student.sectionId });
     await printElement(
       <div>
-        {result.cards.map((card) => (
+        {cards.map((card) => (
           <ReportCardSheet key={card.student.adm} report={card} />
         ))}
       </div>,

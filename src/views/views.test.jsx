@@ -73,16 +73,47 @@ vi.mock('../api/commands.js', () => {
       }),
     saveAttendance: vi.fn(),
     attendanceRegister: vi.fn(),
-    getMarksSheet: ok,
+    getMarksSheet: () =>
+      Promise.resolve({
+        exam: { id: 'ex1', name: 'Half Yearly', max: 100 },
+        exams: [{ id: 'ex1', name: 'Half Yearly' }],
+        sectionId: 'sec',
+        subjects: [{ id: 'sub1', name: 'Hindi' }],
+        students: [
+          {
+            id: 'one',
+            adm: 'ADM/0001',
+            roll: 1,
+            name: 'Aman',
+            marks: {},
+            total: '—',
+            grade: '—',
+            percent: '—',
+          },
+        ],
+        savedBy: undefined,
+        savedAt: undefined,
+        editable: true,
+      }),
+    saveMarks: vi.fn(),
     getReportCard: () =>
       Promise.resolve({
         school: { name: 'School', session: '2026-27' },
-        student: { name: 'Student', ck: 'V-A', roll: 1, adm: 'one', father: 'Parent', dob: '2015-01-01' },
+        student: {
+          name: 'Student',
+          ck: 'V-A',
+          roll: 1,
+          adm: 'one',
+          father: 'Parent',
+          dob: '2015-01-01',
+          sectionId: 'sec',
+        },
         exams: [],
         rows: [],
         totals: [],
         attendance: { p: 0, t: 0, pct: null },
       }),
+    getClassReportCards: () => Promise.resolve([]),
     feeRegister: () =>
       Promise.resolve({
         totals: { due: 0, paid: 0, pending: 0, payingCount: 0, unpaid: 0, part: 0 },
@@ -254,6 +285,22 @@ describe('feature views', () => {
     await user.click(screen.getByRole('button', { name: /Mark all/ }));
     expect(await screen.findByRole('button', { name: 'Aman P' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Bina P' })).toBeInTheDocument();
+  });
+  it('flags the cells returned in a marks validation error', async () => {
+    const commands = await import('../api/commands.js');
+    commands.saveMarks.mockRejectedValueOnce({
+      kind: 'validation',
+      messageKey: 'marks.error.cells',
+      params: { cells: JSON.stringify([{ studentId: 'one', subjectId: 'sub1' }]) },
+      message: 'Fix these marks.',
+    });
+    const user = userEvent.setup();
+    renderApp(<Marks />);
+    const cell = await screen.findByLabelText('Aman Hindi');
+    await user.type(cell, '150');
+    await user.click(screen.getByRole('button', { name: /Save marks/ }));
+    expect(await screen.findByText('Fix these marks.')).toBeInTheDocument();
+    expect(cell.className).toMatch(/bad/);
   });
   it('keeps the dashboard in the shell scroll surface', async () => {
     const { container } = renderApp(<Home />);

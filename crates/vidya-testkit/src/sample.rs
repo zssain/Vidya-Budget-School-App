@@ -375,6 +375,7 @@ impl SampleSchool {
                                 value: Some(rng.random_range(0..=25i64)),
                                 absent: false,
                                 entered_by: sunita.clone(),
+                                entered_at: now.clone(),
                             },
                             &now,
                             &hlc,

@@ -136,18 +136,18 @@ export async function attendanceRegister(input) {
   return run('attendance_register', authed({ sectionId: input.sectionId, month: input.month }));
 }
 
-// ---- Marks and report cards ----
+// ---- Marks and report cards (real Rust; P3.5) ----
 export async function getMarksSheet(input) {
-  return call('get_marks_sheet', input);
+  return run('get_marks_sheet', authed({ examId: input.examId || '', sectionId: input.sectionId }));
 }
 export async function saveMarks(input) {
-  return call('save_marks', input);
+  return run('save_marks', authed({ input }));
 }
 export async function getReportCard(input) {
-  return call('get_report_card', input);
+  return run('get_report_card', authed({ studentId: input.studentId }));
 }
 export async function getClassReportCards(input) {
-  return call('get_class_report_cards', input);
+  return run('get_class_report_cards', authed({ sectionId: input.sectionId }));
 }
 
 // ---- Fees (real Rust; P3.3) ----

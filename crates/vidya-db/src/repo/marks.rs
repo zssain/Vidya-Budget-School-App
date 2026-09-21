@@ -14,6 +14,7 @@ pub struct MarkRow {
     pub value: Option<i64>,
     pub absent: bool,
     pub entered_by: String,
+    pub entered_at: String,
 }
 
 /// Inserts or replaces a mark for an exam/student/subject.
@@ -42,7 +43,8 @@ pub fn upsert(tx: &Transaction<'_>, row: &MarkRow, now: &str, hlc: &str) -> Resu
 /// All marks for an exam.
 pub fn list_for_exam(conn: &Connection, exam_id: &str) -> Result<Vec<MarkRow>, DbError> {
     let mut stmt = conn.prepare(
-        "SELECT id, exam_id, student_id, subject_id, value, absent, entered_by FROM marks WHERE exam_id = ?1",
+        "SELECT id, exam_id, student_id, subject_id, value, absent, entered_by, entered_at
+         FROM marks WHERE exam_id = ?1",
     )?;
     let rows = stmt.query_map([exam_id], |row| {
         Ok(MarkRow {
@@ -53,7 +55,22 @@ pub fn list_for_exam(conn: &Connection, exam_id: &str) -> Result<Vec<MarkRow>, D
             value: row.get(4)?,
             absent: row.get::<_, i64>(5)? != 0,
             entered_by: row.get(6)?,
+            entered_at: row.get(7)?,
         })
     })?;
     rows.collect::<rusqlite::Result<Vec<_>>>().map_err(DbError::from)
+}
+
+/// Deletes a single mark (used when a cell is cleared).
+pub fn delete(
+    tx: &Transaction<'_>,
+    exam_id: &str,
+    student_id: &str,
+    subject_id: &str,
+) -> Result<(), DbError> {
+    tx.execute(
+        "DELETE FROM marks WHERE exam_id = ?1 AND student_id = ?2 AND subject_id = ?3",
+        rusqlite::params![exam_id, student_id, subject_id],
+    )?;
+    Ok(())
 }

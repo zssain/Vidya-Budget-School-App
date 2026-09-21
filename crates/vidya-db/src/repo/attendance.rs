@@ -97,6 +97,21 @@ pub fn month_marks(
     rows.collect::<rusqlite::Result<Vec<_>>>().map_err(DbError::from)
 }
 
+/// A student's `(present, total)` attendance across a whole session.
+pub fn student_session_counts(
+    conn: &Connection,
+    session_id: &str,
+    student_id: &str,
+) -> Result<(i64, i64), DbError> {
+    Ok(conn.query_row(
+        "SELECT COALESCE(SUM(CASE WHEN m.status = 'P' THEN 1 ELSE 0 END), 0), COUNT(*)
+         FROM attendance_marks m JOIN attendance_days d ON d.id = m.attendance_day_id
+         WHERE d.session_id = ?1 AND m.student_id = ?2",
+        rusqlite::params![session_id, student_id],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?)
+}
+
 /// The attendance day for a section and date, if saved.
 pub fn get_day(conn: &Connection, section_id: &str, date: &str) -> Result<Option<AttendanceDayRow>, DbError> {
     Ok(conn

@@ -16,6 +16,7 @@ use vidya_services::env::{FixedClock, SeededRandom, SeqIds};
 use vidya_services::error::ServiceError;
 use vidya_services::services::attendance::{AttendanceService, SaveAttendanceInput};
 use vidya_services::services::fees::{CollectInput, FeeFilter, FeeService};
+use vidya_services::services::marks::{MarksService, SaveMarksInput};
 use vidya_services::services::students::{StudentFilter, StudentInput, StudentService, UpdateStudentInput};
 use vidya_services::services::users::{CreateUserInput, UpdateUserInput, UserService};
 use vidya_services::{Mode, Services};
@@ -23,11 +24,6 @@ use vidya_testkit::SampleSchool;
 
 /// Actions whose permission case is added by a later prompt (with its id).
 const NOT_YET_IMPLEMENTED: &[Action] = &[
-    // P3.5 marks / report cards
-    Action::MarksView,
-    Action::MarksEnter,
-    Action::ReportcardView,
-    Action::ReportcardPrint,
     // P3.6 settings
     Action::SettingsView,
     Action::SettingsEdit,
@@ -161,6 +157,9 @@ impl Harness {
     }
     fn attendance(&self) -> AttendanceService<'_> {
         AttendanceService::new(&self.services)
+    }
+    fn marks(&self) -> MarksService<'_> {
+        MarksService::new(&self.services)
     }
 
     /// An existing, not-yet-cancelled receipt id from the sample school.
@@ -421,6 +420,31 @@ fn permission_matrix() {
     case!(Action::AttendancePrintRegister, Some(&va), |h, a| h
         .attendance()
         .register(a, &va, "2026-09")
+        .map(|_| ()));
+
+    // P3.5 — marks and report cards (section-scoped for teachers).
+    case!(Action::MarksView, Some(&va), |h, a| h
+        .marks()
+        .sheet(a, "", &va)
+        .map(|_| ()));
+    case!(Action::MarksEnter, Some(&va), |h, a| h
+        .marks()
+        .save(
+            a,
+            SaveMarksInput {
+                exam_id: String::new(),
+                section_id: va.clone(),
+                entries: Vec::new(),
+            },
+        )
+        .map(|_| ()));
+    case!(Action::ReportcardView, Some(&va), |h, a| h
+        .marks()
+        .report_card(a, &va_student)
+        .map(|_| ()));
+    case!(Action::ReportcardPrint, Some(&va), |h, a| h
+        .marks()
+        .class_report_cards(a, &va)
         .map(|_| ()));
 
     // Coverage: every action has a case, except those a later prompt adds.

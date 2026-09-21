@@ -4,7 +4,6 @@ import * as setup from './setup.js';
 import * as sample from './sample.js';
 import * as auth from './auth.js';
 import * as students from './students.js';
-import * as marks from './marks.js';
 import * as fees from './fees.js';
 import * as reports from './reports.js';
 import * as activity from './activity.js';
@@ -36,10 +35,7 @@ export const mock = {
 
   // get/save/register attendance are real Rust commands (P3.4).
 
-  get_marks_sheet: marks.getMarksSheet,
-  save_marks: marks.saveMarks,
-  get_report_card: marks.getReportCard,
-  get_class_report_cards: marks.getClassReportCards,
+  // marks sheet/save + report cards are real Rust commands (P3.5).
 
   // register/account/collect/receipt/cancel/day_book are real Rust commands
   // (P3.3). Only the Excel exports are still mock, until their own prompt.

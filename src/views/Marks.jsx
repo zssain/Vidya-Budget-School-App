@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { memo, useMemo, useState } from 'react';
 import { Button } from '../components/Button.jsx';
 import { useT } from '../core/i18n.jsx';
 import { useCurrentUser } from '../core/session.jsx';
@@ -6,17 +6,63 @@ import { useMutation, useQuery } from '../core/useCommand.js';
 import { useToast } from '../core/ui.jsx';
 import * as commands from '../api/commands.js';
 
+const cellKey = (studentId, subjectId) => `${studentId}|${subjectId}`;
+
+// Memoised so typing in one cell of a 45×8 table does not re-render every row.
+const MarkRow = memo(function MarkRow({ student, subjects, values, editable, badCells, onChange }) {
+  return (
+    <tr>
+      <td>{student.roll}</td>
+      <td>
+        <span className="b">{student.name}</span>
+      </td>
+      {subjects.map((subject) => {
+        const key = cellKey(student.id, subject.id);
+        return (
+          <td key={subject.id}>
+            <input
+              className={`inp num-in${badCells.has(key) ? ' bad' : ''}`}
+              aria-label={`${student.name} ${subject.name}`}
+              value={values[key] ?? ''}
+              disabled={!editable}
+              onChange={(event) => onChange(key, event.target.value)}
+            />
+          </td>
+        );
+      })}
+      <td>{student.total}</td>
+      <td>
+        <span className="grade">{student.grade}</span>
+      </td>
+    </tr>
+  );
+});
+
 function MarksSheet({ sheet, sectionId, setExamId, reload }) {
   const t = useT();
   const { toast } = useToast();
   const [values, setValues] = useState(() =>
     Object.fromEntries(
       sheet.students.flatMap((student) =>
-        sheet.subjects.map((subject) => [`${student.adm}|${subject}`, student.marks[subject] ?? '']),
+        sheet.subjects.map((subject) => [cellKey(student.id, subject.id), student.marks[subject.id] ?? '']),
       ),
     ),
   );
   const mutation = useMutation(commands.saveMarks);
+  // Cells the server flagged in the last failed save (studentId|subjectId).
+  const badCells = useMemo(() => {
+    const set = new Set();
+    const raw = mutation.error?.params?.cells;
+    if (raw) {
+      try {
+        for (const cell of JSON.parse(raw)) set.add(cellKey(cell.studentId, cell.subjectId));
+      } catch {
+        // ignore malformed param
+      }
+    }
+    return set;
+  }, [mutation.error]);
+  const onChange = (key, value) => setValues((old) => ({ ...old, [key]: value }));
   const save = async () => {
     const entries = Object.entries(values).map(([key, value]) => {
       const [studentId, subjectId] = key.split('|');
@@ -53,7 +99,7 @@ function MarksSheet({ sheet, sectionId, setExamId, reload }) {
               <th>{t('students.roll')}</th>
               <th>{t('students.name')}</th>
               {sheet.subjects.map((subject) => (
-                <th key={subject}>{subject}</th>
+                <th key={subject.id}>{subject.name}</th>
               ))}
               <th>{t('report.total')}</th>
               <th>{t('report.grade')}</th>
@@ -61,30 +107,15 @@ function MarksSheet({ sheet, sectionId, setExamId, reload }) {
           </thead>
           <tbody>
             {sheet.students.map((student) => (
-              <tr key={student.adm}>
-                <td>{student.roll}</td>
-                <td>
-                  <span className="b">{student.name}</span>
-                </td>
-                {sheet.subjects.map((subject) => {
-                  const key = `${student.adm}|${subject}`;
-                  return (
-                    <td key={subject}>
-                      <input
-                        className="inp num-in"
-                        aria-label={`${student.name} ${subject}`}
-                        value={values[key]}
-                        disabled={!sheet.editable}
-                        onChange={(event) => setValues((old) => ({ ...old, [key]: event.target.value }))}
-                      />
-                    </td>
-                  );
-                })}
-                <td>{student.total}</td>
-                <td>
-                  <span className="grade">{student.grade}</span>
-                </td>
-              </tr>
+              <MarkRow
+                key={student.id}
+                student={student}
+                subjects={sheet.subjects}
+                values={values}
+                editable={sheet.editable}
+                badCells={badCells}
+                onChange={onChange}
+              />
             ))}
           </tbody>
         </table>
@@ -104,23 +135,23 @@ function MarksSheet({ sheet, sectionId, setExamId, reload }) {
     </>
   );
 }
+
 export function Marks() {
   const t = useT();
   const { user } = useCurrentUser();
-  const sections = useMemo(
-    () =>
-      user.sections?.length
-        ? user.sections
-        : (user.schoolClasses || []).flatMap((item) =>
-            item.sections.map((section) => `${item.name}-${section}`),
-          ),
-    [user],
-  );
-  const [sectionId, setSectionId] = useState(sections[0] || '');
+  const settings = useQuery(() => commands.getSettings(), []);
+  const sections = useMemo(() => {
+    const all = (settings.data?.classes || []).flatMap((c) =>
+      (c.sections || []).map((s) => ({ id: s.id, label: `${c.name}-${s.name}` })),
+    );
+    return user.sections?.length ? all.filter((s) => user.sections.includes(s.id)) : all;
+  }, [settings.data, user.sections]);
+  const [sectionId, setSectionId] = useState('');
   const [examId, setExamId] = useState('');
+  const active = sectionId || sections[0]?.id || '';
   const query = useQuery(
-    () => (sectionId ? commands.getMarksSheet({ examId, sectionId }) : Promise.resolve(null)),
-    [sectionId, examId],
+    () => (active ? commands.getMarksSheet({ examId, sectionId: active }) : Promise.resolve(null)),
+    [active, examId],
   );
   return (
     <section className="view">
@@ -134,14 +165,16 @@ export function Marks() {
         <select
           className="inp"
           aria-label={t('students.class')}
-          value={sectionId}
+          value={active}
           onChange={(event) => {
             setSectionId(event.target.value);
             setExamId('');
           }}
         >
-          {sections.map((value) => (
-            <option key={value}>{value}</option>
+          {sections.map((section) => (
+            <option key={section.id} value={section.id}>
+              {section.label}
+            </option>
           ))}
         </select>
         {query.error && (
@@ -151,9 +184,9 @@ export function Marks() {
         )}
         {query.data && (
           <MarksSheet
-            key={`${sectionId}-${query.data.exam.id}-${query.data.savedAt || ''}`}
+            key={`${active}-${query.data.exam.id}-${query.data.savedAt || ''}`}
             sheet={query.data}
-            sectionId={sectionId}
+            sectionId={active}
             setExamId={setExamId}
             reload={query.reload}
           />

@@ -163,6 +163,10 @@ pub fn run() {
         commands::attendance::get_attendance,
         commands::attendance::save_attendance,
         commands::attendance::attendance_register,
+        commands::marks::get_marks_sheet,
+        commands::marks::save_marks,
+        commands::marks::get_report_card,
+        commands::marks::get_class_report_cards,
     ]);
     #[cfg(not(debug_assertions))]
     let builder = builder.invoke_handler(tauri::generate_handler![
@@ -196,6 +200,10 @@ pub fn run() {
         commands::attendance::get_attendance,
         commands::attendance::save_attendance,
         commands::attendance::attendance_register,
+        commands::marks::get_marks_sheet,
+        commands::marks::save_marks,
+        commands::marks::get_report_card,
+        commands::marks::get_class_report_cards,
     ]);
 
     builder
