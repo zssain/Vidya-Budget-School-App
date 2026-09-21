@@ -21,6 +21,11 @@ serde = { workspace = true }
 tauri = { version = "2.11.3", features = [] }
 vidya-services = { path = "../crates/vidya-services" }
 vidya-db = { path = "../crates/vidya-db" }
+vidya-core = { path = "../crates/vidya-core" }
+# Debug-only: the load_sample_school command. Stripped from release builds
+# (compiled out by #[cfg(debug_assertions)]). P8.1 gates it under desktop-server.
+vidya-testkit = { path = "../crates/vidya-testkit" }
+uuid = { version = "1.26.1", features = ["v7"] }
 tauri-plugin-log = "2.9.1"
 thiserror = { workspace = true }
 zeroize.workspace = true

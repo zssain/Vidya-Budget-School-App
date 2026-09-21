@@ -28,7 +28,7 @@ Every command listed here must exist in three places, checked by `scripts/check-
 ## App and setup
 | Command | Permission | Input → Output | Notes |
 |---|---|---|---|
-| `app_status` | no session | → `AppStatusDto { ready, failure?, hasSchool, platform, version }` | First call on start. `ready=false` with `failure` (one of `DataFolder`, `SecureStorage`, `WrongKey`, `Migration`, `Unknown`) drives the startup error screen. `licensed`, `serverAllowed`, `deviceLocked`, `wizardStep`, `schoolName?`, `schoolCode?` are added in P2.7/P4.2 |
+| `app_status` | no session | → `AppStatusDto { ready, failure?, hasSchool, licensed, serverAllowed, schoolName?, schoolCode?, platform, version }` | First call on start. `ready=false` with `failure` (one of `DataFolder`, `SecureStorage`, `WrongKey`, `Migration`, `Unknown`) drives the startup error screen. `serverAllowed` stays `false` until P4.2; `deviceLocked`/`wizardStep` are added in P4.2 |
 | `get_device_id` **D** | no session | → `{ deviceId }` | |
 | `activate` **D** | no session, only before setup | `{ code }` → `LicenseDto` | |
 | `wizard_save_step` **D** | no session, only while no school | `{ step, data }` → `WizardStateDto` | |

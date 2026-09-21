@@ -15,9 +15,11 @@ export function Welcome({ onReady, onSetup }) {
         <p>{t('welcome.tagline')}</p>
         <div className="col g12">
           <Button onClick={onSetup}>{t('welcome.setup')}</Button>
-          <Button kind="outline" onClick={sample}>
-            {t('welcome.loadSample')}
-          </Button>
+          {import.meta.env.DEV && (
+            <Button kind="outline" onClick={sample}>
+              {t('welcome.loadSample')}
+            </Button>
+          )}
         </div>
         <small>{t('welcome.testNote')}</small>
       </section>

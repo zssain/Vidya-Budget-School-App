@@ -4722,8 +4722,11 @@ dependencies = [
  "tauri-plugin-opener",
  "tauri-plugin-single-instance",
  "thiserror 2.0.20",
+ "uuid",
+ "vidya-core",
  "vidya-db",
  "vidya-services",
+ "vidya-testkit",
  "windows",
  "zeroize",
 ]
@@ -4827,15 +4830,9 @@ dependencies = [
  "rand 0.9.5",
  "rusqlite",
  "tempfile",
- "vidya-backup",
- "vidya-client",
  "vidya-core",
  "vidya-db",
- "vidya-export",
- "vidya-license",
- "vidya-server",
  "vidya-services",
- "vidya-sync",
 ]
 
 [[package]]

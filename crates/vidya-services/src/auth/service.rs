@@ -144,6 +144,17 @@ impl<'a> AuthService<'a> {
         })
     }
 
+    /// The `CurrentUserDto` for an already-resolved actor (the `current_user`
+    /// command). Reads the user fresh so name/sections reflect the database.
+    pub fn current_user_dto(&self, actor: &Actor) -> Result<CurrentUserDto, ServiceError> {
+        let user = self
+            .services
+            .db
+            .read(|conn| repo::users::get_by_id(conn, &actor.user_id))?
+            .ok_or_else(|| ServiceError::new(ErrorKind::Auth, "auth.error.signed_out"))?;
+        self.build_current_user(&user, actor.origin)
+    }
+
     /// Signs a user in. `origin` is trusted from the caller: the local command
     /// layer passes `OfficeComputer`, the LAN layer always passes `Phone`.
     pub fn sign_in(

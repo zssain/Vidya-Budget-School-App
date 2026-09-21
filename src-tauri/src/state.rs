@@ -1,20 +1,22 @@
-//! Application start sequence and shared state (P2.4).
+//! Application start sequence and shared state (P2.4, extended in P2.7).
 //!
-//! The Tauri `setup` hook runs [`start`] on a blocking thread and stores the
-//! result in [`AppState`]. The `app_status` command waits for that result and
-//! reports it to the React app, which shows an "Opening Vidya…" state until the
-//! database is open (or a full-screen error if it is not).
+//! The Tauri `setup` hook runs [`start`] on a blocking thread and publishes the
+//! result to [`AppState`]. Commands wait for it. On success the state holds the
+//! open database, the built `Services`, and the process-wide `SessionStore`.
 
 use std::path::PathBuf;
 use std::sync::{Arc, Condvar, Mutex};
 
-use vidya_db::{Db, DbError};
+use vidya_db::{repo, Db, DbError};
+use vidya_services::auth::SessionStore;
+use vidya_services::env::{OsRandom, SystemClock, UuidV7};
+use vidya_services::{Mode, Services};
 
 use crate::platform::Platform;
 
 /// Everything the running app needs once the database is open.
 pub struct AppCore {
-    pub db: Db,
+    pub db: Arc<Db>,
     pub platform: Box<dyn Platform>,
     pub data_dir: PathBuf,
 }
@@ -43,109 +45,166 @@ impl StartupFailure {
     }
 }
 
-/// The outcome of the start sequence.
-pub enum StartupState {
-    Ready(Arc<AppCore>),
+/// The published start result: services ready, or a startup failure.
+pub enum StartResult {
+    Ready {
+        core: Arc<AppCore>,
+        services: Arc<Services>,
+    },
     Failed {
         kind: StartupFailure,
         /// Log-safe detail (never key bytes or personal data).
-        detail_for_log: String,
+        detail: String,
     },
 }
 
-impl Clone for StartupState {
+impl Clone for StartResult {
     fn clone(&self) -> Self {
         match self {
-            StartupState::Ready(core) => StartupState::Ready(core.clone()),
-            StartupState::Failed { kind, detail_for_log } => StartupState::Failed {
+            StartResult::Ready { core, services } => StartResult::Ready {
+                core: core.clone(),
+                services: services.clone(),
+            },
+            StartResult::Failed { kind, detail } => StartResult::Failed {
                 kind: *kind,
-                detail_for_log: detail_for_log.clone(),
+                detail: detail.clone(),
             },
         }
     }
 }
 
-/// Run the start sequence: data folder → database key → open the encrypted
-/// database. Never panics; every failure becomes a `StartupState::Failed` with
-/// a log-safe detail message.
-pub fn start(platform: Box<dyn Platform>) -> StartupState {
-    let data_dir = match platform.data_dir() {
-        Ok(dir) => dir,
-        Err(error) => {
-            return StartupState::Failed {
-                kind: StartupFailure::DataFolder,
-                detail_for_log: error.to_string(),
+/// Run the full start sequence: open the database, then build the services
+/// (ensuring this device's id exists). Never panics.
+pub fn start(platform: Box<dyn Platform>) -> StartResult {
+    // Open the database first; only build services on success.
+    let core = {
+        let data_dir = match platform.data_dir() {
+            Ok(dir) => dir,
+            Err(error) => {
+                return StartResult::Failed {
+                    kind: StartupFailure::DataFolder,
+                    detail: error.to_string(),
+                }
+            }
+        };
+        let key = match platform.load_or_create_db_key() {
+            Ok(key) => key,
+            Err(error) => {
+                return StartResult::Failed {
+                    kind: StartupFailure::SecureStorage,
+                    detail: error.to_string(),
+                }
+            }
+        };
+        match Db::open(&data_dir.join("vidya.db"), &key) {
+            Ok(db) => Arc::new(AppCore {
+                db: Arc::new(db),
+                platform,
+                data_dir,
+            }),
+            Err(DbError::WrongKey) => {
+                return StartResult::Failed {
+                    kind: StartupFailure::WrongKey,
+                    detail: "database key did not unlock the data".to_owned(),
+                }
+            }
+            Err(DbError::Migration { version, message }) => {
+                return StartResult::Failed {
+                    kind: StartupFailure::Migration,
+                    detail: format!("migration blocked at version {version}: {message}"),
+                }
+            }
+            Err(error) => {
+                return StartResult::Failed {
+                    kind: StartupFailure::Unknown,
+                    detail: error.to_string(),
+                }
             }
         }
     };
-    let key = match platform.load_or_create_db_key() {
-        Ok(key) => key,
-        Err(error) => {
-            return StartupState::Failed {
-                kind: StartupFailure::SecureStorage,
-                detail_for_log: error.to_string(),
-            }
-        }
-    };
-    match Db::open(&data_dir.join("vidya.db"), &key) {
-        Ok(db) => StartupState::Ready(Arc::new(AppCore {
-            db,
-            platform,
-            data_dir,
-        })),
-        Err(DbError::WrongKey) => StartupState::Failed {
-            kind: StartupFailure::WrongKey,
-            detail_for_log: "database key did not unlock the data".to_owned(),
+
+    match build_services(&core) {
+        Ok(services) => StartResult::Ready {
+            core,
+            services: Arc::new(services),
         },
-        Err(DbError::Migration { version, message }) => StartupState::Failed {
-            kind: StartupFailure::Migration,
-            detail_for_log: format!("migration blocked at version {version}: {message}"),
-        },
-        Err(error) => StartupState::Failed {
+        Err(detail) => StartResult::Failed {
             kind: StartupFailure::Unknown,
-            detail_for_log: error.to_string(),
+            detail,
         },
     }
 }
 
-/// Managed Tauri state holding the start result behind a condition variable so a
-/// command can wait for startup without blocking the UI thread. Cheap to clone
-/// (shared `Arc`), so commands can move a handle onto a blocking thread.
-#[derive(Clone)]
-pub struct AppState {
-    slot: Arc<StartupSlot>,
+/// Build the server-mode `Services` from an open database.
+fn build_services(core: &Arc<AppCore>) -> Result<Services, String> {
+    let device_id = ensure_device_id(&core.db).map_err(|e| e.to_string())?;
+    Services::new(
+        core.db.clone(),
+        Arc::new(SystemClock),
+        Arc::new(UuidV7),
+        Arc::new(OsRandom),
+        Mode::Server,
+        device_id,
+    )
+    .map_err(|e| e.to_string())
 }
 
-struct StartupSlot {
-    ready: Mutex<Option<StartupState>>,
-    condvar: Condvar,
+/// Reads this computer's device id from `meta`, creating a UUID v7 on first run.
+fn ensure_device_id(db: &Db) -> Result<String, DbError> {
+    if let Some(id) = db.read(|conn| repo::meta::get(conn, "device_id"))? {
+        if !id.is_empty() {
+            return Ok(id);
+        }
+    }
+    let id = uuid::Uuid::now_v7().to_string();
+    db.write(|tx| repo::meta::set(tx, "device_id", &id))?;
+    Ok(id)
+}
+
+/// Managed Tauri state: the start result (behind a condition variable so a
+/// command can wait without blocking the UI thread) and the session store.
+/// Cheap to clone (shared `Arc`s).
+#[derive(Clone)]
+pub struct AppState {
+    slot: Arc<Slot>,
+    sessions: Arc<SessionStore>,
+}
+
+struct Slot {
+    result: Mutex<Option<StartResult>>,
+    ready: Condvar,
 }
 
 impl AppState {
     pub fn new() -> Self {
         Self {
-            slot: Arc::new(StartupSlot {
-                ready: Mutex::new(None),
-                condvar: Condvar::new(),
+            slot: Arc::new(Slot {
+                result: Mutex::new(None),
+                ready: Condvar::new(),
             }),
+            sessions: Arc::new(SessionStore::new()),
         }
     }
 
     /// Publish the start result and wake any waiting commands.
-    pub fn set(&self, state: StartupState) {
-        let mut guard = self.slot.ready.lock().expect("startup mutex poisoned");
-        *guard = Some(state);
-        self.slot.condvar.notify_all();
+    pub fn publish(&self, result: StartResult) {
+        let mut guard = self.slot.result.lock().expect("startup mutex poisoned");
+        *guard = Some(result);
+        self.slot.ready.notify_all();
     }
 
     /// Block until startup has finished, then return a clone of the result.
-    /// Must be called on a blocking thread (see the `app_status` command).
-    pub fn wait(&self) -> StartupState {
-        let mut guard = self.slot.ready.lock().expect("startup mutex poisoned");
+    /// Must be called on a blocking thread.
+    pub fn wait(&self) -> StartResult {
+        let mut guard = self.slot.result.lock().expect("startup mutex poisoned");
         while guard.is_none() {
-            guard = self.slot.condvar.wait(guard).expect("startup mutex poisoned");
+            guard = self.slot.ready.wait(guard).expect("startup mutex poisoned");
         }
         guard.as_ref().expect("startup result present").clone()
+    }
+
+    pub fn sessions(&self) -> Arc<SessionStore> {
+        self.sessions.clone()
     }
 }
 
@@ -171,18 +230,13 @@ mod tests {
         let dir = temp_dir("reopen");
         let key = [7u8; 32];
 
-        // First start creates the encrypted database.
         match start(Box::new(FakePlatform::new(dir.clone(), key))) {
-            StartupState::Ready(core) => {
-                assert!(core.data_dir.join("vidya.db").exists());
-            }
-            StartupState::Failed { detail_for_log, .. } => panic!("first start failed: {detail_for_log}"),
+            StartResult::Ready { core, .. } => assert!(core.data_dir.join("vidya.db").exists()),
+            StartResult::Failed { detail, .. } => panic!("first start failed: {detail}"),
         }
-
-        // Second start opens the same database with the same key.
         assert!(matches!(
             start(Box::new(FakePlatform::new(dir.clone(), key))),
-            StartupState::Ready(_)
+            StartResult::Ready { .. }
         ));
 
         let _ = std::fs::remove_dir_all(&dir);
@@ -191,19 +245,14 @@ mod tests {
     #[test]
     fn start_with_wrong_key_reports_wrong_key() {
         let dir = temp_dir("wrongkey");
-
-        // Create the database with one key.
         assert!(matches!(
             start(Box::new(FakePlatform::new(dir.clone(), [7u8; 32]))),
-            StartupState::Ready(_)
+            StartResult::Ready { .. }
         ));
-
-        // A different key must not unlock it.
         match start(Box::new(FakePlatform::new(dir.clone(), [9u8; 32]))) {
-            StartupState::Failed { kind, .. } => assert_eq!(kind, StartupFailure::WrongKey),
-            StartupState::Ready(_) => panic!("wrong key unexpectedly opened the database"),
+            StartResult::Failed { kind, .. } => assert_eq!(kind, StartupFailure::WrongKey),
+            StartResult::Ready { .. } => panic!("wrong key unexpectedly opened the database"),
         }
-
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

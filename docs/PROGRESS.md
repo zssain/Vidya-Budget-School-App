@@ -15,7 +15,7 @@ Agents update this file at the end of every session. The developer ticks the man
 | P2.4 | Platform secrets, folders and app start | in progress | 2026-09-20 | macOS Keychain (key + secrets), 0700 data/backups dirs, start sequence, `app_status` command, StartupError screen — implemented and verified on Mac (`cargo test -p vidya-app` 3+1 tests, StartupError RTL 2 tests, `npm run verify` green). Windows DPAPI/ProgramData code written against verified windows 0.61.3 APIs but **not yet compiled** (needs CI push + VM). |
 | P2.5 | Services foundation, repositories and change log | done | 2026-09-21 | `Services` container (injected clock/ids/random, HLC), `ServiceError` (+DomainError/DbError, to_dto, internal ref), change-log writer with secret redaction, 17 vidya-db repo modules, Argon2id password hashing, `SchoolService::header`/`SettingsService::get`, and the deterministic Vaani sample school (136 students, users, receipts, attendance, marks). `cargo test -p vidya-db -p vidya-services -p vidya-testkit` + `npm run verify` green (insta SettingsDto snapshot committed). |
 | P2.6 | Sign-in and sessions | done | 2026-09-21 | `AuthService`: sign-in with @school check, lockout (staff lock at 5, principal 5-min pause), pending first-password tokens, `SessionStore` (SHA-256-hashed tokens, idle timeout), change password, set language, sign out, and `actor_for_token` (reloads user fresh, ends sessions on deactivate/lock). Added `sha2` 0.10, users-repo update methods. Made the change-log writer's DB part (`write_entry`) return `DbError` so it composes in `Db::write`. 11 auth tests + `npm run verify` green. Manual security review done (security-reviewer subagent not registered in this env). |
-| P2.7 | Command layer and first real screens | not started | | |
+| P2.7 | Command layer and first real screens | done | 2026-09-21 | `AppState` now owns the built `Services` + `SessionStore` (device id created on first start); `AppError::from_service` translates into the actor's language; `with_actor`/`without_actor` command harness (desktop always `OfficeComputer` origin). 9 real commands (app_status extended, sign_in, set_first_password, sign_out, current_user, change_password, set_language, get_settings, debug-only load_sample_school). 60-second idle watcher emits `session-expired`. Frontend: those commands call real `invoke`; Welcome sample button debug-only; SessionProvider handles `session-expired` + language; a best-effort mock bridge keeps feature screens working (KNOWN_ISSUES #7). `npm run verify` green (50 JS tests, API drift 9 Rust commands). |
 | P3.1 | Staff logins and the permission test harness | not started | | |
 | P3.2 | Students and admissions | not started | | |
 | P3.3 | Fees, receipts and day book | not started | | |
@@ -74,11 +74,21 @@ Status values: not started, in progress, done, blocked.
 - [ ] **P2.4** `npm run tauri dev`: confirm `~/Library/Application Support/in.vidya.school/data/vidya.db` appears and `sqlite3 <that file> .tables` reports "file is not a database" (it is encrypted).
 - [ ] **P2.4** `VIDYA_KEYCHAIN_TEST=1 cargo test -p vidya-app --test macos_keychain` passes (allow Keychain access if prompted).
 - [ ] **P2.4** Keychain Access shows the item `in.vidya.school.dbkey`.
+- [ ] **P2.7** `npm run tauri dev` → "Load a sample school" → sign in as `sunita` / `vidya123` works against the real encrypted database.
+- [ ] **P2.7** Wrong password 5 times for `sierra` locks the login; the message matches the prototype.
+- [ ] **P2.7** Quit and reopen the app: the sample school is still there (real database persists).
+- [ ] **P2.7** Change language to हिं, sign out and back in: the language persists.
 
 ## Check on Android phone
 
 ## Session log
 (Newest first. Paste each session summary here.)
+
+### 2026-09-21 — P2.7 command layer and first real screens
+- Verified Tauri 2.11 command-arg convention (default `ArgumentCase::Camel` → Rust snake_case args map to JS camelCase). `state.rs`: `AppState { slot(condvar), sessions }` owns the built `Services` (SystemClock/UuidV7/OsRandom, `Mode::Server`, device id read/created in `meta.device_id`) and the `SessionStore`; `StartResult::{Ready{core,services},Failed}`. `AppCore.db` is now `Arc<Db>`.
+- `commands/error.rs`: `AppError::from_service(err, lang)` via `ServiceError::to_dto`. `commands/mod.rs`: `with_actor` (resolves the actor on a blocking thread, maps errors in the actor's language) and `without_actor`. `commands/app.rs`: `app_status` extended (`licensed`/`schoolName`/`schoolCode`/`serverAllowed=false`) + debug-only `load_sample_school`. `commands/auth.rs`: `sign_in` (`SignInDto` tagged `status`), `set_first_password`, `sign_out` (sync), `current_user` (null when not signed in), `change_password`, `set_language`, `get_settings`. `background.rs`: 60-s idle watcher → `session-expired` event. `lib.rs`: builds services in setup, spawns the watcher, registers all commands (debug/release split so `load_sample_school` is release-excluded).
+- Trimmed `vidya-testkit` deps to core/db/services (server/etc. re-added in P7.4) and added it to `src-tauri` for the debug sample command (stripped from release). Added `vidya-core`/`uuid` to `src-tauri`.
+- Frontend: the 9 commands call real `invoke` with the in-memory token; `getToken` bridge; Welcome sample button under `import.meta.env.DEV`; SessionProvider listens for `session-expired` (resilient dynamic import) and follows the user's language. Best-effort mock mirror of sign-in/sample-load keeps feature screens working during the transition (KNOWN_ISSUES #7). Added a `session-expired` RTL test. `AppError::from_service`, `with_actor`, and the extended DTO documented in API.md. `npm run verify` → ALL CHECKS PASSED.
 
 ### 2026-09-21 — P2.6 sign-in and sessions
 - `auth/sessions.rs`: `SessionStore` keyed by `SHA-256(token)` (raw tokens never stored); `create_full`/`create_pending` (10-min pending TTL), `resolve` (refreshes activity, drops expired), `end`/`end_all_for_user`/`end_others_for_user`, `expire_idle`. Timeout from `app_settings.session_timeout_minutes` (default 30).

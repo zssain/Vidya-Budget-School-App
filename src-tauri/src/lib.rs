@@ -4,6 +4,8 @@
 //! shared state and every command in one `generate_handler!` list. No business
 //! rules or SQL live here (see `src-tauri/AGENTS.md`).
 
+#[cfg(desktop)]
+pub mod background;
 pub mod commands;
 pub mod platform;
 pub mod state;
@@ -105,28 +107,54 @@ pub fn run() {
     #[cfg(target_os = "macos")]
     let builder = builder.menu(macos_menu);
 
+    let builder = builder.manage(state::AppState::new()).setup(|app| {
+        use tauri::Manager;
+        // Resolve the app data directory, then run the start sequence (data
+        // folder → key → open database → build services) on a blocking thread so
+        // the window never freezes. The result is published to AppState.
+        let state = app.state::<state::AppState>().inner().clone();
+        let data_dir = app.path().app_data_dir().map_err(|e| e.to_string());
+        tauri::async_runtime::spawn_blocking(move || {
+            let result = match data_dir {
+                Ok(dir) => state::start(platform::current(dir)),
+                Err(detail) => state::StartResult::Failed {
+                    kind: state::StartupFailure::DataFolder,
+                    detail,
+                },
+            };
+            state.publish(result);
+        });
+        #[cfg(desktop)]
+        background::spawn_idle_watcher(app.handle().clone());
+        Ok(())
+    });
+
+    // The sample-school command exists only in debug builds.
+    #[cfg(debug_assertions)]
+    let builder = builder.invoke_handler(tauri::generate_handler![
+        commands::app::app_status,
+        commands::app::load_sample_school,
+        commands::auth::sign_in,
+        commands::auth::set_first_password,
+        commands::auth::sign_out,
+        commands::auth::current_user,
+        commands::auth::change_password,
+        commands::auth::set_language,
+        commands::auth::get_settings,
+    ]);
+    #[cfg(not(debug_assertions))]
+    let builder = builder.invoke_handler(tauri::generate_handler![
+        commands::app::app_status,
+        commands::auth::sign_in,
+        commands::auth::set_first_password,
+        commands::auth::sign_out,
+        commands::auth::current_user,
+        commands::auth::change_password,
+        commands::auth::set_language,
+        commands::auth::get_settings,
+    ]);
+
     builder
-        .manage(state::AppState::new())
-        .setup(|app| {
-            use tauri::Manager;
-            // Resolve the app data directory, then run the start sequence (data
-            // folder → key → open database) on a blocking thread so the window
-            // never freezes. The result is published to AppState for app_status.
-            let state = app.state::<state::AppState>().inner().clone();
-            let data_dir = app.path().app_data_dir().map_err(|e| e.to_string());
-            tauri::async_runtime::spawn_blocking(move || {
-                let result = match data_dir {
-                    Ok(dir) => state::start(platform::current(dir)),
-                    Err(detail_for_log) => state::StartupState::Failed {
-                        kind: state::StartupFailure::DataFolder,
-                        detail_for_log,
-                    },
-                };
-                state.set(result);
-            });
-            Ok(())
-        })
-        .invoke_handler(tauri::generate_handler![commands::app::app_status])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

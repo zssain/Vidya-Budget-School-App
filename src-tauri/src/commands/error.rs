@@ -1,11 +1,13 @@
 //! The error type every Tauri command returns.
 //!
 //! Serialized to the shape the frontend `AppError` expects
-//! (`{ kind, messageKey, params, message, field }`). P2.7 extends this with
-//! `From<ServiceError>` and the signed-in language; for now only an internal
-//! variant is needed for the `app_status` command.
+//! (`{ kind, messageKey, params, message, field }`). Built from a
+//! `ServiceError` and translated into the actor's language at the boundary.
 
 use std::collections::BTreeMap;
+
+use vidya_core::roles::Lang;
+use vidya_services::ServiceError;
 
 #[derive(Debug, Clone, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -29,6 +31,22 @@ impl AppError {
             params: BTreeMap::new(),
             message: "Something went wrong. Please try again.".to_owned(),
             field: None,
+        }
+    }
+
+    /// Builds the client error from a service error, translated into `lang`.
+    pub fn from_service(error: ServiceError, lang: Lang) -> Self {
+        let dto = error.to_dto(lang);
+        let kind = serde_json::to_value(dto.kind)
+            .ok()
+            .and_then(|value| value.as_str().map(str::to_owned))
+            .unwrap_or_else(|| "internal".to_owned());
+        Self {
+            kind,
+            message_key: dto.message_key,
+            params: dto.params,
+            message: dto.message,
+            field: dto.field,
         }
     }
 }

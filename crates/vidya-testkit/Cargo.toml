@@ -5,9 +5,10 @@ edition.workspace = true
 publish.workspace = true
 license.workspace = true
 
-# Test fixtures and simulation harness. This crate builds on top of every other
-# workspace crate, and is only ever pulled in by others as a [dev-dependencies]
-# entry (never a normal dependency of production code).
+# Test fixtures and the sample school. Depends only on the crates it actually
+# uses (core, db, services); the simulation harness re-adds sync/server/client
+# etc. in P7.4. Used as a dev-dependency, and (debug-only) by src-tauri's
+# load_sample_school command.
 [dependencies]
 chrono = { workspace = true }
 rand = "0.9"
@@ -15,12 +16,6 @@ rusqlite = { workspace = true }
 vidya-core = { path = "../vidya-core" }
 vidya-db = { path = "../vidya-db" }
 vidya-services = { path = "../vidya-services" }
-vidya-license = { path = "../vidya-license" }
-vidya-sync = { path = "../vidya-sync" }
-vidya-server = { path = "../vidya-server" }
-vidya-client = { path = "../vidya-client" }
-vidya-backup = { path = "../vidya-backup" }
-vidya-export = { path = "../vidya-export" }
 
 [dev-dependencies]
 insta = { version = "1", features = ["json"] }

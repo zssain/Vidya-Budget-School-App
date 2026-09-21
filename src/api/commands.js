@@ -5,7 +5,7 @@
 import { invoke } from '@tauri-apps/api/core';
 import { mock } from './mock/index.js';
 import { toAppError } from './errors.js';
-import { clearToken, setToken } from './session.js';
+import { clearToken, getToken, setToken } from './session.js';
 
 async function call(name, arg) {
   try {
@@ -15,15 +15,21 @@ async function call(name, arg) {
   }
 }
 
-// ---- App and setup ----
-// app_status is the first command backed by real Rust (P2.4). Every other
-// command still uses the mock until its own prompt (P2.6, P2.7, P3.x...).
-export async function appStatus() {
+// A real Tauri command. `authed()` attaches the in-memory session token.
+async function run(name, args) {
   try {
-    return await invoke('app_status');
+    return await invoke(name, args);
   } catch (e) {
     throw toAppError(e);
   }
+}
+function authed(args = {}) {
+  return { token: getToken(), ...args };
+}
+
+// ---- App and setup (real Rust; P2.4/P2.7) ----
+export async function appStatus() {
+  return run('app_status');
 }
 export async function getDeviceId() {
   return call('get_device_id');
@@ -34,34 +40,55 @@ export async function activate(input) {
 export async function wizardCreateSchool(input) {
   return call('wizard_create_school', input);
 }
+// Debug builds only (the button is hidden in release). Also seeds the mock DB so
+// the still-mock feature screens have matching data during the P3.1–P4.4 transition.
 export async function loadSampleSchool() {
-  return call('load_sample_school');
+  await run('load_sample_school');
+  try {
+    await mock.load_sample_school?.();
+  } catch {
+    // ignore: mock may already be seeded
+  }
+  return {};
 }
 
-// ---- Auth and account ----
+// ---- Auth and account (real Rust; P2.7) ----
 export async function signIn(input) {
-  const r = await call('sign_in', input);
+  const r = await run('sign_in', input);
   if (r && r.token) setToken(r.token);
+  // Bridge: mirror the session into the mock so mock feature screens work.
+  if (r && r.status === 'ok') {
+    try {
+      await mock.sign_in?.(input);
+    } catch {
+      // ignore: features fall back to their own mock guards
+    }
+  }
   return r;
 }
 export async function setFirstPassword(input) {
-  const r = await call('set_first_password', input);
+  const r = await run('set_first_password', input);
   if (r && r.token) setToken(r.token);
   return r;
 }
 export async function signOut() {
-  const r = await call('sign_out');
+  const r = await run('sign_out', authed());
   clearToken();
+  try {
+    await mock.sign_out?.();
+  } catch {
+    // ignore
+  }
   return r;
 }
 export async function currentUser() {
-  return call('current_user');
+  return run('current_user', authed());
 }
 export async function changePassword(input) {
-  return call('change_password', input);
+  return run('change_password', authed(input));
 }
 export async function setLanguage(input) {
-  return call('set_language', input);
+  return run('set_language', authed(input));
 }
 
 // ---- Home ----
@@ -176,7 +203,7 @@ export async function setUserActive(input) {
 
 // ---- Settings ----
 export async function getSettings() {
-  return call('get_settings');
+  return run('get_settings', authed());
 }
 export async function saveSchool(input) {
   return call('save_school', input);
