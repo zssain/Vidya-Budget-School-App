@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Welcome to Vidya</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&amp;family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;1,6..72,400;1,6..72,500&amp;family=Noto+Sans+Devanagari:wght@400;500;600&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#E2EAEB}
+a{color:#2F7479}a:hover{color:#245C60}
+button{font-family:inherit;cursor:pointer;transition:background-color .18s ease,border-color .18s ease,color .18s ease,box-shadow .18s ease,transform .1s ease}
+button:active{transform:scale(.985)}
+input:focus{outline:none}
+@keyframes vRise{from{opacity:0;transform:translateY(14px)}to{opacity:1;transform:none}}
+@keyframes vIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:none}}
+@media (prefers-reduced-motion: reduce){*{animation:none!important;transition:none!important}}
+</style>
+</helmet>
+<div style="width: 1440px; height: 960px; box-sizing: border-box; padding: 20px; display: flex; gap: 20px; background: #E2EAEB; color: #13233F; font-family: 'Geist', 'Noto Sans Devanagari', system-ui, sans-serif; font-size: 14px;">
+<section style="width: 600px; flex-shrink: 0; background: #F6F8F7; border-radius: 22px; box-shadow: 0 1px 2px rgba(11,26,51,0.06); padding: 36px 56px; box-sizing: border-box; display: flex; flex-direction: column;">
+<div style="display: flex; align-items: center; justify-content: space-between;">
+<img src="/_blob/018c620b68aa5806aa7ee412a1ecdefe" alt="Vidya Budget School" style="width: 190px; height: 62px; display: block;">
+<a href="#" style="font-size: 13px; color: #56657A; text-decoration: none; display: flex; align-items: center; gap: 6px;"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M9.5 9.5a2.5 2.5 0 1 1 3.5 2.3c-.6.3-1 .9-1 1.6v.3M12 17h.01"></path></svg>Help</a>
+</div>
+<div style="flex-grow: 1; display: flex; flex-direction: column; justify-content: center; gap: 22px; max-width: 420px; animation: vRise 520ms cubic-bezier(.2,.8,.2,1) both;">
+<div style="display: flex; align-items: center; justify-content: space-between;">
+<span style="display: flex; align-items: center; gap: 8px; font-size: 11px; font-weight: 600; letter-spacing: 0.14em; text-transform: uppercase; color: {{accent}};"><span style="width: 5px; height: 5px; border-radius: 3px; background: {{accent}};"></span>Your school on Vidya</span>
+<span style="display: flex; align-items: center; gap: 6px; font-size: 12px; color: #56657A;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3 5 6v5c0 4.5 3 8 7 10 4-2 7-5.5 7-10V6z"></path></svg>Encrypted on your devices</span>
+</div>
+<div style="display: flex; flex-direction: column; gap: 10px;">
+<h1 style="margin: 0; font-family: 'Newsreader', Georgia, serif; font-weight: 400; font-size: 60px; line-height: 1; letter-spacing: -0.03em;">Namaste.</h1>
+<p style="margin: 0; font-size: 15px; line-height: 1.55; color: #56657A;">How would you like to begin? You only need an activation code when you are setting up a new school.</p>
+</div>
+<div role="radiogroup" aria-label="How to begin" style="display: flex; flex-direction: column; gap: 10px;">
+<sc-for list="{{options}}" as="o" hint-placeholder-count="3">
+<button type="button" role="radio" aria-checked="{{o.on}}" onClick="{{o.pick}}" style="{{o.style}}">
+<span style="{{o.dot}}"></span>
+<span style="display: flex; flex-direction: column; gap: 3px; text-align: left;"><span style="font-size: 15px; font-weight: 600; color: #13233F;">{{o.title}}</span><span style="font-size: 13px; color: #56657A;">{{o.sub}}</span></span>
+</button>
+</sc-for>
+</div>
+<sc-if value="{{isSetup}}" hint-placeholder-val="{{ true }}">
+<div style="display: flex; flex-direction: column; gap: 8px; animation: vIn 260ms ease both;">
+<label for="code" style="font-size: 13px; font-weight: 500;">Activation code</label>
+<input id="code" placeholder="VIDYA-XXXX-XXXX-XXXX" style="height: 48px; box-sizing: border-box; border-radius: 6px; border: 1.5px solid {{accent}}; box-shadow: 0 0 0 4px {{accentRing}}; background: #FFFFFF; padding: 0 14px; font-family: 'Geist', monospace; font-size: 15px; letter-spacing: 0.06em; color: #13233F;">
+<span style="font-size: 12px; color: #56657A;">It is in your purchase email and on your account page.</span>
+</div>
+</sc-if>
+<sc-if value="{{isJoin}}" hint-placeholder-val="{{ false }}">
+<div style="display: flex; flex-direction: column; gap: 8px; animation: vIn 260ms ease both;">
+<label for="inv" style="font-size: 13px; font-weight: 500;">Invitation link or code</label>
+<input id="inv" placeholder="Paste the link your Principal sent" style="height: 48px; box-sizing: border-box; border-radius: 6px; border: 1.5px solid {{accent}}; box-shadow: 0 0 0 4px {{accentRing}}; background: #FFFFFF; padding: 0 14px; font-family: inherit; font-size: 15px; color: #13233F;">
+<span style="font-size: 12px; color: #56657A;">On a phone you can also scan the invitation QR code.</span>
+</div>
+</sc-if>
+<sc-if value="{{isRecover}}" hint-placeholder-val="{{ false }}">
+<div style="display: flex; flex-direction: column; gap: 6px; padding: 14px 16px; border-radius: 8px; background: #F4ECDC; color: #6B5220; font-size: 13px; line-height: 1.5; animation: vIn 260ms ease both;">
+<span style="font-weight: 600;">Owner verification needed</span>
+<span>We will confirm the school’s licence and check your backup before anything is restored.</span>
+</div>
+</sc-if>
+<button type="button" style="height: 50px; border-radius: 6px; border: 0; background: {{accent}}; color: #FFFFFF; font-size: 15px; font-weight: 500; display: flex; align-items: center; justify-content: space-between; padding: 0 18px;">{{cta}}<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 17 17 7M8 7h9v9"></path></svg></button>
+<div style="height: 1px; background: #D5DDE0;"></div>
+<span style="font-size: 13px; color: #56657A; text-align: center;">Already set up on this device? <a href="Main.dc.html" style="color: #13233F; font-weight: 600; text-decoration: none;">Sign in</a></span>
+</div>
+<div style="display: flex; justify-content: space-between; font-size: 12px; color: #56657A;"><span>© 2026 [Your company]</span><span style="display: flex; gap: 20px;"><a href="#" style="color: #56657A; text-decoration: none;">Privacy</a><a href="#" style="color: #56657A; text-decoration: none;">Terms</a></span></div>
+</section>
+<section style="flex-grow: 1; position: relative; overflow: hidden; border-radius: 22px; background: radial-gradient(120% 80% at 80% 10%, #1A3560 0%, #0C1B38 55%, #08152B 100%); color: #FFFFFF; padding: 44px 52px 32px; box-sizing: border-box; display: flex; flex-direction: column; gap: 26px;">
+<span style="font-size: 11px; font-weight: 600; letter-spacing: 0.16em; text-transform: uppercase; color: #9FACBF;">School management for Indian schools</span>
+<div style="display: flex; flex-direction: column; gap: 4px; animation: vRise 600ms 120ms cubic-bezier(.2,.8,.2,1) both;">
+<h2 style="margin: 0; font-family: 'Newsreader', Georgia, serif; font-weight: 400; font-size: 64px; line-height: 1.02; letter-spacing: -0.03em;">Every class. Every rupee.</h2>
+<span style="font-family: 'Newsreader', Georgia, serif; font-style: italic; font-weight: 400; font-size: 64px; line-height: 1.05; letter-spacing: -0.03em; color: #C5AB7A;">One clear record.</span>
+</div>
+<p style="margin: 0; font-size: 15px; line-height: 1.6; color: #C9D2DE; max-width: 460px;">Attendance, marks and fees are saved on the phone first, then confirmed by your school’s own computer.</p>
+<div style="flex-grow: 1; border: 1px solid rgba(255,255,255,0.14); border-radius: 22px; display: flex; align-items: center; justify-content: center; min-height: 0;">
+<div style="display: flex; flex-direction: column; align-items: center; gap: 22px; animation: vRise 700ms 200ms cubic-bezier(.2,.8,.2,1) both;"><img src="/_blob/c7a72d1fc8dc4a2020b3cd64bb5ad940" alt="" style="width: 220px; height: 220px; display: block;"><span style="font-family: 'Newsreader', Georgia, serif; font-style: italic; font-size: 22px; color: #C5AB7A;">A door to every classroom.</span></div>
+</div>
+<div style="display: flex; justify-content: space-between; padding-top: 16px; border-top: 1px solid rgba(255,255,255,0.14); font-size: 13px; color: #C9D2DE;"><span>Attendance.</span><span>Marks.</span><span>Fees.</span><span>Approvals.</span></div>
+</section>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"accent":{"editor":"color","default":"#2F7479","options":["#2F7479","#1F4E8C","#5B4B8A"]},"$preview":{"width":1440,"height":960}}'>
+class Component extends DCLogic {
+  constructor(props) {
+    super(props);
+    this.state = { mode: 'setup' };
+  }
+  renderVals() {
+    const accent = this.props.accent ?? '#2F7479';
+    const n = parseInt(accent.slice(1), 16);
+    const rgba = (a) => 'rgba(' + ((n >> 16) & 255) + ',' + ((n >> 8) & 255) + ',' + (n & 255) + ',' + a + ')';
+    const m = this.state.mode;
+    const defs = [
+      ['setup', 'Set up my school', 'For the Principal · uses the activation code from your purchase'],
+      ['join', 'Join my school', 'For teachers and accountants · uses your invitation'],
+      ['recover', 'Recover an existing school', 'Move Vidya to a new computer from a backup']
+    ];
+    const options = defs.map(([id, title, sub]) => ({
+      title, sub, on: m === id,
+      pick: () => this.setState({ mode: id }),
+      style: 'display: flex; align-items: center; gap: 14px; padding: 14px 16px; border-radius: 8px; font-family: inherit; ' + (m === id ? 'border: 1.5px solid ' + accent + '; background: ' + rgba(0.06) + ';' : 'border: 1.5px solid #D5DDE0; background: #FFFFFF;'),
+      dot: 'width: 18px; height: 18px; border-radius: 9px; flex-shrink: 0; box-sizing: border-box; transition: border-width .18s ease; ' + (m === id ? 'border: 5px solid ' + accent + '; background: #FFFFFF;' : 'border: 1.5px solid #B7C2C9; background: #FFFFFF;')
+    }));
+    const cta = { setup: 'Activate and continue', join: 'Join school', recover: 'Start recovery' }[m];
+    return { accent, accentRing: rgba(0.12), options, cta, isSetup: m === 'setup', isJoin: m === 'join', isRecover: m === 'recover' };
+  }
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,198 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Principal home</title>
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&amp;family=Newsreader:ital,opsz,wght@0,6..72,400;0,6..72,500;1,6..72,400;1,6..72,500&amp;family=Noto+Sans+Devanagari:wght@400;500;600&amp;display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#F5F7F6}
+a{color:#2F7479}a:hover{color:#245C60}
+button{font-family:inherit;cursor:pointer;transition:background-color .18s ease,border-color .18s ease,color .18s ease,box-shadow .18s ease,transform .1s ease}
+button:active{transform:scale(.985)}
+@keyframes vRise{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:none}}
+@keyframes vGrow{from{transform:scaleY(0)}to{transform:scaleY(1)}}
+@keyframes vFill{from{transform:scaleX(0)}to{transform:scaleX(1)}}
+@media (prefers-reduced-motion: reduce){*{animation:none!important;transition:none!important}}
+</style>
+</helmet>
+<div style="width: 1440px; height: 1080px; display: flex; background: #F5F7F6; color: #13233F; font-family: 'Geist', 'Noto Sans Devanagari', system-ui, sans-serif; font-size: 14px; overflow: hidden;">
+<aside style="width: 256px; flex-shrink: 0; background: #0C1B38; color: #FFFFFF; display: flex; flex-direction: column; padding: 26px 16px 20px; box-sizing: border-box; gap: 28px;">
+<div style="display: flex; flex-direction: column; gap: 4px; padding: 0 10px;">
+<img src="/_blob/c7724ba7cede6cc54dcf27ecbe1f94fd" alt="Vidya Budget School" style="width: 160px; height: 52px; display: block;">
+<span style="font-size: 12px; color: #9FACBF;">Saraswati Public School</span>
+</div>
+<nav aria-label="Main" style="display: flex; flex-direction: column; gap: 20px;">
+<div style="display: flex; flex-direction: column; gap: 2px;">
+<div style="font-size: 10px; font-weight: 600; letter-spacing: 0.16em; text-transform: uppercase; color: #8E9AAE; padding: 0 10px 8px;">Overview</div>
+<a href="#" style="display: flex; align-items: center; gap: 11px; height: 38px; padding: 0 10px; border-radius: 6px; background: rgba(255,255,255,0.07); color: #FFFFFF; text-decoration: none; font-weight: 500;"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#C5AB7A" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 11.5 12 4l9 7.5"></path><path d="M5 10v10h14V10"></path></svg><span>Home</span><span style="margin-left: auto; width: 5px; height: 5px; border-radius: 3px; background: #C5AB7A;"></span></a>
+<a href="#" style="display: flex; align-items: center; gap: 11px; height: 38px; padding: 0 10px; border-radius: 6px; color: #C9D2DE; text-decoration: none; font-weight: 500;"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 11l3 3 8-8"></path><path d="M20 12v7a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h11"></path></svg><span>Approvals</span><span style="margin-left: auto; min-width: 20px; height: 20px; padding: 0 6px; border-radius: 10px; background: #C5AB7A; color: #0C1B38; font-size: 11px; font-weight: 700; display: flex; align-items: center; justify-content: center; box-sizing: border-box;">4</span></a>
+</div>
+<div style="display: flex; flex-direction: column; gap: 2px;">
+<div style="font-size: 10px; font-weight: 600; letter-spacing: 0.16em; text-transform: uppercase; color: #8E9AAE; padding: 0 10px 8px;">Academics</div>
+<a href="#" style="display: flex; align-items: center; gap: 11px; height: 38px; padding: 0 10px; border-radius: 6px; color: #C9D2DE; text-decoration: none; font-weight: 500;"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="9" cy="8" r="3.5"></circle><path d="M2.5 20a6.5 6.5 0 0 1 13 0"></path><path d="M16 4.5a3.5 3.5 0 0 1 0 7"></path><path d="M18 14a6 6 0 0 1 3.5 6"></path></svg><span>Students</span></a>
+<a href="#" style="display: flex; align-items: center; gap: 11px; height: 38px; padding: 0 10px; border-radius: 6px; color: #C9D2DE; text-decoration: none; font-weight: 500;"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3.5" y="5" width="17" height="15" rx="2"></rect><path d="M8 3v4M16 3v4M3.5 10h17"></path></svg><span>Attendance</span></a>
+<a href="#" style="display: flex; align-items: center; gap: 11px; height: 38px; padding: 0 10px; border-radius: 6px; color: #C9D2DE; text-decoration: none; font-weight: 500;"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="4" width="14" height="17" rx="2"></rect><path d="M9 4V3h6v1M9 11h6M9 15h4"></path></svg><span>Marks &amp; reports</span></a>
+</div>
+<div style="display: flex; flex-direction: column; gap: 2px;">
+<div style="font-size: 10px; font-weight: 600; letter-spacing: 0.16em; text-transform: uppercase; color: #8E9AAE; padding: 0 10px 8px;">Finance</div>
+<a href="#" style="display: flex; align-items: center; gap: 11px; height: 38px; padding: 0 10px; border-radius: 6px; color: #C9D2DE; text-decoration: none; font-weight: 500;"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 5h10M7 9h10M13 20 7 13h2.5a4 4 0 0 0 0-8"></path></svg><span>Fees</span></a>
+<a href="#" style="display: flex; align-items: center; gap: 11px; height: 38px; padding: 0 10px; border-radius: 6px; color: #C9D2DE; text-decoration: none; font-weight: 500;"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 5a2 2 0 0 1 2-2h13v16H6a2 2 0 0 0-2 2z"></path><path d="M4 19V5"></path></svg><span>Day book</span></a>
+</div>
+<div style="display: flex; flex-direction: column; gap: 2px;">
+<div style="font-size: 10px; font-weight: 600; letter-spacing: 0.16em; text-transform: uppercase; color: #8E9AAE; padding: 0 10px 8px;">School</div>
+<a href="#" style="display: flex; align-items: center; gap: 11px; height: 38px; padding: 0 10px; border-radius: 6px; color: #C9D2DE; text-decoration: none; font-weight: 500;"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3 5 6v5c0 4.5 3 8 7 10 4-2 7-5.5 7-10V6z"></path></svg><span>Staff &amp; access</span></a>
+<a href="#" style="display: flex; align-items: center; gap: 11px; height: 38px; padding: 0 10px; border-radius: 6px; color: #C9D2DE; text-decoration: none; font-weight: 500;"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 11a8 8 0 0 0-14.5-4.5L4 8"></path><path d="M4 3v5h5"></path><path d="M4 13a8 8 0 0 0 14.5 4.5L20 16"></path><path d="M20 21v-5h-5"></path></svg><span>Sync &amp; devices</span></a>
+<a href="#" style="display: flex; align-items: center; gap: 11px; height: 38px; padding: 0 10px; border-radius: 6px; color: #C9D2DE; text-decoration: none; font-weight: 500;"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="5" rx="1"></rect><path d="M5 9v10a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V9M10 13h4"></path></svg><span>Backups</span></a>
+<a href="#" style="display: flex; align-items: center; gap: 11px; height: 38px; padding: 0 10px; border-radius: 6px; color: #C9D2DE; text-decoration: none; font-weight: 500;"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"></path><circle cx="16" cy="7" r="2"></circle><circle cx="10" cy="17" r="2"></circle></svg><span>Settings</span></a>
+</div>
+</nav>
+<div style="margin-top: auto; display: flex; flex-direction: column; gap: 14px;">
+<div style="border: 1px solid rgba(255,255,255,0.12); border-radius: 10px; padding: 12px 14px; display: flex; flex-direction: column; gap: 6px;">
+<div style="display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 500;"><span style="width: 7px; height: 7px; border-radius: 4px; background: #5FD0A0; box-shadow: 0 0 0 3px rgba(95,208,160,0.18);"></span>School server online</div>
+<div style="font-size: 12px; color: #9FACBF;">This PC · 9 devices connected</div>
+</div>
+<div style="display: flex; align-items: center; gap: 10px; padding: 0 6px;">
+<div style="width: 34px; height: 34px; border-radius: 17px; background: #1C3358; color: #E6D3A8; display: flex; align-items: center; justify-content: center; font-weight: 600; font-size: 13px;">PS</div>
+<div style="display: flex; flex-direction: column;"><span style="font-weight: 500; font-size: 13px;">Priya Sharma</span><span style="font-size: 12px; color: #9FACBF;">Principal</span></div>
+</div>
+</div>
+</aside>
+<div style="flex-grow: 1; display: flex; flex-direction: column; min-width: 0;">
+<header style="height: 64px; flex-shrink: 0; border-bottom: 1px solid #D5DDE0; display: flex; align-items: center; gap: 14px; padding: 0 40px; box-sizing: border-box;">
+<button type="button" style="height: 36px; padding: 0 12px; border-radius: 6px; border: 1px solid #D5DDE0; background: #FDFDFB; color: #13233F; font-size: 13px; font-weight: 500; display: flex; align-items: center; gap: 8px;">Session 2026–27<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m6 9 6 6 6-6"></path></svg></button>
+<div style="position: relative; width: 400px;">
+<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#56657A" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" style="position: absolute; left: 12px; top: 11px;"><circle cx="11" cy="11" r="7"></circle><path d="m20 20-3.5-3.5"></path></svg>
+<input type="search" aria-label="Search" placeholder="Search students, receipts, staff…" style="width: 100%; height: 38px; box-sizing: border-box; border-radius: 6px; border: 1px solid #D5DDE0; background: #FDFDFB; padding: 0 16px 0 36px; font-family: inherit; font-size: 14px; color: #13233F;">
+</div>
+<div style="margin-left: auto; display: flex; align-items: center; gap: 10px;">
+<span style="height: 34px; padding: 0 12px; border-radius: 17px; background: {{accentSoft}}; color: {{accent}}; font-size: 13px; font-weight: 500; display: flex; align-items: center; gap: 8px;"><span style="width: 6px; height: 6px; border-radius: 3px; background: {{accent}};"></span>All changes confirmed · 12 s ago</span>
+<button type="button" aria-label="Notifications, 3 unread" style="position: relative; width: 38px; height: 38px; border-radius: 19px; border: 1px solid #D5DDE0; background: #FDFDFB; color: #13233F; display: flex; align-items: center; justify-content: center;"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 16V11a6 6 0 0 1 12 0v5l1.5 2h-15z"></path><path d="M10 20a2 2 0 0 0 4 0"></path></svg><span style="position: absolute; top: 7px; right: 8px; width: 7px; height: 7px; border-radius: 4px; background: #C5AB7A;"></span></button>
+</div>
+</header>
+<main style="flex-grow: 1; padding: 32px 40px; display: flex; flex-direction: column; gap: 24px; box-sizing: border-box; min-height: 0;">
+<div style="display: flex; align-items: flex-end; justify-content: space-between; gap: 24px; animation: vRise 520ms cubic-bezier(.2,.8,.2,1) both;">
+<div style="display: flex; flex-direction: column; gap: 12px;">
+<span style="display: flex; align-items: center; gap: 8px; font-size: 11px; font-weight: 600; letter-spacing: 0.14em; text-transform: uppercase; color: {{accent}};"><span style="width: 5px; height: 5px; border-radius: 3px; background: {{accent}};"></span>Wednesday, 23 September · Term 1</span>
+<div style="display: flex; flex-direction: column;">
+<h1 style="margin: 0; font-family: 'Newsreader', Georgia, serif; font-weight: 400; font-size: 46px; line-height: 1.05; letter-spacing: -0.025em;">Good morning, Priya.</h1>
+<span style="font-family: 'Newsreader', Georgia, serif; font-style: italic; font-size: 46px; line-height: 1.1; letter-spacing: -0.025em; color: {{accent}};">Four approvals are waiting.</span>
+</div>
+</div>
+<div style="display: flex; gap: 10px;">
+<button type="button" style="height: 44px; padding: 0 18px; border-radius: 6px; border: 1px solid #C9D3D2; background: transparent; color: #13233F; font-size: 14px; font-weight: 500; display: flex; align-items: center; gap: 8px;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"></path></svg>New admission</button>
+<button type="button" style="height: 44px; padding: 0 20px; border-radius: 6px; border: 0; background: {{accent}}; color: #FFFFFF; font-size: 14px; font-weight: 500; display: flex; align-items: center; gap: 14px;">Review approvals<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 17 17 7M8 7h9v9"></path></svg></button>
+</div>
+</div>
+<div style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); background: #E2EAEB; border-radius: 16px; animation: vRise 520ms 80ms cubic-bezier(.2,.8,.2,1) both;">
+<sc-for list="{{stats}}" as="k" hint-placeholder-count="4">
+<a href="#" style="{{k.cell}}">
+<div style="display: flex; justify-content: space-between; align-items: flex-start;"><span style="font-family: 'Newsreader', Georgia, serif; font-size: 40px; line-height: 1; letter-spacing: -0.02em; font-variant-numeric: lining-nums tabular-nums; color: #13233F;">{{k.value}}</span><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#13233F" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 17 17 7M8 7h9v9"></path></svg></div>
+<span style="font-size: 14px; color: #13233F;">{{k.label}}</span>
+<span style="font-size: 12px; color: #56657A;">{{k.note}}</span>
+</a>
+</sc-for>
+</div>
+<div style="display: grid; grid-template-columns: 2fr 1fr; gap: 24px; animation: vRise 520ms 160ms cubic-bezier(.2,.8,.2,1) both;">
+<section style="background: #FDFDFB; border: 1px solid #D5DDE0; border-radius: 16px; display: flex; flex-direction: column; overflow: hidden;">
+<div style="display: flex; align-items: flex-end; justify-content: space-between; padding: 20px 24px 16px;">
+<div style="display: flex; flex-direction: column; gap: 6px;">
+<span style="font-size: 10px; font-weight: 600; letter-spacing: 0.16em; text-transform: uppercase; color: #56657A;">Approvals</span>
+<h2 style="margin: 0; font-family: 'Newsreader', Georgia, serif; font-weight: 400; font-size: 26px; letter-spacing: -0.015em;">Waiting for your decision</h2>
+</div>
+<a href="#" style="font-size: 13px; text-decoration: none; color: #13233F; display: flex; align-items: center; gap: 6px; border-bottom: 1px solid #13233F; padding-bottom: 2px;">Open all<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 17 17 7M8 7h9v9"></path></svg></a>
+</div>
+<sc-for list="{{approvals}}" as="r" hint-placeholder-count="4">
+<div style="display: flex; align-items: center; gap: 16px; padding: 14px 24px; border-top: 1px solid #E8EDEC;">
+<span style="{{r.badge}}">{{r.type}}</span>
+<div style="flex-grow: 1; display: flex; flex-direction: column; gap: 3px; min-width: 0;">
+<span style="font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">{{r.what}}</span>
+<span style="font-size: 12px; color: #56657A;">{{r.who}} · {{r.age}}</span>
+</div>
+<button type="button" style="height: 34px; padding: 0 14px; border-radius: 6px; border: 1px solid #C9D3D2; background: transparent; color: #13233F; font-size: 13px; font-weight: 500;">Review</button>
+</div>
+</sc-for>
+</section>
+<section style="background: #FDFDFB; border: 1px solid #D5DDE0; border-radius: 16px; display: flex; flex-direction: column; overflow: hidden;">
+<div style="padding: 20px 24px 12px; display: flex; flex-direction: column; gap: 6px;">
+<span style="font-size: 10px; font-weight: 600; letter-spacing: 0.16em; text-transform: uppercase; color: #56657A;">Today</span>
+<h2 style="margin: 0; font-family: 'Newsreader', Georgia, serif; font-weight: 400; font-size: 26px; letter-spacing: -0.015em;">Needs attention</h2>
+</div>
+<div style="display: flex; flex-direction: column; flex-grow: 1;">
+<div style="display: flex; gap: 12px; padding: 14px 24px; border-top: 1px solid #E8EDEC;"><span style="width: 8px; height: 8px; margin-top: 6px; border-radius: 4px; background: #C5AB7A; flex-shrink: 0;"></span><div style="display: flex; flex-direction: column; gap: 3px;"><span style="font-weight: 500;">VII-B attendance not submitted</span><span style="font-size: 12px; color: #56657A;">Class teacher R. Nair · usually done by 10:30</span></div></div>
+<div style="display: flex; gap: 12px; padding: 14px 24px; border-top: 1px solid #E8EDEC;"><span style="width: 8px; height: 8px; margin-top: 6px; border-radius: 4px; background: #C0392B; flex-shrink: 0;"></span><div style="display: flex; flex-direction: column; gap: 3px;"><span style="font-weight: 500;">One edit conflict to review</span><span style="font-size: 12px; color: #56657A;">Riya Verma · address changed on two phones</span></div></div>
+</div>
+<div style="background: #E2EAEB; padding: 14px 24px; display: flex; flex-direction: column; gap: 3px;"><span style="font-size: 10px; font-weight: 600; letter-spacing: 0.16em; text-transform: uppercase; color: #56657A;">Last backup</span><span style="font-size: 13px; color: #13233F;">Verified today at 6:02 AM · this PC and school Drive</span></div>
+</section>
+</div>
+<div style="display: grid; grid-template-columns: 3fr 2fr; gap: 24px; min-height: 0; animation: vRise 520ms 240ms cubic-bezier(.2,.8,.2,1) both;">
+<section style="background: #FDFDFB; border: 1px solid #D5DDE0; border-radius: 16px; padding: 18px 24px; display: flex; flex-direction: column; gap: 10px;">
+<div style="display: flex; justify-content: space-between; align-items: baseline;"><h2 style="margin: 0; font-family: 'Newsreader', Georgia, serif; font-weight: 400; font-size: 22px;">Attendance by class</h2><a href="#" style="font-size: 13px; text-decoration: none; color: {{accent}};">Full register</a></div>
+<sc-for list="{{classes}}" as="c" hint-placeholder-count="7">
+<div style="display: flex; align-items: center; gap: 14px; height: 24px;">
+<span style="width: 60px; font-size: 13px;">{{c.name}}</span>
+<div style="flex-grow: 1; height: 6px; border-radius: 3px; background: #E8EDEC; overflow: hidden;"><div style="{{c.bar}}"></div></div>
+<span style="width: 110px; text-align: right; font-size: 12px; font-variant-numeric: tabular-nums; {{c.tone}}">{{c.pct}}</span>
+</div>
+</sc-for>
+</section>
+<section style="background: #0C1B38; color: #FFFFFF; border-radius: 16px; padding: 18px 24px; display: flex; flex-direction: column; gap: 10px;">
+<div style="display: flex; justify-content: space-between; align-items: baseline;"><h2 style="margin: 0; font-family: 'Newsreader', Georgia, serif; font-weight: 400; font-size: 22px;">Fee collection</h2><span style="font-size: 12px; color: #9FACBF;">Last 6 school days</span></div>
+<span style="font-family: 'Newsreader', Georgia, serif; font-style: italic; font-size: 28px; color: #C5AB7A; font-variant-numeric: lining-nums;">₹2,51,200</span>
+<div style="flex-grow: 1; display: flex; align-items: flex-end; gap: 14px; min-height: 110px;">
+<sc-for list="{{days}}" as="d" hint-placeholder-count="6">
+<div style="flex: 1; display: flex; flex-direction: column; align-items: center; gap: 6px;">
+<div style="{{d.bar}}"></div>
+<span style="font-size: 11px; color: #9FACBF;">{{d.day}}</span>
+</div>
+</sc-for>
+</div>
+</section>
+</div>
+</main>
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props='{"accent":{"editor":"color","default":"#2F7479","options":["#2F7479","#1F4E8C","#5B4B8A"]},"$preview":{"width":1440,"height":1080}}'>
+class Component extends DCLogic {
+  renderVals() {
+    const accent = this.props.accent ?? '#2F7479';
+    const n = parseInt(accent.slice(1), 16);
+    const rgba = (a) => 'rgba(' + ((n >> 16) & 255) + ',' + ((n >> 8) & 255) + ',' + (n & 255) + ',' + a + ')';
+    const cell = (i) => 'display: flex; flex-direction: column; gap: 10px; padding: 22px 24px; text-decoration: none; color: inherit; ' + (i > 0 ? 'border-left: 1px solid #C9D6D5;' : '');
+    const stats = [
+      { value: '91.4%', label: 'attendance today', note: '612 of 670 marked · VII-B pending' },
+      { value: '₹48,500', label: 'collected today', note: '23 receipts · ₹2,400 more waiting for server' },
+      { value: '₹6,84,200', label: 'outstanding this term', note: '212 students with dues' },
+      { value: '670', label: 'active students', note: '4 new admissions this week' }
+    ].map((k, i) => ({ ...k, cell: cell(i) }));
+    const pill = (bg, fg) => 'display: inline-flex; align-items: center; justify-content: center; width: 164px; height: 26px; border-radius: 4px; font-size: 12px; font-weight: 500; white-space: nowrap; background: ' + bg + '; color: ' + fg + ';';
+    const approvals = [
+      { type: 'Marks correction', badge: pill('#E7E3F1', '#4A3B78'), what: 'Half Yearly · VI-B Maths · Kavya Singh 62 → 72', who: 'Anita Rao, Teacher', age: '2 hours ago' },
+      { type: 'Payment reversal', badge: pill('#F6E4E2', '#8E2F2A'), what: 'Receipt R-A2-0418 · ₹1,500 · entered twice', who: 'Suresh Patel, Accountant', age: '5 hours ago' },
+      { type: 'Attendance correction', badge: pill(rgba(0.12), accent), what: 'V-A · 19 Sep · Rahul Kumar: Absent → Present', who: 'Meena Iyer, Teacher', age: '1 day ago' },
+      { type: 'Student details', badge: pill('#F4ECDC', '#6B5220'), what: 'Aarav Gupta · father’s mobile number', who: 'Suresh Patel, Accountant', age: '2 days ago' }
+    ];
+    const cls = [['Nursery', 96], ['LKG', 92], ['I-A', 94], ['II-A', 90], ['III-A', 93], ['V-A', 91], ['VII-B', null]];
+    const classes = cls.map(([name, p], i) => ({
+      name,
+      pct: p == null ? 'Not submitted' : p + '% present',
+      tone: p == null ? 'color: #8C6A2F; font-weight: 600;' : 'color: #56657A;',
+      bar: 'height: 100%; border-radius: 3px; transform-origin: left; animation: vFill 800ms ' + (300 + i * 60) + 'ms cubic-bezier(.2,.8,.2,1) both; width: ' + (p || 0) + '%; background: ' + accent + ';'
+    }));
+    const dv = [['Thu', 32000], ['Fri', 41000], ['Sat', 28500], ['Mon', 55000], ['Tue', 46200], ['Today', 48500]];
+    const days = dv.map(([day, v], i) => ({
+      day,
+      bar: 'width: 100%; max-width: 36px; border-radius: 4px 4px 2px 2px; transform-origin: bottom; animation: vGrow 700ms ' + (300 + i * 70) + 'ms cubic-bezier(.2,.8,.2,1) both; height: ' + Math.round(v / 55000 * 96) + 'px; background: ' + (day === 'Today' ? '#C5AB7A' : 'rgba(125,177,181,0.55)') + ';'
+    }));
+    return { accent, accentSoft: rgba(0.10), stats, approvals, classes, days };
+  }
+}
+</script>
+</body>
+</html>

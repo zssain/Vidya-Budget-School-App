@@ -1,7 +1,0 @@
-{
-  "$schema": "../gen/schemas/desktop-schema.json",
-  "identifier": "default",
-  "description": "Only the registered P1.3 plugins are exposed to Vidya's local main window.",
-  "windows": ["main"],
-  "permissions": ["log:default", "dialog:default", "opener:default"]
-}

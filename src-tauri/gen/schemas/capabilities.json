@@ -1,1 +1,0 @@
-{"default":{"identifier":"default","description":"Only the registered P1.3 plugins are exposed to Vidya's local main window.","local":true,"windows":["main"],"permissions":["log:default","dialog:default","opener:default"]}}

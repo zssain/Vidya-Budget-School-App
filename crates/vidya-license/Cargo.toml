@@ -1,9 +1,0 @@
-[package]
-name = "vidya-license"
-version.workspace = true
-edition.workspace = true
-publish.workspace = true
-license.workspace = true
-
-[dependencies]
-vidya-core = { path = "../vidya-core" }
