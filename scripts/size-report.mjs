@@ -10,12 +10,13 @@ import { fileURLToPath } from 'node:url'
 const ROOT = fileURLToPath(new URL('..', import.meta.url))
 const MAX = 40_000_000 // 40 MB, decimal (§2)
 
-// Where Tauri writes bundles (desktop + android split-per-abi).
+// Where Tauri writes bundles. The Cargo workspace target dir is at the repo
+// ROOT (target/), not under src-tauri/.
 const BUNDLE_DIRS = [
-  'src-tauri/target/release/bundle',
-  'src-tauri/target/universal-apple-darwin/release/bundle',
-  'src-tauri/target/aarch64-apple-darwin/release/bundle',
-  'src-tauri/target/x86_64-apple-darwin/release/bundle',
+  'target/release/bundle',
+  'target/universal-apple-darwin/release/bundle',
+  'target/aarch64-apple-darwin/release/bundle',
+  'target/x86_64-apple-darwin/release/bundle',
   'src-tauri/gen/android/app/build/outputs/apk',
   'src-tauri/gen/android/app/build/outputs/bundle',
 ]
