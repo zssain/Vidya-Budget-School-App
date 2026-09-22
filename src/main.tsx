@@ -20,6 +20,12 @@ import { loadAccent } from './lib/theme'
 
 loadAccent()
 
+// Phase-1-only DEV flag: `VITE_DEV_START=teacher` opens on Teacher Home (used by
+// the Android debug build so it lands on a phone screen). Phase 3 removes it.
+if (import.meta.env.VITE_DEV_START === 'teacher' && typeof location !== 'undefined' && !location.hash) {
+  location.hash = '/teacher/home'
+}
+
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
     <App />

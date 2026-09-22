@@ -1,0 +1,69 @@
+// Sample data for the Attendance screen, copied verbatim from the mock's
+// `<script type="text/x-dc">` constructor (design/screens/Attendance.dc.html,
+// docs/01-MOCK-SPEC.md §8). The 34 names are copied exactly; className/date are
+// carried through for the header sub-line. The initial-marks rule (index >= 30
+// unmarked; 8 and 10 -> 'A'; 4 -> 'L'; else 'P') lives in the component via the
+// `initialMarks()` helper exported here so both stay in one place.
+
+/** A single mark: 'P' present, 'A' absent, 'L' leave, '' unmarked. */
+export type Mark = 'P' | 'A' | 'L' | ''
+
+/** Everything the Attendance screen needs from a fixture / seed. */
+export interface AttendanceData {
+  /** Class label shown after the title, e.g. "V-A". */
+  className: string
+  /** Human date shown in the sub-line, e.g. "Wed, 23 Sep". */
+  date: string
+  /** The 34 student names, in roll order (roll = index + 1). */
+  names: string[]
+}
+
+// names (verbatim from the mock constructor):
+export const attendanceFixture: AttendanceData = {
+  className: 'V-A',
+  date: 'Wed, 23 Sep',
+  names: [
+    'Aadhya Sharma',
+    'Aarav Gupta',
+    'Ananya Reddy',
+    'Arjun Yadav',
+    'Diya Patel',
+    'Ishaan Khan',
+    'Kabir Joshi',
+    'Meera Nair',
+    'Mohammed Faiz',
+    'Pooja Verma',
+    'Rahul Kumar',
+    'Riya Verma',
+    'Saanvi Rao',
+    'Vivaan Singh',
+    'Aditi Mishra',
+    'Ayaan Qureshi',
+    'Bhavya Jain',
+    'Dev Malhotra',
+    'Fatima Sheikh',
+    'Gaurav Chauhan',
+    'Harini Iyer',
+    'Ira Kapoor',
+    'Karan Mehta',
+    'Lakshmi Pillai',
+    'Manav Tiwari',
+    'Nandini Das',
+    'Om Prakash',
+    'Prisha Agarwal',
+    'Reyansh Bose',
+    'Sara Thomas',
+    'Tanvi Kulkarni',
+    'Uday Rathore',
+    'Vanya Saxena',
+    'Zoya Ansari',
+  ],
+}
+
+/**
+ * The mock's initial marks, verbatim from the constructor:
+ *   names.map((_, i) => (i >= 30 ? '' : i === 8 || i === 10 ? 'A' : i === 4 ? 'L' : 'P'))
+ */
+export function initialMarks(names: string[]): Mark[] {
+  return names.map((_, i) => (i >= 30 ? '' : i === 8 || i === 10 ? 'A' : i === 4 ? 'L' : 'P'))
+}
