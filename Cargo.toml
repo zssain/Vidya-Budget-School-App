@@ -1,0 +1,12 @@
+# Cargo workspace for Vidya (Tauri app + pure-Rust rules crate).
+[workspace]
+resolver = "2"
+members = ["src-tauri", "crates/vidya-core"]
+
+# Release profile tuned for size (see docs/00-SYSTEM-CONTEXT.md §2 limits).
+[profile.release]
+lto = true
+codegen-units = 1
+opt-level = "s"
+strip = true
+panic = "abort"

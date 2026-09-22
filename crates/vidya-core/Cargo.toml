@@ -1,0 +1,7 @@
+[package]
+name = "vidya-core"
+version = "0.1.0"
+edition = "2021"
+description = "Vidya business rules — pure Rust, no IO, no async, no database."
+
+[dependencies]

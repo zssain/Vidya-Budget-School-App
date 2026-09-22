@@ -1,0 +1,104 @@
+[package]
+name = "vidya"
+version = "0.1.0"
+description = "Vidya Budget School"
+authors = ["Teclusion"]
+edition = "2021"
+rust-version = "1.77.2"
+
+[lib]
+name = "vidya_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2" }
+
+[dependencies]
+# --- Tauri shell + allowed plugins (docs/00-SYSTEM-CONTEXT.md §13) ---
+tauri = { version = "2" }
+tauri-plugin-dialog = "2"
+tauri-plugin-opener = "2"
+tauri-plugin-deep-link = "2"
+
+# --- Serialization / errors ---
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "1"
+
+# --- Async runtime (never `full`) ---
+tokio = { version = "1", default-features = false, features = [
+  "rt-multi-thread",
+  "net",
+  "time",
+  "sync",
+  "macros",
+  "fs",
+  "io-util",
+] }
+
+# --- School server + TLS (rustls with the ring provider ONLY) ---
+axum = { version = "0.7", default-features = false, features = [
+  "http1",
+  "json",
+  "query",
+  "tokio",
+  "ws",
+] }
+hyper = "1"
+hyper-util = { version = "0.1", features = ["server-auto", "tokio"] }
+rustls = { version = "0.23", default-features = false, features = [
+  "ring",
+  "std",
+  "tls12",
+  "logging",
+] }
+tokio-rustls = { version = "0.26", default-features = false, features = [
+  "ring",
+  "tls12",
+  "logging",
+] }
+rcgen = { version = "0.13", default-features = false, features = ["ring", "pem"] }
+
+# --- HTTP client (rustls, no native-tls, no http2/gzip/cookies) ---
+# `rustls-no-provider` links rustls WITHOUT pulling aws-lc-rs; we install the
+# ring provider ourselves in later phases.
+reqwest = { version = "0.12", default-features = false, features = [
+  "json",
+  "rustls-tls",
+] }
+
+# --- Relay tunnel (rustls with ring) ---
+tokio-tungstenite = { version = "0.24", default-features = false, features = [
+  "connect",
+  "handshake",
+  "rustls-tls-webpki-roots",
+] }
+
+# --- Encrypted database (SQLCipher) ---
+rusqlite = { version = "0.32", features = ["bundled-sqlcipher-vendored-openssl"] }
+
+# --- Crypto + ids + time ---
+uuid = { version = "1", features = ["v7"] }
+argon2 = "0.5"
+rand = "0.8"
+sha2 = "0.10"
+hmac = "0.12"
+base64 = "0.22"
+chacha20poly1305 = "0.10"
+ed25519-dalek = { version = "2", features = ["rand_core"] }
+time = { version = "0.3", features = ["formatting", "parsing", "macros"] }
+
+# --- Logging (fmt only) ---
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "std"] }
+
+# --- Invitation QR codes ---
+qrcode = { version = "0.14", default-features = false, features = ["svg"] }
+
+# --- Desktop-only native bits ---
+[target.'cfg(not(target_os = "android"))'.dependencies]
+mdns-sd = "0.11"
+keyring = { version = "3", default-features = false, features = [
+  "apple-native",
+  "windows-native",
+] }
