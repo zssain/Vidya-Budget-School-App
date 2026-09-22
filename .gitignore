@@ -26,4 +26,10 @@ keystore.properties
 # Test fixtures
 .test-phone-*
 
+# Playwright
+/test-results/
+/playwright-report/
+/blob-report/
+/playwright/.cache/
+
 # Note: src-tauri/gen/schemas/ is intentionally NOT ignored (kept in git).
