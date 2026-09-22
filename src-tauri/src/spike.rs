@@ -8,6 +8,7 @@ use base64::Engine as _;
 use chacha20poly1305::aead::{Aead as _, KeyInit as _};
 use chacha20poly1305::{ChaCha20Poly1305, Key, Nonce};
 use ed25519_dalek::{Signer as _, SigningKey, Verifier as _};
+use hmac::Mac as _;
 use sha2::Digest as _;
 use std::sync::Arc;
 

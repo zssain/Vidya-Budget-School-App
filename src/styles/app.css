@@ -1,1 +1,79 @@
 @import 'tailwindcss';
+@import './tokens.css';
+@import './fonts.css';
+@import './keyframes.css';
+
+/* Map mock tokens to Tailwind utilities (bg-navy, text-muted, border-line,
+   bg-accent, bg-panel, rounded-card, …). `inline` keeps the utilities pointing
+   at the CSS vars so lib/theme.ts can swap the accent at runtime. */
+@theme inline {
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-surface-welcome: var(--surface-welcome);
+  --color-panel: var(--panel);
+  --color-track: var(--track);
+  --color-unmarked: var(--unmarked);
+  --color-white: var(--white);
+
+  --color-navy: var(--navy);
+  --color-navy-deep: var(--navy-deep);
+  --color-navy-raised: var(--navy-raised);
+  --color-navy-glow: var(--navy-glow);
+  --color-ink: var(--ink);
+  --color-muted: var(--muted);
+
+  --color-on-navy: var(--on-navy);
+  --color-on-navy-muted: var(--on-navy-muted);
+  --color-on-navy-label: var(--on-navy-label);
+  --color-on-navy-strong: var(--on-navy-strong);
+
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+  --color-line-stat: var(--line-stat);
+  --color-radio-off: var(--radio-off);
+
+  --color-accent: var(--accent);
+  --color-accent-hover: var(--accent-hover);
+
+  --color-gold: var(--gold);
+  --color-gold-text: var(--gold-text);
+  --color-gold-light: var(--gold-light);
+  --color-gold-line: var(--gold-line);
+
+  --color-danger: var(--danger);
+  --color-danger-soft: var(--danger-soft);
+  --color-online: var(--online);
+  --color-online-text: var(--online-text);
+  --color-teal-soft: var(--teal-soft);
+
+  --radius-card: var(--radius-16);
+  --radius-sheet: var(--radius-20);
+  --radius-tile: var(--radius-16);
+  --radius-pill: var(--radius-4);
+
+  --font-sans: 'Geist', 'Noto Sans Devanagari', system-ui, sans-serif;
+  --font-serif: 'Newsreader', Georgia, serif;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+body {
+  margin: 0;
+  font-family: 'Geist', 'Noto Sans Devanagari', system-ui, sans-serif;
+  font-size: 14px;
+  color: var(--ink);
+  background: var(--bg);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* Hindi: serif headings (marked .v-serif) swap to Noto Sans Devanagari 500,
+   no italics for Devanagari (docs/01-MOCK-SPEC.md §3). */
+:root[lang='hi'] .v-serif {
+  font-family: 'Noto Sans Devanagari', sans-serif !important;
+  font-weight: 500 !important;
+  font-style: normal !important;
+}

@@ -1,0 +1,71 @@
+/* Design tokens — every colour used by the mock (docs/01-MOCK-SPEC.md §2).
+   No other colours may appear in src/ (enforced by scripts/check-hex.mjs in a
+   later phase). Accent vars (--accent, --accent-6/-10/-12) are (re)written at
+   runtime by src/lib/theme.ts; the defaults below are for the #2F7479 accent. */
+:root {
+  /* 2.1 Solid colours */
+  --bg: #f5f7f6;
+  --bg-welcome-outer: #e4eceb;
+  --surface: #fdfdfb;
+  --surface-welcome: #f6f8f7;
+  --white: #ffffff;
+  --panel: #e2eaeb;
+  --track: #e8edec;
+  --unmarked: #faf4e6;
+  --navy: #0c1b38;
+  --navy-deep: #08152b;
+  --navy-raised: #1c3358;
+  --navy-glow: #1a3560;
+  --ink: #13233f;
+  --muted: #56657a;
+  --on-navy: #c9d2de;
+  --on-navy-muted: #9facbf;
+  --on-navy-label: #8e9aae;
+  --on-navy-strong: #e8edf4;
+  --line: #d5dde0;
+  --line-strong: #c9d3d2;
+  --line-stat: #c9d6d5;
+  --radio-off: #b7c2c9;
+
+  --accent: #2f7479;
+  --accent-hover: #245c60;
+  --accent-alt-1: #1f4e8c;
+  --accent-alt-2: #5b4b8a;
+
+  --gold: #c5ab7a;
+  --gold-text: #8c6a2f;
+  --gold-light: #e6d3a8;
+  --gold-line: #dcc495;
+  --gold-on-navy-text: #e9d6ae;
+
+  --danger: #c0392b;
+  --danger-soft: #d07a73;
+  --online: #5fd0a0;
+  --online-text: #bfe8d6;
+  --teal-soft: #7db1b5;
+
+  --pill-partpaid-bg: #f4ecdc;
+  --pill-partpaid-fg: #6b5220;
+  --pill-unpaid-bg: #f6e4e2;
+  --pill-unpaid-fg: #8e2f2a;
+  --pill-marks-bg: #e7e3f1;
+  --pill-marks-fg: #4a3b78;
+
+  /* 2.3 Accent-derived (default accent #2F7479 = rgb(47,116,121)) */
+  --accent-6: rgba(47, 116, 121, 0.06);
+  --accent-10: rgba(47, 116, 121, 0.1);
+  --accent-12: rgba(47, 116, 121, 0.12);
+
+  /* Radii (docs/01-MOCK-SPEC.md, Step 4.1) */
+  --radius-4: 4px;
+  --radius-6: 6px;
+  --radius-8: 8px;
+  --radius-10: 10px;
+  --radius-16: 16px;
+  --radius-18: 18px;
+  --radius-20: 20px;
+  --radius-22: 22px;
+
+  /* Easing used everywhere the mock specifies it */
+  --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+}

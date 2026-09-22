@@ -1,0 +1,156 @@
+/* Keyframes copied verbatim from the mock (docs/01-MOCK-SPEC.md §5). Names are
+   the app's names; each per-screen variant is kept. No animation library. */
+
+@keyframes vRise12 {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes vRise14 {
+  from {
+    opacity: 0;
+    transform: translateY(14px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes vIn6 {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes vIn8 {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes vIn10 {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes vGrow {
+  from {
+    transform: scaleY(0);
+  }
+  to {
+    transform: scaleY(1);
+  }
+}
+@keyframes vFill {
+  from {
+    transform: scaleX(0);
+  }
+  to {
+    transform: scaleX(1);
+  }
+}
+@keyframes vSheet {
+  from {
+    transform: translateX(40px);
+    opacity: 0.3;
+  }
+  to {
+    transform: none;
+    opacity: 1;
+  }
+}
+@keyframes vFade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@keyframes vPopFee {
+  0% {
+    transform: scale(0.5);
+    opacity: 0;
+  }
+  60% {
+    transform: scale(1.08);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+@keyframes vPopAtt {
+  0% {
+    transform: scale(0.6);
+    opacity: 0;
+  }
+  60% {
+    transform: scale(1.1);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+@keyframes vPulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgba(197, 171, 122, 0.45);
+  }
+  50% {
+    box-shadow: 0 0 0 6px rgba(197, 171, 122, 0);
+  }
+}
+
+/* Global button transition + the three :active scales (docs/01-MOCK-SPEC.md §5).
+   Default active scale is .985 (desktop); Attendance P/A/L use .93 and Teacher
+   Home tiles/buttons use .96 via these opt-in classes (higher specificity wins). */
+button {
+  font-family: inherit;
+  cursor: pointer;
+  transition:
+    background-color 0.18s ease,
+    border-color 0.18s ease,
+    color 0.18s ease,
+    box-shadow 0.18s ease,
+    transform 0.1s ease;
+}
+button:active {
+  transform: scale(0.985);
+}
+button.v-active-93:active {
+  transform: scale(0.93);
+}
+button.v-active-96:active,
+.v-active-96:active {
+  transform: scale(0.96);
+}
+button:disabled {
+  cursor: not-allowed;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation: none !important;
+    transition: none !important;
+  }
+}
