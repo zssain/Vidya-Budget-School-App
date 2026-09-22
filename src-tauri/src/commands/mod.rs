@@ -8,6 +8,7 @@ pub mod auth;
 pub mod error;
 pub mod fees;
 pub mod marks;
+pub mod settings;
 pub mod students;
 pub mod users;
 

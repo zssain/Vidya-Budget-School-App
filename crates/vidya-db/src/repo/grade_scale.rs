@@ -1,6 +1,6 @@
 //! `grade_scale` (seeded by `seed_defaults`, edited in P3.6).
 
-use rusqlite::Connection;
+use rusqlite::{Connection, Transaction};
 
 use crate::DbError;
 
@@ -20,4 +20,16 @@ pub fn list(conn: &Connection) -> Result<Vec<GradeBandRow>, DbError> {
         })
     })?;
     rows.collect::<rusqlite::Result<Vec<_>>>().map_err(DbError::from)
+}
+
+/// Replaces the whole grade scale with `bands` (`(grade, min_percent)`).
+pub fn replace_all(tx: &Transaction<'_>, bands: &[(String, i64)], hlc: &str) -> Result<(), DbError> {
+    tx.execute("DELETE FROM grade_scale", [])?;
+    for (grade, min_percent) in bands {
+        tx.execute(
+            "INSERT INTO grade_scale (grade, min_percent, updated_hlc) VALUES (?1, ?2, ?3)",
+            rusqlite::params![grade, min_percent, hlc],
+        )?;
+    }
+    Ok(())
 }

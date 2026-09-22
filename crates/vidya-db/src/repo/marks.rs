@@ -61,6 +61,19 @@ pub fn list_for_exam(conn: &Connection, exam_id: &str) -> Result<Vec<MarkRow>, D
     rows.collect::<rusqlite::Result<Vec<_>>>().map_err(DbError::from)
 }
 
+/// `(student_name, subject_name)` for marks above `max` in an exam — used to
+/// block lowering an exam's maximum below marks already entered.
+pub fn over_max(conn: &Connection, exam_id: &str, max: i64) -> Result<Vec<(String, String)>, DbError> {
+    let mut stmt = conn.prepare(
+        "SELECT s.name, sub.name FROM marks m
+         JOIN students s ON s.id = m.student_id
+         JOIN subjects sub ON sub.id = m.subject_id
+         WHERE m.exam_id = ?1 AND m.absent = 0 AND m.value > ?2 ORDER BY s.name",
+    )?;
+    let rows = stmt.query_map(rusqlite::params![exam_id, max], |row| Ok((row.get(0)?, row.get(1)?)))?;
+    rows.collect::<rusqlite::Result<Vec<_>>>().map_err(DbError::from)
+}
+
 /// Deletes a single mark (used when a cell is cleared).
 pub fn delete(
     tx: &Transaction<'_>,

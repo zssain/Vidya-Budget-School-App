@@ -66,6 +66,16 @@ pub fn count(conn: &Connection) -> Result<i64, DbError> {
     Ok(conn.query_row("SELECT count(*) FROM receipts", [], |row| row.get(0))?)
 }
 
+/// The number of receipts (cancelled or not) in a session — used to decide
+/// whether changing the number of terms needs confirmation.
+pub fn count_for_session(conn: &Connection, session_id: &str) -> Result<i64, DbError> {
+    Ok(conn.query_row(
+        "SELECT count(*) FROM receipts WHERE session_id = ?1",
+        [session_id],
+        |row| row.get(0),
+    )?)
+}
+
 /// A receipt summary for the student detail (with a cancelled flag).
 #[derive(Debug, Clone)]
 pub struct ReceiptSummary {

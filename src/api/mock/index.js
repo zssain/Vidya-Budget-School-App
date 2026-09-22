@@ -8,7 +8,6 @@ import * as fees from './fees.js';
 import * as reports from './reports.js';
 import * as activity from './activity.js';
 import * as backup from './backup.js';
-import * as settings from './settings.js';
 import * as home from './home.js';
 
 export const mock = {
@@ -47,11 +46,7 @@ export const mock = {
 
   list_activity: activity.listActivity,
 
-  get_settings: settings.getSettings,
-  save_school: settings.saveSchool,
-  save_classes: settings.saveClasses,
-  save_exams: settings.saveExams,
-  save_device_code: settings.saveDeviceCode,
+  // get_settings + all save_* settings commands are real Rust (P3.6).
 
   backup_status: backup.backupStatus,
   run_backup_now: backup.runBackupNow,

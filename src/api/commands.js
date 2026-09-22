@@ -235,21 +235,33 @@ export async function setUserActive(input) {
   return run('set_user_active', authed({ userId: input.userId, active: input.active }));
 }
 
-// ---- Settings ----
+// ---- Settings (real Rust; P3.6) ----
 export async function getSettings() {
   return run('get_settings', authed());
 }
 export async function saveSchool(input) {
-  return call('save_school', input);
+  return run('save_school', authed({ input }));
 }
 export async function saveClasses(input) {
-  return call('save_classes', input);
+  return run('save_classes', authed({ input }));
+}
+export async function saveFeePlan(input) {
+  return run('save_fee_plan', authed({ input }));
+}
+export async function saveSubjects(input) {
+  return run('save_subjects', authed({ input }));
 }
 export async function saveExams(input) {
-  return call('save_exams', input);
+  return run('save_exams', authed({ input }));
+}
+export async function saveGradeScale(input) {
+  return run('save_grade_scale', authed({ input }));
+}
+export async function saveAppSettings(input) {
+  return run('save_app_settings', authed({ input }));
 }
 export async function saveDeviceCode(input) {
-  return call('save_device_code', input);
+  return run('save_device_code', authed({ code: input.code }));
 }
 
 // ---- Backup ----

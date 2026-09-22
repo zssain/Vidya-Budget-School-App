@@ -173,18 +173,29 @@ vi.mock('../api/commands.js', () => {
     restoreCommit: vi.fn(),
     getSettings: () =>
       Promise.resolve({
-        school: { name: 'School', addr: '', udise: '', board: '', session: '2026-27', phone: '' },
-        classes: [{ id: 'cv', name: 'V', sortOrder: 5, sections: [{ id: 'sec', name: 'A' }], subjects: [] }],
-        transportFee: 0,
-        terms: 3,
-        exams: [],
-        license: { schoolCode: 'school', activationCode: 'DEMO', maxUsers: 40 },
-        deviceId: 'device',
-        deviceCode: 'PC',
+        school: { name: 'School', address: '', udise: '', board: 'State Board', phone: '', sessionName: '2026-27' },
+        session: { id: 'ses1', name: '2026-27', startsOn: '', endsOn: '', terms: 3, transportFeePerTerm: 0 },
+        classes: [
+          {
+            id: 'cv',
+            name: 'V',
+            sortOrder: 5,
+            sections: [{ id: 'sec', name: 'A' }],
+            subjects: [{ id: 'sub1', name: 'Hindi' }],
+            feePlan: { tuition: 0, exam: 0, other: 0 },
+          },
+        ],
+        exams: [{ id: 'ex1', name: 'Half Yearly', maxMarks: 100 }],
+        gradeScale: [{ grade: 'A', minPercent: 80 }],
+        appSettings: {},
       }),
     saveSchool: vi.fn(),
     saveClasses: vi.fn(),
+    saveFeePlan: vi.fn(),
+    saveSubjects: vi.fn(),
     saveExams: vi.fn(),
+    saveGradeScale: vi.fn(),
+    saveAppSettings: vi.fn(),
     saveDeviceCode: vi.fn(),
     currentUser: ok,
     signIn: ok,
@@ -301,6 +312,19 @@ describe('feature views', () => {
     await user.click(screen.getByRole('button', { name: /Save marks/ }));
     expect(await screen.findByText('Fix these marks.')).toBeInTheDocument();
     expect(cell.className).toMatch(/bad/);
+  });
+  it('resends the fee save with confirm:true after the terms warning', async () => {
+    const commands = await import('../api/commands.js');
+    commands.saveFeePlan.mockReset();
+    commands.saveFeePlan
+      .mockRejectedValueOnce({ kind: 'conflict', messageKey: 'settings.error.terms_locked', message: 'Terms locked' })
+      .mockResolvedValueOnce({});
+    const user = userEvent.setup();
+    renderApp(<Settings />);
+    await user.click(await screen.findByRole('button', { name: 'Save fees' }));
+    await user.click(await screen.findByRole('button', { name: 'OK' }));
+    expect(commands.saveFeePlan).toHaveBeenCalledTimes(2);
+    expect(commands.saveFeePlan.mock.calls[1][0].confirm).toBe(true);
   });
   it('keeps the dashboard in the shell scroll surface', async () => {
     const { container } = renderApp(<Home />);

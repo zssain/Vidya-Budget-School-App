@@ -72,6 +72,21 @@ pub fn get(conn: &Connection, id: &str) -> Result<Option<SessionRow>, DbError> {
         .optional()?)
 }
 
+/// Updates a session's term count and transport fee.
+pub fn update_terms_transport(
+    tx: &Transaction<'_>,
+    id: &str,
+    terms: i64,
+    transport_fee_per_term: i64,
+    hlc: &str,
+) -> Result<(), DbError> {
+    tx.execute(
+        "UPDATE academic_sessions SET terms = ?2, transport_fee_per_term = ?3, updated_hlc = ?4 WHERE id = ?1",
+        rusqlite::params![id, terms, transport_fee_per_term, hlc],
+    )?;
+    Ok(())
+}
+
 /// The session immediately before `starts_on` (by start date), or `None`. Used
 /// to carry forward the previous session's unpaid balance.
 pub fn previous(conn: &Connection, starts_on: &str) -> Result<Option<SessionRow>, DbError> {

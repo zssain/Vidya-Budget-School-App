@@ -167,6 +167,14 @@ pub fn run() {
         commands::marks::save_marks,
         commands::marks::get_report_card,
         commands::marks::get_class_report_cards,
+        commands::settings::save_school,
+        commands::settings::save_classes,
+        commands::settings::save_fee_plan,
+        commands::settings::save_subjects,
+        commands::settings::save_exams,
+        commands::settings::save_grade_scale,
+        commands::settings::save_app_settings,
+        commands::settings::save_device_code,
     ]);
     #[cfg(not(debug_assertions))]
     let builder = builder.invoke_handler(tauri::generate_handler![
@@ -204,6 +212,14 @@ pub fn run() {
         commands::marks::save_marks,
         commands::marks::get_report_card,
         commands::marks::get_class_report_cards,
+        commands::settings::save_school,
+        commands::settings::save_classes,
+        commands::settings::save_fee_plan,
+        commands::settings::save_subjects,
+        commands::settings::save_exams,
+        commands::settings::save_grade_scale,
+        commands::settings::save_app_settings,
+        commands::settings::save_device_code,
     ]);
 
     builder
