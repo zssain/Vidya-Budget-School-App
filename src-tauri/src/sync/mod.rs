@@ -1,5 +1,6 @@
 //! Sync: wire protocol, role scopes, op application, client engine (prompts/P04).
 pub mod apply;
+pub mod drive;
 pub mod engine;
 #[cfg(not(target_os = "android"))]
 pub mod mdns;

@@ -249,11 +249,12 @@ pub fn join(conn: &mut Connection, req: &JoinReq, now: time::OffsetDateTime) -> 
 }
 
 /// Audience sealing keys for a staff member's audiences (admin/finance/class:*).
-/// Stored server-side in `app_kv` (`audience_key:<audience>`), created on demand.
-/// Full rotation-on-revoke is exercised by Phase 6 (Drive bundles).
+/// Delivered at join. Keys are the server's **persisted, versioned** audience
+/// keys (`sync::drive::keys`, `app_kv:audience_key:<audience>`), created on demand
+/// — so every device in an audience is sealed the SAME key (the pre-P06 code
+/// minted a fresh key each call and never stored it). Rotation on assignment
+/// change is `keys::rotate` (P06 Step 3).
 fn audience_keys_for(conn: &Connection, staff_id: &str) -> rusqlite::Result<Vec<AudienceKey>> {
-    use base64::engine::general_purpose::STANDARD;
-    use base64::Engine;
     let role: String = conn.query_row("SELECT role FROM staff WHERE id=?1", params![staff_id], |r| r.get(0))?;
     let mut audiences: Vec<String> = Vec::new();
     match role.as_str() {
@@ -275,12 +276,7 @@ fn audience_keys_for(conn: &Connection, staff_id: &str) -> rusqlite::Result<Vec<
     }
     let mut out = Vec::new();
     for a in audiences {
-        let kv_key = format!("audience_key:{a}");
-        let key_b64 = match crate::kv::get_raw(conn, &kv_key)? {
-            Some(k) => k,
-            None => STANDARD.encode(rand_bytes(32)),
-        };
-        out.push(AudienceKey { audience: a, key_b64, version: 1 });
+        out.push(crate::sync::drive::keys::get_or_create(conn, &a)?);
     }
     Ok(out)
 }
