@@ -22,14 +22,23 @@ scanned in-app** (per the "only if the scanner survived" clause — not a STOP).
 | 3 Endpoints/op-apply (service) | **done** | integration harness + unit tests |
 | 4 Role scopes | **done** | per-role table/column tests |
 | 5 Invite code+hash, link, QR | **done** | round-trip + reject + QR-render tests |
-| 5 Staff & access screen | **remaining** | UI (derive from §6.2) |
+| 5 Staff & access screen | **done (UI)** | tsc + build; runtime pending a running app |
 | 6 Client engine + transport | **done** | loopback round-trip, offline, backoff tests |
 | 7 mDNS advertise/discover | **compiles** | desktop cfg; runtime-only (real network) |
-| 8 Conflict review screen | **remaining** | UI |
-| 9 Sync & devices screen | **remaining** | UI |
+| 8 Conflict review screen | **done (UI)** | tsc + build |
+| 9 Sync & devices screen | **done (UI)** | tsc + build |
+| 2/11 Server task + `sync://changed` | **compiles** | wired into `run()` (Server mode, desktop); runtime |
 | 10 Android Keystore plugin | **remaining** | needs a device/emulator |
-| 11 Live updates (`sync://changed`) | **remaining** | runtime (Tauri events) |
 | 12 Integration harness | **done** | 8 scenarios green |
+
+### UI + command surface added (this session)
+18 Phase-4 commands (in `commands.json` ↔ Rust `COMMANDS` ↔ `api.ts`, consistency test green):
+`list_staff_access, add_staff, suspend_staff, remove_staff, create_invite, revoke_invite,
+set_class_teacher, assign_subject_teacher, effective_access, list_devices, revoke_device,
+server_status, sync_status, sync_now, list_conflicts, resolve_conflict, list_review_flags,
+resolve_review_flag`. Screens (routes): **Staff & access** `#/principal/staff`, **Conflict review**
+`#/principal/conflicts`, **Sync & devices** `#/sync`. i18n in `strings/p04.ts`. The server task is
+started in `lib.rs run()` (Server mode) and emits `sync://changed` after applying ops.
 
 ## DONE MEANS — evidence (all proven at the integration level in `tests/sync_e2e.rs`)
 1. Queued attendance op → confirmed when it reaches the server; the mark changes; audit valid.
@@ -98,12 +107,14 @@ teacher scope (no fees, roster only, lost-assignment removal); join→snapshot�
 a `LoopbackTransport.offline` toggle (see `sync::engine` tests for offline-keeps-outbox).
 
 ## Verification (real output)
-`cargo test --workspace` → **327 pass** (vidya lib 69 · e2e_flows 4 · sync_e2e 8 · vidya-core 235 ·
+`cargo test --workspace` → **333 pass** (vidya lib 75 · e2e_flows 4 · sync_e2e 8 · vidya-core 235 ·
 no-floats 1 · doc 10; benchmark `#[ignore]`). `cloud/licence` 2. `cargo clippy --workspace
---all-targets -D warnings` → **clean**. `tsc` → 0, `vitest` → 38. `cargo build -p vidya` (incl. net.rs
-+ mdns.rs) → clean.
-**Not run** (needs a running app / device / physical LAN): the real TLS bind + rate-limit + join
-over Wi-Fi, mDNS discovery, live events, the window-closed lifecycle, and the Android Keystore.
+--all-targets -D warnings` → **clean**. `tsc` → 0, `vitest` → 38, `npm run build` → clean (JS bundle
+built). Playwright interactions (`phase1`) → 5/5 (mock screens unchanged). `cargo build -p vidya`
+(incl. net.rs, mdns.rs, start.rs) → clean.
+**Not run** (needs a running app / device / physical LAN): real TLS bind + rate-limit + join over
+Wi-Fi, mDNS discovery, `sync://changed` events, the window-closed lifecycle, the client-mode Join
+flow UI, and the Android Keystore. The screens are tsc/build-verified, not pixel/runtime-verified.
 
 ## `[VERIFY]` — keeping the server alive with the window closed (Tauri 2)
 Achievable, not a STOP. Plan (needs runtime confirmation on Windows + macOS):
@@ -128,20 +139,17 @@ mdns-sd + the reqwest client TLS path. P9 owns the size gate.
   revoke is Phase-6 (Drive bundles)** — flagged.
 
 ## What's left in Phase 4 (for the next session)
-1. **Wire the server task into `lib.rs run()`** in Server mode: open a second WAL connection to the
-   DB, `server::cert` material from setup (generate at setup, store key in the DB), `net::bind_with_fallback`
-   + `net::serve`, advertise via `mdns::advertise`, and the window/tray lifecycle above. (Runtime.)
-2. **UI screens** (derive from §6.2 + existing components): **Staff & access** (Collect-fee table +
-   Sheet; add/suspend/remove/invite, assignments via selects, effective-access preview, QR+link via
-   `server::invite`), **Conflict review** (open `conflict` rows + Keep A / Keep B / Edit; review flags),
-   **Sync & devices** (server: status/addrs/port/fingerprint/devices/Revoke/Replace; client: route,
-   last sync, pending + ₹ waiting, Sync now, manual address). New commands + `commands.json`/`api.ts`
-   consistency needed (create_invite, list_devices, revoke_device, list_conflicts, resolve_conflict,
-   add_staff, suspend/remove_staff).
-3. **Step 10 Android Keystore plugin** (`npx tauri plugin new vidya-android --android`): AES-GCM key
+1. **Runtime verification of the wired pieces** (built + compiling, not yet run): the background
+   server serving `/v1` over real TLS on the LAN, `net` rate-limit/body-cap, mDNS discovery, the
+   `sync://changed` live-refresh, and the invite→join flow between two real devices.
+2. **Window-closed lifecycle** (the `[VERIFY]` below): tray icon + `CloseRequested`/`ExitRequested`
+   prevent + hide (macOS Accessory) so the server keeps serving with the window closed. Not yet
+   coded (leaving untested window-event handling out until it can be verified on Win/macOS).
+3. **Client-mode Join flow UI** (Welcome → Join my school): paste link/code → `HttpsTransport` →
+   `/join` → PIN → snapshot with progress → role home. The transport + `/join` service are built;
+   the client-mode screen + client sync loop wiring remain.
+4. **Step 10 Android Keystore plugin** (`npx tauri plugin new vidya-android --android`): AES-GCM key
    in AndroidKeyStore wrapping the DB key; migrate the Phase-2 TEMP file; test on a device.
-4. **Step 11 live updates**: emit `sync://changed` after apply (server) / after pull (client);
-   screens refresh without flicker.
 5. Re-measure size in a release build (P9 gate).
 
 ## Questions for the owner
