@@ -341,15 +341,20 @@ expiry, subscriptions, trials or prices.
 
 API (implemented by `cloud/licence`, called by the app):
 - `POST {LICENCE_API}/v1/activate {code, school_name, machine_id, app_version}` →
-  `200 {licence: base64(JSON), signature: base64(ed25519)}`.
+  `200 {licence: base64(JSON), signature: base64(ed25519), relay_secret: base64(HMAC)}`.
   Licence JSON = `{licence_id, school_id, plan, max_students|null, max_devices|null,
   issued_at, server_machine_id}`.
+  `relay_secret` (added in Phase 5, owner-confirmed) = `base64(HMAC-SHA256(RELAY_SHARED_KEY,
+  school_id))`. The school server presents it to open its Vidya-relay tunnel; the relay
+  recomputes the same HMAC to verify it, so the relay never calls `cloud/licence` and keeps
+  no state. `RELAY_SHARED_KEY` is a server-side secret shared ONLY between `cloud/licence`
+  and `cloud/relay` (env; never in the app or on any device).
   Errors: `404 CODE_NOT_FOUND`, `409 CODE_ALREADY_USED` (used by another school),
   `200` with the same licence if the SAME machine retries (idempotent),
   `503` when the service is down ("Activation needs internet once — please try again").
-- `POST /v1/transfer {licence_id, recovery_proof, new_machine_id}` → same response;
-  old machine becomes `moved`. `recovery_proof` = HMAC of the request with a key derived
-  from the recovery key **[VERIFY design in Phase 10 with the owner]**.
+- `POST /v1/transfer {licence_id, recovery_proof, new_machine_id}` → same response
+  (including a `relay_secret`); old machine becomes `moved`. `recovery_proof` = HMAC of the
+  request with a key derived from the recovery key **[VERIFY design in Phase 10 with the owner]**.
 - `POST /v1/check {licence_id, machine_id}` → `{status active|revoked|moved}`.
 
 App behaviour: verify the signature offline with the public key from build config. Check
