@@ -22,8 +22,10 @@ use axum::{extract::State, response::IntoResponse, routing::post, Json, Router};
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 use ed25519_dalek::{Signer, SigningKey};
+use hmac::{Hmac, Mac};
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
+use sha2::Sha256;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -31,6 +33,21 @@ use std::sync::{Arc, Mutex};
 // Crockford base32 alphabet (excludes I, L, O, U) — docs §9 / P03 Step 2.
 const CROCKFORD: &[u8; 32] = b"0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 const DEFAULT_PORT: u16 = 8787;
+
+/// Dev default for the relay shared key (P05). In production BOTH `cloud/licence`
+/// and `cloud/relay` are given the same `RELAY_SHARED_KEY` via env; this default
+/// only exists so `--dev` works out of the box. The relay recomputes the same
+/// `relay_secret` to verify a tunnel, so the value must match on both services.
+const DEV_RELAY_SHARED_KEY: &str = "vidya-dev-relay-shared-key-change-me";
+
+/// The relay secret for a school: `base64(HMAC-SHA256(shared_key, school_id))`.
+/// `cloud/relay` recomputes this exact value to authenticate a tunnel (stateless
+/// relay). Keep this recipe byte-identical in both services.
+fn relay_secret(shared_key: &[u8], school_id: &str) -> String {
+    let mut mac = <Hmac<Sha256> as Mac>::new_from_slice(shared_key).expect("HMAC accepts any key length");
+    mac.update(school_id.as_bytes());
+    STANDARD.encode(mac.finalize().into_bytes())
+}
 
 // ------------------------------------------------------------------ store ---
 
@@ -60,6 +77,10 @@ struct Activation {
     /// retry from the same machine gets byte-identical results (idempotent).
     licence_b64: String,
     signature_b64: String,
+    /// The relay secret returned at activation (P05 §10). `#[serde(default)]` keeps
+    /// stores written before P05 loadable (empty → recomputed lazily on retry).
+    #[serde(default)]
+    relay_secret: String,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -79,6 +100,9 @@ struct AppState {
     signing: Arc<SigningKey>,
     store_path: PathBuf,
     lock: Arc<Mutex<()>>,
+    /// Shared key for deriving each school's relay secret (P05). Same value on
+    /// `cloud/relay` (env `RELAY_SHARED_KEY`).
+    relay_shared_key: Arc<Vec<u8>>,
 }
 
 impl AppState {
@@ -187,6 +211,8 @@ struct ActivateReq {
 struct ActivateResp {
     licence: String,
     signature: String,
+    /// P05 §10: the school server presents this to open its relay tunnel.
+    relay_secret: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -222,9 +248,15 @@ async fn activate(State(state): State<AppState>, Json(req): Json<ActivateReq>) -
     if let Some(act) = entry.activation {
         // Same machine → return the exact same licence (idempotent).
         if act.machine_id == req.machine_id {
+            // Recompute the relay secret if the stored one predates P05 (empty).
+            let secret = if act.relay_secret.is_empty() {
+                relay_secret(&state.relay_shared_key, &act.school_id)
+            } else {
+                act.relay_secret
+            };
             return (
                 StatusCode::OK,
-                Json(ActivateResp { licence: act.licence_b64, signature: act.signature_b64 }),
+                Json(ActivateResp { licence: act.licence_b64, signature: act.signature_b64, relay_secret: secret }),
             )
                 .into_response();
         }
@@ -244,6 +276,7 @@ async fn activate(State(state): State<AppState>, Json(req): Json<ActivateReq>) -
         server_machine_id: req.machine_id.clone(),
     };
     let (licence_b64, signature_b64) = sign_licence(&state.signing, &lic);
+    let secret = relay_secret(&state.relay_shared_key, &lic.school_id);
 
     store.codes.insert(
         req.code.clone(),
@@ -257,12 +290,13 @@ async fn activate(State(state): State<AppState>, Json(req): Json<ActivateReq>) -
                 status: "active".to_string(),
                 licence_b64: licence_b64.clone(),
                 signature_b64: signature_b64.clone(),
+                relay_secret: secret.clone(),
             }),
         },
     );
     state.write_store(&store);
 
-    (StatusCode::OK, Json(ActivateResp { licence: licence_b64, signature: signature_b64 })).into_response()
+    (StatusCode::OK, Json(ActivateResp { licence: licence_b64, signature: signature_b64, relay_secret: secret })).into_response()
 }
 
 /// `POST /v1/check` — report the licence status (active|revoked|moved).
@@ -322,10 +356,14 @@ async fn main() {
                 .ok()
                 .and_then(|p| p.parse().ok())
                 .unwrap_or(DEFAULT_PORT);
+            let relay_shared_key = std::env::var("RELAY_SHARED_KEY")
+                .unwrap_or_else(|_| DEV_RELAY_SHARED_KEY.to_string())
+                .into_bytes();
             let state = AppState {
                 signing: Arc::new(signing),
                 store_path: keys_dir().join("store.json"),
                 lock: Arc::new(Mutex::new(())),
+                relay_shared_key: Arc::new(relay_shared_key),
             };
             println!("Vidya dev licence service (dev mode)");
             println!("  listening on http://127.0.0.1:{port}");
@@ -366,6 +404,19 @@ mod tests {
         for bad in ['I', 'L', 'O', 'U'] {
             assert!(!code[6..].contains(bad), "must exclude {bad}");
         }
+    }
+
+    #[test]
+    fn relay_secret_is_stable_hmac_of_school_id() {
+        // Deterministic for a fixed (shared_key, school_id); different school → different secret.
+        // This exact recipe must be reproduced by cloud/relay to authenticate a tunnel.
+        let key = b"shared-key";
+        let a = relay_secret(key, "sch_abc");
+        assert_eq!(a, relay_secret(key, "sch_abc"), "stable for the same inputs");
+        assert_ne!(a, relay_secret(key, "sch_xyz"), "bound to school_id");
+        assert_ne!(a, relay_secret(b"other-key", "sch_abc"), "bound to the shared key");
+        // base64 of a 32-byte HMAC-SHA256 tag.
+        assert_eq!(STANDARD.decode(a).unwrap().len(), 32);
     }
 
     #[test]

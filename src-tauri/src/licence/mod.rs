@@ -59,6 +59,10 @@ pub struct Activation {
     pub licence_b64: String,
     /// Base64 ed25519 signature (stored in `licence.signature`).
     pub signature_b64: String,
+    /// The relay secret the school server presents to the Vidya relay (P05 §10).
+    /// Empty when the (older) service did not return one — the relay route is then
+    /// simply unavailable until the school re-activates against the new service.
+    pub relay_secret: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -96,6 +100,9 @@ pub fn parse_activate(
     let v: serde_json::Value = serde_json::from_str(body).map_err(|_| LicenceError::Invalid)?;
     let licence_b64 = v.get("licence").and_then(|x| x.as_str()).ok_or(LicenceError::Invalid)?;
     let signature_b64 = v.get("signature").and_then(|x| x.as_str()).ok_or(LicenceError::Invalid)?;
+    // Optional (P05 §10): the relay secret. Tolerated-when-absent so a pre-P05
+    // service still activates (the relay route is then just unavailable).
+    let relay_secret = v.get("relay_secret").and_then(|x| x.as_str()).unwrap_or("").to_string();
 
     // Verify the ed25519 signature offline with vidya-core.
     let licence = vidya_core::licence::verify(licence_b64, signature_b64, public_key)
@@ -110,6 +117,7 @@ pub fn parse_activate(
         licence,
         licence_b64: licence_b64.to_string(),
         signature_b64: signature_b64.to_string(),
+        relay_secret,
     })
 }
 
@@ -222,6 +230,25 @@ mod tests {
         let act = parse_activate(200, &body, "machine-A", &public).unwrap();
         assert_eq!(act.licence.licence_id, "lic_1");
         assert_eq!(act.licence.plan, "perpetual");
+    }
+
+    #[test]
+    fn relay_secret_is_parsed_when_present_and_empty_when_absent() {
+        let (signing, public) = keypair(7);
+        // Absent → empty (backwards compatible with a pre-P05 service).
+        let body = signed_body(&sample("machine-A"), &signing);
+        assert_eq!(parse_activate(200, &body, "machine-A", &public).unwrap().relay_secret, "");
+        // Present → carried through.
+        let lic = sample("machine-A");
+        let raw = serde_json::to_vec(&lic).unwrap();
+        let with_secret = serde_json::json!({
+            "licence": STANDARD.encode(&raw),
+            "signature": STANDARD.encode(signing.sign(&raw).to_bytes()),
+            "relay_secret": "cnMtc2VjcmV0",
+        })
+        .to_string();
+        let act = parse_activate(200, &with_secret, "machine-A", &public).unwrap();
+        assert_eq!(act.relay_secret, "cnMtc2VjcmV0");
     }
 
     #[test]

@@ -111,6 +111,11 @@ pub async fn activate_licence_impl(state: &State<'_, RtCtx>, code: &str, school_
     });
     state.with_db(|conn| {
         kv::set(conn, KV_PENDING_LICENCE, &pending)?;
+        // Keep the relay secret issued at activation (P05 §10). Only store a
+        // non-empty one so a re-activation against a pre-P05 service can't wipe it.
+        if !activation.relay_secret.is_empty() {
+            kv::set(conn, crate::state::KV_RELAY_SECRET, &activation.relay_secret)?;
+        }
         Ok(())
     })?;
     // Return the new app state (should be `activated`).
