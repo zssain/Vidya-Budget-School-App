@@ -4,6 +4,7 @@ pub mod engine;
 #[cfg(not(target_os = "android"))]
 pub mod mdns;
 pub mod protocol;
+pub mod relay;
 pub mod scope;
 pub mod seal;
 pub mod transport;
