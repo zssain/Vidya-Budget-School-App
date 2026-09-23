@@ -8,7 +8,16 @@ use rusqlite::{params, Connection, OptionalExtension};
 
 use crate::db::now_iso;
 use crate::sync::protocol::{Op, OpStatus, PullResp};
-use crate::sync::transport::{Transport, TransportError};
+use crate::sync::relay::RelayTransport;
+use crate::sync::transport::{HttpsTransport, LoopbackTransport, Transport, TransportError};
+
+/// Sync-screen route labels (P05 Step 3 — exact copy).
+pub const ROUTE_LAN: &str = "On school Wi-Fi";
+pub const ROUTE_RELAY: &str = "Over the internet";
+/// app_kv key: the highest server epoch this device has ever trusted (§8.9 fencing).
+pub const KV_KNOWN_EPOCH: &str = "known_epoch";
+/// app_kv key: the route label of the last successful sync (Sync screen).
+pub const KV_LAST_ROUTE: &str = "last_route";
 
 /// Backoff between failed sync attempts: 15 s doubling, capped at 5 min (§6).
 pub fn backoff_secs(attempt: u32) -> u64 {
@@ -118,13 +127,43 @@ fn apply_pull(conn: &Connection, pull: &PullResp) -> rusqlite::Result<usize> {
     Ok(pull.changes.len())
 }
 
+/// The highest server epoch this device has ever trusted (§8.9 fencing).
+pub fn known_epoch(conn: &Connection) -> rusqlite::Result<i64> {
+    Ok(crate::kv::get::<i64>(conn, KV_KNOWN_EPOCH)?.unwrap_or(0))
+}
+
+/// Advance the stored high-water epoch (only ever upward).
+fn advance_known_epoch(conn: &Connection, epoch: i64) -> rusqlite::Result<()> {
+    let cur = known_epoch(conn)?;
+    if epoch > cur {
+        crate::kv::set(conn, KV_KNOWN_EPOCH, &epoch)?;
+    }
+    Ok(())
+}
+
+/// Fence a server whose epoch is older than the highest we trust (§8.9): the caller
+/// turns this into `EPOCH_OLD` and refuses the response, applying nothing.
+fn fence(server_epoch: i64, known: i64) -> Result<(), TransportError> {
+    if server_epoch < known {
+        Err(TransportError::EpochOld)
+    } else {
+        Ok(())
+    }
+}
+
 /// One sync cycle against a transport. Pushes the outbox, applies results, pulls.
+/// Enforces epoch fencing: a response from a lower-epoch server is refused (§8.9).
 pub async fn sync_once<T: Transport>(conn: &mut Connection, t: &T) -> Result<SyncOutcome, TransportError> {
     let mut outcome = SyncOutcome::default();
+    let known = known_epoch(conn).map_err(|e| TransportError::Other(e.to_string()))?;
+    let mut seen_epoch = known;
     let ops = outbox_ops(conn).map_err(|e| TransportError::Other(e.to_string()))?;
 
     if !ops.is_empty() {
         let resp = t.push(&ops).await?;
+        // Refuse (and change nothing) if this server is older than the one we know.
+        fence(resp.server_epoch, known)?;
+        seen_epoch = seen_epoch.max(resp.server_epoch);
         outcome.pushed = resp.results.len();
         for res in &resp.results {
             match res.status {
@@ -154,12 +193,97 @@ pub async fn sync_once<T: Transport>(conn: &mut Connection, t: &T) -> Result<Syn
     // Pull canonical changes.
     match t.pull(cursor(conn).map_err(|e| TransportError::Other(e.to_string()))?, 500).await {
         Ok(pull) => {
+            // Fence before applying anything from a lower-epoch server (§8.9).
+            fence(pull.server_epoch, known)?;
+            seen_epoch = seen_epoch.max(pull.server_epoch);
             outcome.pulled = apply_pull(conn, &pull).map_err(|e| TransportError::Other(e.to_string()))?;
         }
-        Err(TransportError::Unreachable) => {} // keep what we have; retry later
+        Err(TransportError::Unreachable) => {
+            // If we already pushed, a transient pull failure just means "retry the
+            // pull later" — keep the confirmed push. But if we contacted the server
+            // for NOTHING (empty outbox) and the pull is unreachable, this route is
+            // down: report it so the engine falls through to the next route.
+            if outcome.pushed == 0 {
+                return Err(TransportError::Unreachable);
+            }
+        }
         Err(e) => return Err(e),
     }
+    // Remember the highest epoch we trusted this cycle.
+    advance_known_epoch(conn, seen_epoch).map_err(|e| TransportError::Other(e.to_string()))?;
     Ok(outcome)
+}
+
+/// A delivery route (docs §8.3). The engine tries them in order (LAN → relay →
+/// queue), skipping one that is unreachable; the first that works is used and its
+/// label is shown on the Sync screen (P05 Step 3).
+pub enum Route {
+    /// LAN: pinned-cert HTTPS to the school server ("On school Wi-Fi").
+    Lan(HttpsTransport),
+    /// Internet: sealed via the Vidya relay ("Over the internet").
+    Relay(RelayTransport),
+    /// In-process (tests / harness) — behaves as the LAN route.
+    Loopback(LoopbackTransport),
+}
+
+impl Route {
+    /// The Sync-screen label for this route.
+    pub fn label(&self) -> &'static str {
+        match self {
+            Route::Lan(_) | Route::Loopback(_) => ROUTE_LAN,
+            Route::Relay(_) => ROUTE_RELAY,
+        }
+    }
+}
+
+impl Transport for Route {
+    async fn hello(&self) -> Result<crate::sync::protocol::HelloResp, TransportError> {
+        match self {
+            Route::Lan(t) => t.hello().await,
+            Route::Relay(t) => t.hello().await,
+            Route::Loopback(t) => t.hello().await,
+        }
+    }
+    async fn push(&self, ops: &[Op]) -> Result<crate::sync::protocol::PushResp, TransportError> {
+        match self {
+            Route::Lan(t) => t.push(ops).await,
+            Route::Relay(t) => t.push(ops).await,
+            Route::Loopback(t) => t.push(ops).await,
+        }
+    }
+    async fn pull(&self, since: i64, limit: i64) -> Result<PullResp, TransportError> {
+        match self {
+            Route::Lan(t) => t.pull(since, limit).await,
+            Route::Relay(t) => t.pull(since, limit).await,
+            Route::Loopback(t) => t.pull(since, limit).await,
+        }
+    }
+    async fn heartbeat(&self, req: &crate::sync::protocol::HeartbeatReq) -> Result<crate::sync::protocol::HeartbeatResp, TransportError> {
+        match self {
+            Route::Lan(t) => t.heartbeat(req).await,
+            Route::Relay(t) => t.heartbeat(req).await,
+            Route::Loopback(t) => t.heartbeat(req).await,
+        }
+    }
+}
+
+/// Run one sync cycle over the route list in order (LAN → relay → queue). Skips a
+/// route that is unreachable; returns the outcome + the label of the route that
+/// worked (persisted for the Sync screen). All routes unreachable → `Unreachable`
+/// (work stays queued — the Drive route arrives in Phase 6).
+pub async fn sync_once_routed(conn: &mut Connection, routes: &[Route]) -> Result<(SyncOutcome, &'static str), TransportError> {
+    for route in routes {
+        match sync_once(conn, route).await {
+            Ok(outcome) => {
+                let label = route.label();
+                crate::kv::set(conn, KV_LAST_ROUTE, &label).ok();
+                return Ok((outcome, label));
+            }
+            Err(TransportError::Unreachable) => continue, // try the next route
+            Err(e) => return Err(e), // a real error (revoked / epoch / protocol) — stop
+        }
+    }
+    Err(TransportError::Unreachable)
 }
 
 #[cfg(test)]
@@ -222,6 +346,75 @@ mod tests {
         assert_eq!(pending, 0);
         let sync_state: String = cl.query_row("SELECT sync_state FROM student WHERE id='stu-x'", [], |r| r.get(0)).unwrap();
         assert_eq!(sync_state, "confirmed");
+    }
+
+    #[tokio::test]
+    async fn route_order_falls_through_to_the_next_reachable_route() {
+        // P05 Step 3: LAN offline → relay/next route serves it; the working route's
+        // label is returned and persisted.
+        let mut server = db::open_in_memory(KEY).unwrap();
+        db::run_migrations(&mut server).unwrap();
+        seed::seed_demo_school(&mut server, now()).unwrap();
+        let server = Arc::new(Mutex::new(server));
+        let mut cl = client();
+        cl.execute("INSERT INTO student(id,name,status,created_at,updated_at,sync_state) VALUES ('stu-r','Kid','active','t','t','on_device')", []).unwrap();
+        cl.execute(
+            "INSERT INTO outbox(op_id,hlc,device_id,staff_id,audience,\"table\",record_id,kind,payload,base_version,server_epoch) \
+             VALUES ('op-r','00000000000000000001r','dev-a1','stf-priya','admin','student','stu-r','insert', ?1, NULL, 1)",
+            params![serde_json::json!({ "name": "Kid", "status": "active" }).to_string()],
+        ).unwrap();
+
+        let auth = DeviceAuth { device_id: "dev-a1".into(), staff_id: "stf-priya".into() };
+        let mut lan = LoopbackTransport::new(server.clone(), auth.clone(), now());
+        lan.offline = true; // LAN down
+        let online = LoopbackTransport::new(server.clone(), auth, now());
+        let routes = vec![Route::Loopback(lan), Route::Loopback(online)];
+
+        let (outcome, label) = sync_once_routed(&mut cl, &routes).await.unwrap();
+        assert_eq!(outcome.confirmed, 1);
+        assert_eq!(label, ROUTE_LAN);
+        assert_eq!(crate::kv::get::<String>(&cl, KV_LAST_ROUTE).unwrap().as_deref(), Some(ROUTE_LAN));
+    }
+
+    #[tokio::test]
+    async fn all_routes_unreachable_keeps_the_queue() {
+        let server = Arc::new(Mutex::new({
+            let mut s = db::open_in_memory(KEY).unwrap();
+            db::run_migrations(&mut s).unwrap();
+            seed::seed_demo_school(&mut s, now()).unwrap();
+            s
+        }));
+        let mut cl = client();
+        let auth = DeviceAuth { device_id: "dev-a1".into(), staff_id: "stf-priya".into() };
+        let mut off = LoopbackTransport::new(server, auth, now());
+        off.offline = true;
+        let routes = vec![Route::Loopback(off)];
+        assert_eq!(sync_once_routed(&mut cl, &routes).await, Err(TransportError::Unreachable));
+    }
+
+    #[test]
+    fn route_labels_match_the_prompt_copy() {
+        use base64::engine::general_purpose::STANDARD;
+        use base64::Engine;
+        let relay = RelayTransport::new("ws://127.0.0.1:1", "sch", "dev", &STANDARD.encode([9u8; 32]), 1, 0).unwrap();
+        assert_eq!(Route::Relay(relay).label(), "Over the internet");
+    }
+
+    #[tokio::test]
+    async fn a_lower_epoch_server_is_refused() {
+        // §8.9 / DONE MEANS #5: once a device trusts epoch 2, an epoch-1 server's
+        // response is refused and nothing is applied.
+        let server = Arc::new(Mutex::new({
+            let mut s = db::open_in_memory(KEY).unwrap();
+            db::run_migrations(&mut s).unwrap();
+            seed::seed_demo_school(&mut s, now()).unwrap(); // epoch 1
+            s
+        }));
+        let mut cl = client();
+        crate::kv::set(&cl, KV_KNOWN_EPOCH, &2i64).unwrap(); // we already know epoch 2
+        let auth = DeviceAuth { device_id: "dev-a1".into(), staff_id: "stf-priya".into() };
+        let transport = LoopbackTransport::new(server, auth, now());
+        assert_eq!(sync_once(&mut cl, &transport).await, Err(TransportError::EpochOld));
     }
 
     #[tokio::test]
