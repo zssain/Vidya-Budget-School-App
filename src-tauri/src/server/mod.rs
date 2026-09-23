@@ -2,4 +2,5 @@
 //! (service), and the axum/tokio-rustls listener (net) — prompts/P04 Step 2/3.
 pub mod cert;
 pub mod invite;
+pub mod net;
 pub mod service;
