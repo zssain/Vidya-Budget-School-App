@@ -173,6 +173,22 @@ pub async fn check(
     }
 }
 
+/// Persist a licence re-check result (P05 Step 5). Returns the new status string.
+/// `moved`/`revoked` are how the licence service fences a PC that is no longer the
+/// school server; the app then stops serving and goes read-only.
+pub fn persist_check(conn: &rusqlite::Connection, result: CheckResult, now: OffsetDateTime) -> rusqlite::Result<&'static str> {
+    let status = match result {
+        CheckResult::Active => "active",
+        CheckResult::Revoked => "revoked",
+        CheckResult::Moved => "moved",
+    };
+    conn.execute(
+        "UPDATE licence SET status=?1, last_check_at=?2",
+        rusqlite::params![status, now.format(&time::format_description::well_known::Rfc3339).unwrap_or_default()],
+    )?;
+    Ok(status)
+}
+
 /// Whether a re-check is due: no prior check, an unparseable timestamp, or more
 /// than [`RECHECK_DAYS`] since `last_check_at` (RFC-3339).
 pub fn should_recheck(last_check_at: Option<&str>, now: OffsetDateTime) -> bool {
@@ -279,6 +295,24 @@ mod tests {
     fn error_codes_and_keys() {
         assert_eq!(LicenceError::CodeAlreadyUsed.code(), "CODE_ALREADY_USED");
         assert_eq!(LicenceError::Unreachable.message_key(), "licence.needs_internet");
+    }
+
+    #[test]
+    fn persist_check_updates_status() {
+        let mut c = crate::db::open_in_memory("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef").unwrap();
+        crate::db::run_migrations(&mut c).unwrap();
+        c.execute(
+            "INSERT INTO school(id,name,backup_salt,created_at,updated_at) VALUES ('sch','S',x'00','t','t')",
+            [],
+        ).unwrap();
+        c.execute(
+            "INSERT INTO licence(licence_id,school_id,plan,issued_at,signature,raw_json,status) VALUES ('lic','sch','perpetual','t','sig','{}','active')",
+            [],
+        ).unwrap();
+        let now = OffsetDateTime::parse("2026-09-23T00:00:00Z", &time::format_description::well_known::Rfc3339).unwrap();
+        assert_eq!(persist_check(&c, CheckResult::Moved, now).unwrap(), "moved");
+        let status: String = c.query_row("SELECT status FROM licence LIMIT 1", [], |r| r.get(0)).unwrap();
+        assert_eq!(status, "moved");
     }
 
     #[test]

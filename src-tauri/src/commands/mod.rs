@@ -90,7 +90,14 @@ pub fn app_state(state: State<RtCtx>) -> CmdResult<AppStateResponse> {
         return Ok(crate::state::db_key_missing());
     }
     let session = state.session.lock().map_err(|_| crate::error::CmdError::internal("lock"))?.clone();
-    state.with_db(|conn| Ok(crate::state::compute(conn, session)?))
+    let resp = state.with_db(|conn| Ok(crate::state::compute(conn, session)?))?;
+    // Fencing (P05 Step 5): once this PC is `moved`, it must stop being the school
+    // server. Firing the stop signal halts the LAN listener + the relay tunnel; the
+    // UI shows the read-only "no longer the school server" state. Idempotent.
+    if matches!(resp.state, crate::state::AppState::Moved) {
+        state.server_stop.notify_waiters();
+    }
+    Ok(resp)
 }
 
 // -------------------------------------------------------------- licence ------

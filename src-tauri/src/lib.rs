@@ -91,6 +91,48 @@ fn build_ctx(data_dir: std::path::PathBuf) -> RtCtx {
     }
 }
 
+/// Re-check the licence with the service when due (§10, P05 Step 5). Unreachable →
+/// stay active (perpetual). An explicit `moved`/`revoked` is persisted; if this PC is
+/// `moved`, the server + relay tunnel are stopped and the UI goes read-only.
+async fn recheck_licence(app: &tauri::AppHandle) {
+    let ctx = app.state::<RtCtx>();
+    // Read the licence identity + last check time under the DB lock.
+    let due: Option<(String, String)> = ctx
+        .with_db(|conn| {
+            let row = conn
+                .query_row(
+                    "SELECT licence_id, COALESCE(last_check_at,'') FROM licence LIMIT 1",
+                    [],
+                    |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
+                )
+                .ok();
+            Ok(row)
+        })
+        .unwrap_or(None)
+        .and_then(|(id, last)| {
+            let last_opt = if last.is_empty() { None } else { Some(last.as_str()) };
+            if licence::should_recheck(last_opt, time::OffsetDateTime::now_utc()) {
+                Some((id, last))
+            } else {
+                None
+            }
+        });
+    let Some((licence_id, _)) = due else { return };
+
+    let api = config::get().licence_api.clone();
+    if let Some(result) = licence::check(&ctx.http, &api, &licence_id, &ctx.machine_id).await {
+        use vidya_core::licence::CheckResult;
+        let fenced = matches!(result, CheckResult::Moved | CheckResult::Revoked);
+        let _ = ctx.with_db(|conn| {
+            licence::persist_check(conn, result, time::OffsetDateTime::now_utc())?;
+            Ok(())
+        });
+        if fenced {
+            ctx.server_stop.notify_waiters();
+        }
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -117,6 +159,15 @@ pub fn run() {
                         tauri::async_runtime::spawn(server::start::run_server(handle, db_path, key_hex, stop));
                     }
                 }
+            }
+
+            // Best-effort licence re-check when due (P05 Step 5). A `moved`/`revoked`
+            // answer stops this PC serving; unreachable leaves it active (perpetual).
+            {
+                let handle = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    recheck_licence(&handle).await;
+                });
             }
             Ok(())
         })
