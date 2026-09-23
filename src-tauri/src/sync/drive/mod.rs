@@ -19,6 +19,7 @@
 //!   for the Step 9 harness (a "local folder implementing the same trait").
 
 pub mod bundle;
+pub mod exchange;
 pub mod fake;
 pub mod keys;
 
