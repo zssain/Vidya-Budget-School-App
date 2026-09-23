@@ -1,4 +1,5 @@
-import { defineConfig, type Plugin } from 'vite'
+import { defineConfig } from 'vitest/config'
+import type { Plugin } from 'vite'
 import react from '@vitejs/plugin-react'
 import tailwindcss from '@tailwindcss/vite'
 import { readFileSync } from 'node:fs'
@@ -42,6 +43,11 @@ export default defineConfig({
   // Platform is decided at BUILD time (see src/lib/platform.ts).
   define: { 'import.meta.env.VITE_PLATFORM': JSON.stringify(platform) },
   clearScreen: false,
+  // Vitest runs unit tests only; Playwright owns tests/e2e/*.spec.ts.
+  test: {
+    include: ['src/**/*.test.ts'],
+    environment: 'node',
+  },
   server: {
     port: 5173,
     strictPort: true,
