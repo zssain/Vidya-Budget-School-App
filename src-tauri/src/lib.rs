@@ -112,7 +112,7 @@ fn invoke_handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'stat
     tauri::generate_handler![
         app_state, activate_licence, setup_school, setup_session, setup_classes, setup_principal,
         create_recovery_key, confirm_recovery_key, create_pin, unlock, lock, switch_user,
-        list_classes, list_students, search_students, get_student, create_student,
+        list_staff, list_classes, list_students, search_students, get_student, create_student,
         get_attendance_sheet, save_attendance_draft, submit_attendance, list_fee_dues,
         record_payment, list_payments, create_request, cancel_request, list_requests, get_request,
         decide_request, dashboard_principal, dashboard_accountant, dashboard_teacher, set_accent,
@@ -126,7 +126,7 @@ fn invoke_handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'stat
     tauri::generate_handler![
         app_state, activate_licence, setup_school, setup_session, setup_classes, setup_principal,
         create_recovery_key, confirm_recovery_key, create_pin, unlock, lock, switch_user,
-        list_classes, list_students, search_students, get_student, create_student,
+        list_staff, list_classes, list_students, search_students, get_student, create_student,
         get_attendance_sheet, save_attendance_draft, submit_attendance, list_fee_dues,
         record_payment, list_payments, create_request, cancel_request, list_requests, get_request,
         decide_request, dashboard_principal, dashboard_accountant, dashboard_teacher, set_accent,

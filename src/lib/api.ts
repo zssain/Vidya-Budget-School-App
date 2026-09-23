@@ -23,6 +23,12 @@ export interface SessionStaff {
   role: string
 }
 
+export interface StaffDto {
+  id: string
+  name: string
+  role: string
+}
+
 export type AppState =
   | { kind: 'no_school' }
   | { kind: 'activated' }
@@ -230,6 +236,7 @@ export const unlock = (staffId: string, pin: string) =>
   invoke<AppStateResponse>('unlock', { staffId, pin })
 export const lock = () => invoke<void>('lock')
 export const switch_user = () => invoke<void>('switch_user')
+export const list_staff = () => invoke<StaffDto[]>('list_staff')
 export const list_classes = () => invoke<ClassDto[]>('list_classes')
 export const list_students = (classId?: string) =>
   invoke<StudentDto[]>('list_students', { classId: classId ?? null })

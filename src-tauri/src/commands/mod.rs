@@ -31,6 +31,7 @@ pub const COMMANDS: &[&str] = &[
     "unlock",
     "lock",
     "switch_user",
+    "list_staff",
     "list_classes",
     "list_students",
     "search_students",
@@ -132,6 +133,11 @@ pub fn switch_user(state: State<RtCtx>) -> CmdResult<()> {
 }
 
 // ------------------------------------------------------------- students ------
+
+#[tauri::command]
+pub fn list_staff(state: State<RtCtx>) -> CmdResult<Vec<StaffDto>> {
+    state.with_db(list_staff_logic)
+}
 
 #[tauri::command]
 pub fn list_classes(state: State<RtCtx>) -> CmdResult<Vec<ClassDto>> {

@@ -340,6 +340,22 @@ pub struct ClassDto {
     pub section: Option<String>,
 }
 
+#[derive(Debug, Serialize)]
+pub struct StaffDto {
+    pub id: String,
+    pub name: String,
+    pub role: String,
+}
+
+/// Active staff on this device (the PIN unlock picker, Step 7).
+pub fn list_staff_logic(conn: &mut Connection) -> CmdResult<Vec<StaffDto>> {
+    let mut stmt = conn.prepare("SELECT id, name, role FROM staff WHERE state='active' ORDER BY role, name")?;
+    let rows = stmt
+        .query_map([], |r| Ok(StaffDto { id: r.get(0)?, name: r.get(1)?, role: r.get(2)? }))?
+        .collect::<rusqlite::Result<_>>()?;
+    Ok(rows)
+}
+
 pub fn list_classes_logic(conn: &mut Connection) -> CmdResult<Vec<ClassDto>> {
     let mut stmt = conn.prepare("SELECT id, display, name, section FROM class ORDER BY sort_order")?;
     let rows = stmt

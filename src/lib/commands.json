@@ -13,6 +13,7 @@
     "unlock",
     "lock",
     "switch_user",
+    "list_staff",
     "list_classes",
     "list_students",
     "search_students",

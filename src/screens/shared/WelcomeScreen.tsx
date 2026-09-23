@@ -28,11 +28,15 @@ const CTA_KEY: Record<Mode, string> = {
 export default function WelcomeScreen({
   data,
   initial,
+  onActivate,
 }: {
   data: WelcomeData
   initial?: 'setup' | 'join' | 'recover'
+  /** Real flow: "Activate and continue" → activate the licence with this code. */
+  onActivate?: (code: string) => void
 }) {
   const [mode, setMode] = useState<Mode>(initial ?? 'setup')
+  const [code, setCode] = useState('')
 
   const isSetup = mode === 'setup'
   const isJoin = mode === 'join'
@@ -211,6 +215,8 @@ export default function WelcomeScreen({
             </label>
             <input
               id="code"
+              value={code}
+              onChange={(e) => setCode(e.target.value)}
               placeholder={t('welcome.field.codePlaceholder')}
               style={{
                 height: '48px',
@@ -281,6 +287,9 @@ export default function WelcomeScreen({
         ) : null}
         <button
           type="button"
+          onClick={() => {
+            if (isSetup && onActivate) onActivate(code)
+          }}
           style={{
             height: '50px',
             borderRadius: '6px',
