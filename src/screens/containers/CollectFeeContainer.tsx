@@ -120,6 +120,7 @@ export default function CollectFeeContainer() {
       )}
       <CollectFeeScreen
         data={data}
+        chrome={false}
         onRecord={onRecord}
         onSelectStudent={(id) => setSelectedId(id)}
         onCommsNotice={() => {

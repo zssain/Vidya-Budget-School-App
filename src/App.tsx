@@ -1,9 +1,12 @@
 import { useEffect, useState } from 'react'
+import type { ReactNode } from 'react'
 import { useRoute, matchRoute } from '@/lib/router'
 import * as api from '@/lib/api'
 import type { CmdError, StaffDto } from '@/lib/api'
 import { useStore, refreshAppState, routeForState } from '@/lib/store'
 import { t } from '@/lib/i18n'
+import AppShell from '@/components/desktop/AppShell'
+import type { Role } from '@/lib/nav'
 import WelcomeScreen from '@/screens/shared/WelcomeScreen'
 import SetupWizard from '@/screens/shared/SetupWizard'
 import PinUnlockScreen from '@/screens/shared/PinUnlockScreen'
@@ -98,24 +101,35 @@ export default function App() {
       return <StatusScreen messageKey="error.EPOCH_OLD" />
     case 'moved':
       return <StatusScreen messageKey="licence.banner_moved" />
-    case 'home':
-      // Unlocked: route within the app by hash path. Wired containers use real
-      // data; screens not yet wired fall back to fixtures (flagged in handoff).
-      if (matchRoute('/principal/approvals', base)) return <ApprovalsScreen />
-      if (base === '/principal/staff') return <StaffAccessScreen />
-      if (base === '/principal/conflicts') return <ConflictReviewScreen />
-      if (base === '/sync') return <SyncDevicesScreen />
-      if (base === '/accountant/collect') return <CollectFeeContainer />
-      if (base === '/teacher/home') return <TeacherHomeScreen data={teacherHomeFixture} />
-      {
+    case 'home': {
+      // Teachers use the phone screens (no desktop shell).
+      if (route.role === 'teacher') {
         const m = matchRoute('/teacher/attendance/:classId', base)
         if (m) return <AttendanceContainer classId={m.classId} />
+        return <TeacherHomeScreen data={teacherHomeFixture} />
       }
-      if (base === '/principal/home') return <PrincipalHomeContainer />
-      // Default landing by role.
-      if (route.role === 'principal') return <PrincipalHomeContainer />
-      if (route.role === 'accountant') return <CollectFeeContainer />
-      // Teacher home is a static launcher (no per-school data to inject this phase).
-      return <TeacherHomeScreen data={teacherHomeFixture} />
+      // Principal / Accountant: every desktop screen renders inside AppShell
+      // (the mock sidebar + header, with real navigation + active state).
+      const role = route.role as Role
+      const { active, node } = desktopRoute(base, role)
+      return (
+        <AppShell role={role} active={active}>
+          {node}
+        </AppShell>
+      )
+    }
   }
+}
+
+// Map a desktop hash path to its active nav key + content. Sub-screens map to
+// their parent nav key. Unbuilt routes fall through to the role's home.
+function desktopRoute(base: string, role: Role): { active: string; node: ReactNode } {
+  if (base === '/sync') return { active: 'sync', node: <SyncDevicesScreen /> }
+  if (base === '/principal/conflicts') return { active: '', node: <ConflictReviewScreen /> }
+  if (matchRoute('/principal/approvals', base)) return { active: 'approvals', node: <ApprovalsScreen /> }
+  if (base === '/principal/staff') return { active: 'staff', node: <StaffAccessScreen /> }
+  if (base === '/principal/home') return { active: 'home', node: <PrincipalHomeContainer /> }
+  if (base === '/accountant/collect') return { active: 'collect', node: <CollectFeeContainer /> }
+  if (role === 'accountant') return { active: 'collect', node: <CollectFeeContainer /> }
+  return { active: 'home', node: <PrincipalHomeContainer /> }
 }

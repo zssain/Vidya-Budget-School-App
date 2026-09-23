@@ -79,21 +79,38 @@ function feeBarStyle(day: string, value: number, i: number): CSSProperties {
   }
 }
 
-export default function PrincipalHomeScreen({ data }: { data: PrincipalHomeData }) {
+// `chrome` (default true) renders the pixel-exact standalone mock (own sidebar +
+// header) used by the fidelity gallery. The real app passes chrome={false}: the
+// shared desktop AppShell owns the sidebar + header, and only the main content
+// column renders here. The content JSX is identical in both modes.
+export default function PrincipalHomeScreen({ data, chrome = true }: { data: PrincipalHomeData; chrome?: boolean }) {
   return (
     <div
-      style={{
-        width: '1440px',
-        height: '1080px',
-        display: 'flex',
-        background: '#F5F7F6',
-        color: '#13233F',
-        fontFamily: "'Geist', 'Noto Sans Devanagari', system-ui, sans-serif",
-        fontSize: '14px',
-        overflow: 'hidden',
-      }}
+      style={
+        chrome
+          ? {
+              width: '1440px',
+              height: '1080px',
+              display: 'flex',
+              background: '#F5F7F6',
+              color: '#13233F',
+              fontFamily: "'Geist', 'Noto Sans Devanagari', system-ui, sans-serif",
+              fontSize: '14px',
+              overflow: 'hidden',
+            }
+          : {
+              display: 'flex',
+              width: '100%',
+              minHeight: '100%',
+              background: '#F5F7F6',
+              color: '#13233F',
+              fontFamily: "'Geist', 'Noto Sans Devanagari', system-ui, sans-serif",
+              fontSize: '14px',
+            }
+      }
     >
       {/* Sidebar */}
+      {chrome && (
       <aside
         style={{
           width: '256px',
@@ -466,6 +483,7 @@ export default function PrincipalHomeScreen({ data }: { data: PrincipalHomeData 
           </div>
         </div>
       </aside>
+      )}
 
       {/* Main column */}
       <div
@@ -477,6 +495,7 @@ export default function PrincipalHomeScreen({ data }: { data: PrincipalHomeData 
         }}
       >
         {/* Header */}
+        {chrome && (
         <header
           style={{
             height: '64px',
@@ -597,6 +616,7 @@ export default function PrincipalHomeScreen({ data }: { data: PrincipalHomeData 
             </button>
           </div>
         </header>
+        )}
 
         {/* Main */}
         <main

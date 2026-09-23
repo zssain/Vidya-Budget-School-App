@@ -369,6 +369,41 @@ pub fn list_classes_logic(conn: &mut Connection) -> CmdResult<Vec<ClassDto>> {
     Ok(rows)
 }
 
+/// Identity of the school + current session, for the desktop app shell (school
+/// name under the logo, header session button, session-switcher read-only
+/// banner) and later for receipt / report-card headers (name, address). Thin.
+#[derive(Debug, Serialize)]
+pub struct SchoolDto {
+    pub name: String,
+    pub address: Option<String>,
+    pub board: Option<String>,
+    pub phone: Option<String>,
+    pub session_label: Option<String>,
+    pub session_read_only: bool,
+}
+
+pub fn get_school_logic(conn: &mut Connection) -> CmdResult<SchoolDto> {
+    let (name, address, board, settings): (String, Option<String>, Option<String>, Option<String>) = conn
+        .query_row("SELECT name, address, board, settings_json FROM school LIMIT 1", [], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
+        })?;
+    let phone = settings
+        .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+        .and_then(|v| v.get("phone").and_then(|p| p.as_str().map(str::to_string)));
+    let session = conn
+        .query_row(
+            "SELECT label, read_only FROM academic_session WHERE is_current=1 LIMIT 1",
+            [],
+            |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)? != 0)),
+        )
+        .optional()?;
+    let (session_label, session_read_only) = match session {
+        Some((label, ro)) => (Some(label), ro),
+        None => (None, false),
+    };
+    Ok(SchoolDto { name, address, board, phone, session_label, session_read_only })
+}
+
 #[derive(Debug, Serialize)]
 pub struct StudentDto {
     pub id: String,

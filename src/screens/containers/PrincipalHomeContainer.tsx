@@ -92,5 +92,5 @@ export default function PrincipalHomeContainer() {
       </div>
     )
   }
-  return <PrincipalHomeScreen data={data} />
+  return <PrincipalHomeScreen data={data} chrome={false} />
 }

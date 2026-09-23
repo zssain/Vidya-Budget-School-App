@@ -51,6 +51,15 @@ export interface ClassDto {
   section: string | null
 }
 
+export interface SchoolDto {
+  name: string
+  address: string | null
+  board: string | null
+  phone: string | null
+  session_label: string | null
+  session_read_only: boolean
+}
+
 export interface StudentDto {
   id: string
   name: string
@@ -238,6 +247,7 @@ export const lock = () => invoke<void>('lock')
 export const switch_user = () => invoke<void>('switch_user')
 export const list_staff = () => invoke<StaffDto[]>('list_staff')
 export const list_classes = () => invoke<ClassDto[]>('list_classes')
+export const get_school = () => invoke<SchoolDto>('get_school')
 export const list_students = (classId?: string) =>
   invoke<StudentDto[]>('list_students', { classId: classId ?? null })
 export const search_students = (query: string) => invoke<StudentDto[]>('search_students', { query })

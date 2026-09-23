@@ -15,6 +15,7 @@
     "switch_user",
     "list_staff",
     "list_classes",
+    "get_school",
     "list_students",
     "search_students",
     "get_student",

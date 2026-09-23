@@ -55,6 +55,7 @@ export default function CollectFeeScreen({
   onRecord,
   onSelectStudent,
   onCommsNotice,
+  chrome = true,
 }: {
   data: CollectFeeData
   initial?: { amount?: string; mode?: Mode; done?: boolean }
@@ -62,8 +63,10 @@ export default function CollectFeeScreen({
   onRecord?: (amountPaise: number, mode: Mode, reference: string) => Promise<string>
   /** Real flow: a search row was clicked (id is carried on the row when wired). */
   onSelectStudent?: (id: string) => void
-  /** Real flow: Print / Share are Phase-7 — show a "coming later" notice. */
+  /** Print / Share receipt actions (Phase 7). */
   onCommsNotice?: () => void
+  /** false → embed inside the shared AppShell (no own sidebar). See PrincipalHomeScreen. */
+  chrome?: boolean
 }) {
   const [state, setState] = useState<CollectFeeState>({
     amount: initial?.amount ?? '1000',
@@ -133,19 +136,33 @@ export default function CollectFeeScreen({
 
   return (
     <div
-      style={{
-        position: 'relative',
-        width: 1440,
-        height: 1080,
-        display: 'flex',
-        background: '#F5F7F6',
-        color: '#13233F',
-        fontFamily: "'Geist', 'Noto Sans Devanagari', system-ui, sans-serif",
-        fontSize: 14,
-        overflow: 'hidden',
-      }}
+      style={
+        chrome
+          ? {
+              position: 'relative',
+              width: 1440,
+              height: 1080,
+              display: 'flex',
+              background: '#F5F7F6',
+              color: '#13233F',
+              fontFamily: "'Geist', 'Noto Sans Devanagari', system-ui, sans-serif",
+              fontSize: 14,
+              overflow: 'hidden',
+            }
+          : {
+              position: 'relative',
+              width: '100%',
+              minHeight: '100%',
+              display: 'flex',
+              background: '#F5F7F6',
+              color: '#13233F',
+              fontFamily: "'Geist', 'Noto Sans Devanagari', system-ui, sans-serif",
+              fontSize: 14,
+            }
+      }
     >
       {/* --- Sidebar (256px navy) --- */}
+      {chrome && (
       <aside
         style={{
           width: 256,
@@ -222,6 +239,7 @@ export default function CollectFeeScreen({
           </div>
         </div>
       </aside>
+      )}
 
       {/* --- Main --- */}
       <div style={{ flexGrow: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
