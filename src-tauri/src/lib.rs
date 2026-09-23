@@ -50,9 +50,11 @@ fn build_ctx(data_dir: std::path::PathBuf) -> RtCtx {
     let key_store: Box<dyn security::keys::KeyStore> =
         Box::new(security::keys::FileKeyStore::new(data_dir.join("db-key")));
 
+    let mut db_key_hex: Option<String> = None;
     let (db, key_missing) = match security::keys::ensure_key(key_store.as_ref(), db_exists) {
         Ok(key) => {
             let hex = security::keys::to_hex(&key);
+            db_key_hex = Some(hex.clone());
             match db::open_encrypted(&db_path, &hex) {
                 Ok(mut conn) => match db::run_migrations(&mut conn) {
                     Ok(_) => (Some(conn), false),
@@ -83,6 +85,7 @@ fn build_ctx(data_dir: std::path::PathBuf) -> RtCtx {
         http: reqwest::Client::new(),
         recovery: Mutex::new(None),
         data_dir,
+        db_key_hex,
         key_missing: Mutex::new(key_missing),
     }
 }
@@ -99,6 +102,20 @@ pub fn run() {
                 .app_data_dir()
                 .unwrap_or_else(|_| std::path::PathBuf::from("."));
             app.manage(build_ctx(data_dir));
+
+            // Start the school server in the background (Server mode, desktop).
+            // Guarded: it returns quietly if there is no school yet.
+            #[cfg(not(target_os = "android"))]
+            {
+                let ctx = app.state::<RtCtx>();
+                if ctx.device_mode == DeviceMode::Server {
+                    if let Some(key_hex) = ctx.db_key_hex.clone() {
+                        let db_path = ctx.db_path();
+                        let handle = app.handle().clone();
+                        tauri::async_runtime::spawn(server::start::run_server(handle, db_path, key_hex));
+                    }
+                }
+            }
             Ok(())
         })
         .invoke_handler(invoke_handler())

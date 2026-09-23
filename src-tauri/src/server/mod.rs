@@ -4,3 +4,4 @@ pub mod cert;
 pub mod invite;
 pub mod net;
 pub mod service;
+pub mod start;

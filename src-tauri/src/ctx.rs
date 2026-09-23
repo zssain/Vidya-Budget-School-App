@@ -35,6 +35,9 @@ pub struct RtCtx {
     pub recovery: Mutex<Option<String>>,
     /// App data directory (DB file, machine-id file fallback).
     pub data_dir: PathBuf,
+    /// The DB key (hex) when available — lets the school server open its own WAL
+    /// connection to the same DB (`None` when the key is missing).
+    pub db_key_hex: Option<String>,
     /// True when the DB key is missing → the UI shows the Recover screen.
     pub key_missing: Mutex<bool>,
 }

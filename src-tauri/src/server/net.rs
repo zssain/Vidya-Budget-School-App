@@ -29,15 +29,25 @@ const MAX_BODY: usize = 5_000_000;
 const RATE_LIMIT: u32 = 30;
 const RATE_WINDOW_SECS: i64 = 10;
 
-/// Shared server state: the DB (its own WAL connection) + a per-device rate map.
+/// Emitted after the server applies ops so screens refresh live (Step 11).
+pub const EVENT_SYNC_CHANGED: &str = "sync://changed";
+
+/// Shared server state: the DB (its own WAL connection) + a per-device rate map +
+/// an optional app handle for live `sync://changed` events.
 pub struct ServerState {
     pub db: Mutex<Connection>,
     limiter: Mutex<HashMap<String, (i64, u32)>>,
+    app: Option<tauri::AppHandle>,
 }
 
 impl ServerState {
     pub fn new(db: Connection) -> Self {
-        Self { db: Mutex::new(db), limiter: Mutex::new(HashMap::new()) }
+        Self { db: Mutex::new(db), limiter: Mutex::new(HashMap::new()), app: None }
+    }
+    /// Attach an app handle so the server emits `sync://changed` after applying ops.
+    pub fn with_app(mut self, app: tauri::AppHandle) -> Self {
+        self.app = Some(app);
+        self
     }
 
     /// 30 requests / 10 s / device (§2). Returns false when over the limit.
@@ -105,9 +115,19 @@ async fn push(State(st): State<Arc<ServerState>>, headers: HeaderMap, Json(req):
     if let Err(e) = auth_and_limit(&st, &headers) {
         return e;
     }
-    let mut conn = st.db.lock().unwrap();
-    match crate::server::service::push(&mut conn, &req.ops, now()) {
-        Ok(resp) => (StatusCode::OK, Json(resp)).into_response(),
+    let result = {
+        let mut conn = st.db.lock().unwrap();
+        crate::server::service::push(&mut conn, &req.ops, now())
+    };
+    match result {
+        Ok(resp) => {
+            // Live-update the local screens after applying ops (Step 11).
+            if let Some(app) = &st.app {
+                use tauri::Emitter;
+                let _ = app.emit(EVENT_SYNC_CHANGED, ());
+            }
+            (StatusCode::OK, Json(resp)).into_response()
+        }
         Err(_) => err(StatusCode::INTERNAL_SERVER_ERROR, "INTERNAL"),
     }
 }

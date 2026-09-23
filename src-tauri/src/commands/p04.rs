@@ -139,7 +139,7 @@ pub struct InviteDto {
 fn server_facts(conn: &Connection) -> (Vec<String>, u16, String) {
     let lan: Vec<String> = crate::kv::get(conn, "server_lan_addrs").ok().flatten().unwrap_or_default();
     let port: u16 = crate::kv::get(conn, "server_port").ok().flatten().unwrap_or(crate::sync::protocol::DEFAULT_PORT);
-    let fp: String = crate::kv::get_raw(conn, "server_fingerprint").ok().flatten().unwrap_or_default();
+    let fp: String = crate::kv::get(conn, "server_fingerprint").ok().flatten().unwrap_or_default();
     (lan, port, fp)
 }
 
