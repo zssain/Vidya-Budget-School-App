@@ -1444,6 +1444,195 @@ pub fn import_students_commit_logic(
     Ok(ImportResultDto { imported, skipped })
 }
 
+// ============================================================= fees ===========
+//
+// Fees overview by class, fee-structure heads CRUD, and the amount-change
+// preview. Structure edits are Principal-only and audited. A head with any
+// allocation can only be deactivated (never hard-deleted). Changing a head's
+// amount updates only UNPAID dues; paid/partly-paid dues never change (§9).
+
+#[derive(Debug, Serialize)]
+pub struct FeeOverviewRow {
+    pub class_id: String,
+    pub class_display: String,
+    pub students_with_dues: i64,
+    pub outstanding_paise: i64,
+}
+
+pub fn fees_overview_logic(conn: &mut Connection, actor_s: &SessionStaff) -> CmdResult<Vec<FeeOverviewRow>> {
+    let actor = actor_from(conn, actor_s)?;
+    require_allow(&actor, Action::ViewFees, &Target::of(TargetKind::Fee))?;
+    // Per-student outstanding = active dues − due-allocations, grouped by class.
+    let mut stmt = conn.prepare(
+        "SELECT c.id, c.display, \
+            COUNT(DISTINCT CASE WHEN bal.outstanding > 0 THEN bal.student_id END), \
+            COALESCE(SUM(CASE WHEN bal.outstanding > 0 THEN bal.outstanding ELSE 0 END),0) \
+         FROM class c \
+         LEFT JOIN enrollment e ON e.class_id=c.id AND e.to_date IS NULL \
+         LEFT JOIN ( \
+            SELECT d.student_id AS student_id, \
+              SUM(d.amount_paise) - COALESCE((SELECT SUM(pa.amount_paise) FROM payment_allocation pa JOIN fee_due d2 ON d2.id=pa.fee_due_id WHERE d2.student_id=d.student_id AND pa.kind='due'),0) AS outstanding \
+            FROM fee_due d WHERE d.cancelled_at IS NULL GROUP BY d.student_id \
+         ) bal ON bal.student_id = e.student_id \
+         GROUP BY c.id ORDER BY c.sort_order",
+    )?;
+    let rows = stmt
+        .query_map([], |r| {
+            Ok(FeeOverviewRow { class_id: r.get(0)?, class_display: r.get(1)?, students_with_dues: r.get(2)?, outstanding_paise: r.get(3)? })
+        })?
+        .collect::<rusqlite::Result<_>>()?;
+    Ok(rows)
+}
+
+#[derive(Debug, Serialize)]
+pub struct FeeHeadDto {
+    pub id: String,
+    pub name: String,
+    pub name_hi: Option<String>,
+    pub amount_paise: i64,
+    pub frequency: String,
+    pub applies_to: String,
+    pub active: bool,
+    pub has_allocations: bool,
+}
+
+pub fn list_fee_heads_logic(conn: &mut Connection, actor_s: &SessionStaff) -> CmdResult<Vec<FeeHeadDto>> {
+    let actor = actor_from(conn, actor_s)?;
+    require_allow(&actor, Action::ViewFees, &Target::of(TargetKind::Fee))?;
+    let mut stmt = conn.prepare(
+        "SELECT h.id, h.name, h.name_hi, h.amount_paise, h.frequency, h.applies_to, h.active, \
+           EXISTS(SELECT 1 FROM fee_due d JOIN payment_allocation pa ON pa.fee_due_id=d.id WHERE d.fee_head_id=h.id) \
+         FROM fee_head h ORDER BY h.name",
+    )?;
+    let rows = stmt
+        .query_map([], |r| {
+            Ok(FeeHeadDto {
+                id: r.get(0)?,
+                name: r.get(1)?,
+                name_hi: r.get(2)?,
+                amount_paise: r.get(3)?,
+                frequency: r.get(4)?,
+                applies_to: r.get(5)?,
+                active: r.get::<_, i64>(6)? != 0,
+                has_allocations: r.get::<_, i64>(7)? != 0,
+            })
+        })?
+        .collect::<rusqlite::Result<_>>()?;
+    Ok(rows)
+}
+
+#[derive(Debug, Deserialize)]
+pub struct FeeHeadInput {
+    pub name: String,
+    pub name_hi: Option<String>,
+    pub amount_paise: i64,
+    pub frequency: String,   // term | month | once
+    pub applies_to: String,  // all | transport | JSON class ids
+}
+
+fn require_principal(actor: &Actor) -> CmdResult<()> {
+    if actor.role == Role::Principal {
+        Ok(())
+    } else {
+        Err(CmdError::forbidden("fee_structure_principal_only"))
+    }
+}
+
+pub fn create_fee_head_logic(conn: &mut Connection, actor_s: &SessionStaff, input: &FeeHeadInput) -> CmdResult<FeeHeadDto> {
+    let actor = actor_from(conn, actor_s)?;
+    require_principal(&actor)?;
+    vidya_core::validation::validate_name(&input.name)?;
+    if input.amount_paise < 0 {
+        return Err(CmdError::validation("amount", "negative"));
+    }
+    if !matches!(input.frequency.as_str(), "term" | "month" | "once") {
+        return Err(CmdError::validation("frequency", "invalid"));
+    }
+    let id = new_id("head");
+    conn.execute(
+        "INSERT INTO fee_head(id,name,name_hi,amount_paise,frequency,applies_to,active) VALUES (?1,?2,?3,?4,?5,?6,1)",
+        params![id, input.name, input.name_hi, input.amount_paise, input.frequency, input.applies_to],
+    )?;
+    audit_action(conn, AuditEntry {
+        at: now_iso(),
+        staff_id: Some(actor_s.id.clone()),
+        action: "create_fee_head".into(),
+        table: Some("fee_head".into()),
+        record_id: Some(id.clone()),
+        after_json: Some(serde_json::json!({ "name": input.name, "amount_paise": input.amount_paise }).to_string()),
+        ..Default::default()
+    })?;
+    list_fee_heads_logic(conn, actor_s)?.into_iter().find(|h| h.id == id).ok_or_else(CmdError::not_found)
+}
+
+#[derive(Debug, Serialize)]
+pub struct FeeHeadChangePreview {
+    pub affected_dues: i64,
+    pub delta_paise: i64,
+}
+
+/// How many UNPAID dues change, and by how much in total, if this head's amount
+/// becomes `new_amount`. Paid/partly-paid dues are excluded (never change).
+pub fn preview_fee_head_change_logic(conn: &mut Connection, actor_s: &SessionStaff, id: &str, new_amount: i64) -> CmdResult<FeeHeadChangePreview> {
+    let actor = actor_from(conn, actor_s)?;
+    require_principal(&actor)?;
+    let (count, total_now): (i64, i64) = conn.query_row(
+        "SELECT COUNT(*), COALESCE(SUM(amount_paise),0) FROM fee_due d \
+         WHERE d.fee_head_id=?1 AND d.cancelled_at IS NULL \
+           AND NOT EXISTS(SELECT 1 FROM payment_allocation pa WHERE pa.fee_due_id=d.id)",
+        params![id],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )?;
+    Ok(FeeHeadChangePreview { affected_dues: count, delta_paise: count * new_amount - total_now })
+}
+
+pub fn update_fee_head_logic(conn: &mut Connection, actor_s: &SessionStaff, id: &str, input: &FeeHeadInput) -> CmdResult<FeeHeadDto> {
+    let actor = actor_from(conn, actor_s)?;
+    require_principal(&actor)?;
+    vidya_core::validation::validate_name(&input.name)?;
+    if input.amount_paise < 0 {
+        return Err(CmdError::validation("amount", "negative"));
+    }
+    let now = now_iso();
+    let tx = conn.transaction()?;
+    tx.execute(
+        "UPDATE fee_head SET name=?1, name_hi=?2, amount_paise=?3, frequency=?4, applies_to=?5 WHERE id=?6",
+        params![input.name, input.name_hi, input.amount_paise, input.frequency, input.applies_to, id],
+    )?;
+    // Apply the new amount to UNPAID dues only; paid/partly-paid dues never change.
+    let affected = tx.execute(
+        "UPDATE fee_due SET amount_paise=?1, updated_at=?2 WHERE fee_head_id=?3 AND cancelled_at IS NULL \
+           AND NOT EXISTS(SELECT 1 FROM payment_allocation pa WHERE pa.fee_due_id=fee_due.id)",
+        params![input.amount_paise, now, id],
+    )?;
+    crate::security::audit::append(&tx, &AuditEntry {
+        at: now.clone(),
+        staff_id: Some(actor_s.id.clone()),
+        action: "update_fee_head".into(),
+        table: Some("fee_head".into()),
+        record_id: Some(id.to_string()),
+        after_json: Some(serde_json::json!({ "amount_paise": input.amount_paise, "dues_updated": affected }).to_string()),
+        ..Default::default()
+    })?;
+    tx.commit()?;
+    list_fee_heads_logic(conn, actor_s)?.into_iter().find(|h| h.id == id).ok_or_else(CmdError::not_found)
+}
+
+pub fn deactivate_fee_head_logic(conn: &mut Connection, actor_s: &SessionStaff, id: &str) -> CmdResult<()> {
+    let actor = actor_from(conn, actor_s)?;
+    require_principal(&actor)?;
+    conn.execute("UPDATE fee_head SET active=0 WHERE id=?1", params![id])?;
+    audit_action(conn, AuditEntry {
+        at: now_iso(),
+        staff_id: Some(actor_s.id.clone()),
+        action: "deactivate_fee_head".into(),
+        table: Some("fee_head".into()),
+        record_id: Some(id.to_string()),
+        ..Default::default()
+    })?;
+    Ok(())
+}
+
 // ============================================================ attendance ======
 
 #[derive(Debug, Serialize)]
@@ -2067,6 +2256,14 @@ mod tests {
         SessionStaff { id: "stf-suresh".into(), name: "Suresh Patel".into(), role: "accountant".into() }
     }
 
+    fn principal() -> SessionStaff {
+        SessionStaff { id: "stf-priya".into(), name: "Priya Sharma".into(), role: "principal".into() }
+    }
+
+    fn head_input(name: &str, amount: i64) -> FeeHeadInput {
+        FeeHeadInput { name: name.into(), name_hi: None, amount_paise: amount, frequency: "once".into(), applies_to: "all".into() }
+    }
+
     #[test]
     fn kavya_dues_total_is_3100() {
         let mut c = seeded();
@@ -2320,5 +2517,38 @@ mod tests {
             .unwrap();
         assert_eq!(with_dues, 2);
         std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn fee_head_amount_change_updates_unpaid_only() {
+        let mut c = seeded();
+        let head = create_fee_head_logic(&mut c, &principal(), &head_input("Lab fee", 50_000)).unwrap();
+        let cid = list_classes_logic(&mut c).unwrap()[0].id.clone();
+        let stu = create_student_logic(&mut c, &accountant(), None, DeviceMode::Server, "2026-09-24", &admission_input(cid, "Lab Kid")).unwrap();
+        let lab_due: String = c
+            .query_row("SELECT id FROM fee_due WHERE student_id=?1 AND fee_head_id=?2", params![stu.id, head.id], |r| r.get(0))
+            .unwrap();
+
+        // Preview + apply the new amount → the unpaid due follows it.
+        let preview = preview_fee_head_change_logic(&mut c, &principal(), &head.id, 60_000).unwrap();
+        assert!(preview.affected_dues >= 1);
+        update_fee_head_logic(&mut c, &principal(), &head.id, &head_input("Lab fee", 60_000)).unwrap();
+        let amt: i64 = c.query_row("SELECT amount_paise FROM fee_due WHERE id=?1", params![lab_due], |r| r.get(0)).unwrap();
+        assert_eq!(amt, 60_000, "unpaid due follows the head amount");
+
+        // Pay everything, then change again → the now-paid due never changes.
+        let total = list_fee_dues_logic(&mut c, &stu.id).unwrap().total_due_paise;
+        record_payment_logic(&mut c, &accountant(), None, DeviceMode::Server, &PaymentInput { student_id: stu.id.clone(), amount_paise: total, mode: "cash".into(), reference: None }).unwrap();
+        update_fee_head_logic(&mut c, &principal(), &head.id, &head_input("Lab fee", 70_000)).unwrap();
+        let amt2: i64 = c.query_row("SELECT amount_paise FROM fee_due WHERE id=?1", params![lab_due], |r| r.get(0)).unwrap();
+        assert_eq!(amt2, 60_000, "a paid due never changes when the head amount changes");
+
+        // Deactivate (never hard-delete a head).
+        deactivate_fee_head_logic(&mut c, &principal(), &head.id).unwrap();
+        let active: i64 = c.query_row("SELECT active FROM fee_head WHERE id=?1", params![head.id], |r| r.get(0)).unwrap();
+        assert_eq!(active, 0);
+
+        // Accountants cannot edit the fee structure.
+        assert!(create_fee_head_logic(&mut c, &accountant(), &head_input("X", 1)).is_err());
     }
 }

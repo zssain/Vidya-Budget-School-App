@@ -53,6 +53,12 @@ pub const COMMANDS: &[&str] = &[
     "students_csv_template",
     "import_students_dry_run",
     "import_students_commit",
+    "fees_overview",
+    "list_fee_heads",
+    "create_fee_head",
+    "preview_fee_head_change",
+    "update_fee_head",
+    "deactivate_fee_head",
     "get_attendance_sheet",
     "save_attendance_draft",
     "submit_attendance",
@@ -271,6 +277,44 @@ pub fn import_students_commit(state: State<RtCtx>, path: String) -> CmdResult<Im
     let actor = state.require_session()?;
     let mode = state.device_mode;
     state.with_db(|conn| import_students_commit_logic(conn, &actor, mode, &today(), &path))
+}
+
+// ----------------------------------------------------------- fee structure ----
+
+#[tauri::command]
+pub fn fees_overview(state: State<RtCtx>) -> CmdResult<Vec<FeeOverviewRow>> {
+    let actor = state.require_session()?;
+    state.with_db(|conn| fees_overview_logic(conn, &actor))
+}
+
+#[tauri::command]
+pub fn list_fee_heads(state: State<RtCtx>) -> CmdResult<Vec<FeeHeadDto>> {
+    let actor = state.require_session()?;
+    state.with_db(|conn| list_fee_heads_logic(conn, &actor))
+}
+
+#[tauri::command]
+pub fn create_fee_head(state: State<RtCtx>, input: FeeHeadInput) -> CmdResult<FeeHeadDto> {
+    let actor = state.require_session()?;
+    state.with_db(|conn| create_fee_head_logic(conn, &actor, &input))
+}
+
+#[tauri::command]
+pub fn preview_fee_head_change(state: State<RtCtx>, id: String, new_amount: i64) -> CmdResult<FeeHeadChangePreview> {
+    let actor = state.require_session()?;
+    state.with_db(|conn| preview_fee_head_change_logic(conn, &actor, &id, new_amount))
+}
+
+#[tauri::command]
+pub fn update_fee_head(state: State<RtCtx>, id: String, input: FeeHeadInput) -> CmdResult<FeeHeadDto> {
+    let actor = state.require_session()?;
+    state.with_db(|conn| update_fee_head_logic(conn, &actor, &id, &input))
+}
+
+#[tauri::command]
+pub fn deactivate_fee_head(state: State<RtCtx>, id: String) -> CmdResult<()> {
+    let actor = state.require_session()?;
+    state.with_db(|conn| deactivate_fee_head_logic(conn, &actor, &id))
 }
 
 // ----------------------------------------------------------- attendance ------

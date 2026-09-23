@@ -174,6 +174,37 @@ export interface FeeDuesDto {
   lines: FeeLineDto[]
 }
 
+export interface FeeOverviewRow {
+  class_id: string
+  class_display: string
+  students_with_dues: number
+  outstanding_paise: number
+}
+
+export interface FeeHeadDto {
+  id: string
+  name: string
+  name_hi: string | null
+  amount_paise: number
+  frequency: string
+  applies_to: string
+  active: boolean
+  has_allocations: boolean
+}
+
+export interface FeeHeadInput {
+  name: string
+  name_hi?: string | null
+  amount_paise: number
+  frequency: string
+  applies_to: string
+}
+
+export interface FeeHeadChangePreview {
+  affected_dues: number
+  delta_paise: number
+}
+
 export interface PaymentDto {
   id: string
   receipt_no: string
@@ -373,6 +404,14 @@ export const submit_attendance = (classId: string, date: string, marks: MarkInpu
   invoke<void>('submit_attendance', { classId, date, marks })
 export const list_fee_dues = (studentId: string) =>
   invoke<FeeDuesDto>('list_fee_dues', { studentId })
+export const fees_overview = () => invoke<FeeOverviewRow[]>('fees_overview')
+export const list_fee_heads = () => invoke<FeeHeadDto[]>('list_fee_heads')
+export const create_fee_head = (input: FeeHeadInput) => invoke<FeeHeadDto>('create_fee_head', { input })
+export const preview_fee_head_change = (id: string, newAmount: number) =>
+  invoke<FeeHeadChangePreview>('preview_fee_head_change', { id, newAmount })
+export const update_fee_head = (id: string, input: FeeHeadInput) =>
+  invoke<FeeHeadDto>('update_fee_head', { id, input })
+export const deactivate_fee_head = (id: string) => invoke<void>('deactivate_fee_head', { id })
 export const record_payment = (input: PaymentInput) => invoke<PaymentDto>('record_payment', { input })
 export const list_payments = (studentId?: string) =>
   invoke<PaymentDto[]>('list_payments', { studentId: studentId ?? null })
