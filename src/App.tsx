@@ -8,6 +8,9 @@ import WelcomeScreen from '@/screens/shared/WelcomeScreen'
 import SetupWizard from '@/screens/shared/SetupWizard'
 import PinUnlockScreen from '@/screens/shared/PinUnlockScreen'
 import ApprovalsScreen from '@/screens/desktop/ApprovalsScreen'
+import StaffAccessScreen from '@/screens/desktop/StaffAccessScreen'
+import ConflictReviewScreen from '@/screens/desktop/ConflictReviewScreen'
+import SyncDevicesScreen from '@/screens/desktop/SyncDevicesScreen'
 import PrincipalHomeContainer from '@/screens/containers/PrincipalHomeContainer'
 import CollectFeeContainer from '@/screens/containers/CollectFeeContainer'
 import AttendanceContainer from '@/screens/containers/AttendanceContainer'
@@ -99,6 +102,9 @@ export default function App() {
       // Unlocked: route within the app by hash path. Wired containers use real
       // data; screens not yet wired fall back to fixtures (flagged in handoff).
       if (matchRoute('/principal/approvals', base)) return <ApprovalsScreen />
+      if (base === '/principal/staff') return <StaffAccessScreen />
+      if (base === '/principal/conflicts') return <ConflictReviewScreen />
+      if (base === '/sync') return <SyncDevicesScreen />
       if (base === '/accountant/collect') return <CollectFeeContainer />
       if (base === '/teacher/home') return <TeacherHomeScreen data={teacherHomeFixture} />
       {
