@@ -21,6 +21,7 @@ import CsvImportScreen from '@/screens/desktop/CsvImportScreen'
 import FeesScreen from '@/screens/desktop/FeesScreen'
 import ReceiptsScreen from '@/screens/desktop/ReceiptsScreen'
 import DayBookScreen from '@/screens/desktop/DayBookScreen'
+import AttendanceRegisterScreen from '@/screens/desktop/AttendanceRegisterScreen'
 import ReceiptDoc from '@/screens/print/ReceiptDoc'
 import DayBookDoc from '@/screens/print/DayBookDoc'
 import PrincipalHomeContainer from '@/screens/containers/PrincipalHomeContainer'
@@ -162,6 +163,7 @@ function desktopRoute(base: string, role: Role): { active: string; node: ReactNo
   }
   if (base === '/principal/students' || base === '/accountant/students')
     return { active: 'students', node: <StudentsScreen role={role} /> }
+  if (base === '/principal/attendance') return { active: 'attendance', node: <AttendanceRegisterScreen /> }
   if (base === '/principal/fees') return { active: 'fees', node: <FeesScreen /> }
   if (base === '/principal/receipts' || base === '/accountant/receipts')
     return { active: 'receipts', node: <ReceiptsScreen role={role} /> }

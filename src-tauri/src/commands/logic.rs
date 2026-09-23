@@ -2073,6 +2073,160 @@ pub fn submit_attendance_logic(conn: &mut Connection, actor_s: &SessionStaff, cl
     upsert_sheet_and_marks(conn, class_id, date, marks, true, actor_s)
 }
 
+// ---- Month view + Principal correction -------------------------------------
+
+#[derive(Debug, Serialize)]
+pub struct MonthStudent {
+    pub id: String,
+    pub name: String,
+    pub roll_no: Option<i64>,
+    /// One entry per day in `days` (P|A|L|null).
+    pub marks: Vec<Option<String>>,
+    pub present: i64,
+    pub absent: i64,
+    pub leave: i64,
+    pub pct_tenths: i64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AttendanceMonthDto {
+    pub class_id: String,
+    pub class_display: String,
+    pub month: String,
+    pub days: Vec<String>,
+    pub students: Vec<MonthStudent>,
+    pub day_present: Vec<i64>,
+    pub day_marked: Vec<i64>,
+}
+
+pub fn attendance_month_logic(conn: &mut Connection, actor_s: &SessionStaff, class_id: &str, month: &str) -> CmdResult<AttendanceMonthDto> {
+    let actor = actor_from(conn, actor_s)?;
+    require_allow(&actor, Action::ViewAttendance, &Target { kind: TargetKind::Attendance, class_id: Some(class_id.to_string()), ..Default::default() })?;
+    let class_display: String = conn
+        .query_row("SELECT display FROM class WHERE id=?1", params![class_id], |r| r.get(0))
+        .optional()?
+        .unwrap_or_default();
+    let like = format!("{month}%");
+
+    // Submitted sheets in the month → the day columns.
+    let mut days: Vec<String> = {
+        let mut stmt = conn.prepare("SELECT date FROM attendance_sheet WHERE class_id=?1 AND status='submitted' AND date LIKE ?2 ORDER BY date")?;
+        let v: Vec<String> = stmt.query_map(params![class_id, like], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<_>>()?;
+        v
+    };
+    days.dedup();
+    let day_index: std::collections::HashMap<String, usize> = days.iter().enumerate().map(|(i, d)| (d.clone(), i)).collect();
+
+    // (student_id, date) → mark for the month's submitted sheets.
+    let mut marks_map: std::collections::HashMap<(String, String), String> = std::collections::HashMap::new();
+    {
+        let mut stmt = conn.prepare(
+            "SELECT am.student_id, sh.date, am.mark FROM attendance_sheet sh JOIN attendance_mark am ON am.sheet_id=sh.id \
+             WHERE sh.class_id=?1 AND sh.status='submitted' AND sh.date LIKE ?2",
+        )?;
+        let rows = stmt.query_map(params![class_id, like], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?)))?;
+        for row in rows {
+            let (sid, date, mark) = row?;
+            marks_map.insert((sid, date), mark);
+        }
+    }
+
+    let mut day_present = vec![0i64; days.len()];
+    let mut day_marked = vec![0i64; days.len()];
+
+    let mut sstmt = conn.prepare(
+        "SELECT s.id, s.name, e.roll_no FROM enrollment e JOIN student s ON s.id=e.student_id \
+         WHERE e.class_id=?1 AND e.to_date IS NULL ORDER BY e.roll_no, s.name",
+    )?;
+    let student_rows: Vec<(String, String, Option<i64>)> = sstmt
+        .query_map(params![class_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+        .collect::<rusqlite::Result<_>>()?;
+
+    let mut students = Vec::new();
+    for (id, name, roll_no) in student_rows {
+        let mut row_marks: Vec<Option<String>> = vec![None; days.len()];
+        let (mut p, mut a, mut l) = (0i64, 0i64, 0i64);
+        for (day, di) in &day_index {
+            if let Some(m) = marks_map.get(&(id.clone(), day.clone())) {
+                row_marks[*di] = Some(m.clone());
+                day_marked[*di] += 1;
+                match m.as_str() {
+                    "P" => { p += 1; day_present[*di] += 1; }
+                    "A" => a += 1,
+                    "L" => l += 1,
+                    _ => {}
+                }
+            }
+        }
+        let pct = vidya_core::attendance::percent_present(p as u32, a as u32, l as u32) as i64;
+        students.push(MonthStudent { id, name, roll_no, marks: row_marks, present: p, absent: a, leave: l, pct_tenths: pct });
+    }
+
+    Ok(AttendanceMonthDto { class_id: class_id.to_string(), class_display, month: month.to_string(), days, students, day_present, day_marked })
+}
+
+/// Principal direct correction of one mark on a (submitted) sheet, audited with a
+/// reason (§5 EditSubmittedAttendance). Teachers must go through a request.
+pub fn correct_attendance_mark_logic(
+    conn: &mut Connection,
+    actor_s: &SessionStaff,
+    device_mode: DeviceMode,
+    class_id: &str,
+    date: &str,
+    student_id: &str,
+    mark: &str,
+    reason: &str,
+) -> CmdResult<()> {
+    let actor = actor_from(conn, actor_s)?;
+    require_allow(&actor, Action::EditSubmittedAttendance, &Target { kind: TargetKind::Attendance, class_id: Some(class_id.to_string()), is_locked: true, ..Default::default() })?;
+    if !matches!(mark, "P" | "A" | "L") {
+        return Err(CmdError::validation("mark", "invalid"));
+    }
+    let sheet_id: String = conn
+        .query_row("SELECT id FROM attendance_sheet WHERE class_id=?1 AND date=?2", params![class_id, date], |r| r.get(0))
+        .optional()?
+        .ok_or_else(CmdError::not_found)?;
+    let now = now_iso();
+    let ctx = WriteCtx { mode: device_mode };
+    let sid = sheet_id.clone();
+    let stu = student_id.to_string();
+    let mk = mark.to_string();
+    let reason_s = reason.to_string();
+    let cid = class_id.to_string();
+    with_write(conn, &ctx, move |tx| {
+        tx.execute(
+            "INSERT INTO attendance_mark(id,sheet_id,student_id,mark) VALUES (?1,?2,?3,?4) \
+             ON CONFLICT(sheet_id,student_id) DO UPDATE SET mark=excluded.mark",
+            params![new_id("am"), sid, stu, mk],
+        )?;
+        let audit = AuditEntry {
+            at: now.clone(),
+            staff_id: Some(actor_s.id.clone()),
+            action: "correct_attendance".into(),
+            table: Some("attendance_mark".into()),
+            record_id: Some(sid.clone()),
+            reason: Some(reason_s.clone()),
+            after_json: Some(serde_json::json!({ "student_id": stu, "mark": mk }).to_string()),
+            ..Default::default()
+        };
+        let op = Op {
+            op_id: new_id("op"),
+            hlc: now.clone(),
+            device_id: String::new(),
+            staff_id: actor_s.id.clone(),
+            audience: format!("class:{cid}"),
+            table: "attendance_mark".into(),
+            record_id: sid.clone(),
+            kind: "update".into(),
+            payload: "{}".into(),
+            base_version: None,
+            server_epoch: 1,
+        };
+        Ok(Effect { value: (), audit, op })
+    })?;
+    Ok(())
+}
+
 // ================================================================ fees ========
 
 #[derive(Debug, Serialize)]
@@ -2898,5 +3052,30 @@ mod tests {
         let rows: i64 = c.query_row("SELECT COUNT(*) FROM reversal WHERE payment_id=?1", params![pay.id], |r| r.get(0)).unwrap();
         assert_eq!(rows, 1);
         assert!(get_receipt_logic(&mut c, &accountant(), &pay.id).unwrap().reversed);
+    }
+
+    #[test]
+    fn attendance_month_totals_and_principal_correction() {
+        let mut c = seeded();
+        let (cid, date): (String, String) = c
+            .query_row("SELECT class_id, date FROM attendance_sheet WHERE status='submitted' ORDER BY date LIMIT 1", [], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap();
+        let month = date[0..7].to_string();
+        let m = attendance_month_logic(&mut c, &principal(), &cid, &month).unwrap();
+        assert!(!m.days.is_empty(), "the month has submitted days");
+        assert!(!m.students.is_empty());
+        // Principal directly corrects one mark (audited); the mark changes.
+        let stu = m.students[0].id.clone();
+        correct_attendance_mark_logic(&mut c, &principal(), DeviceMode::Server, &cid, &date, &stu, "A", "Data entry error").unwrap();
+        let mark: String = c
+            .query_row(
+                "SELECT am.mark FROM attendance_mark am JOIN attendance_sheet sh ON sh.id=am.sheet_id WHERE sh.class_id=?1 AND sh.date=?2 AND am.student_id=?3",
+                params![cid, date, stu],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(mark, "A");
+        // An accountant (no attendance rights) cannot correct a submitted sheet.
+        assert!(correct_attendance_mark_logic(&mut c, &accountant(), DeviceMode::Server, &cid, &date, &stu, "P", "x").is_err());
     }
 }

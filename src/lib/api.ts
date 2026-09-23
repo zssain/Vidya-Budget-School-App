@@ -289,6 +289,26 @@ export interface AttendanceSheetDto {
   rows: AttendanceRowDto[]
 }
 
+export interface MonthStudent {
+  id: string
+  name: string
+  roll_no: number | null
+  marks: (string | null)[]
+  present: number
+  absent: number
+  leave: number
+  pct_tenths: number
+}
+export interface AttendanceMonthDto {
+  class_id: string
+  class_display: string
+  month: string
+  days: string[]
+  students: MonthStudent[]
+  day_present: number[]
+  day_marked: number[]
+}
+
 export interface RequestDto {
   id: string
   kind: string
@@ -463,6 +483,10 @@ export const save_attendance_draft = (classId: string, date: string, marks: Mark
   invoke<void>('save_attendance_draft', { classId, date, marks })
 export const submit_attendance = (classId: string, date: string, marks: MarkInput[]) =>
   invoke<void>('submit_attendance', { classId, date, marks })
+export const attendance_month = (classId: string, month: string) =>
+  invoke<AttendanceMonthDto>('attendance_month', { classId, month })
+export const correct_attendance = (classId: string, date: string, studentId: string, mark: string, reason: string) =>
+  invoke<void>('correct_attendance', { classId, date, studentId, mark, reason })
 export const list_fee_dues = (studentId: string) =>
   invoke<FeeDuesDto>('list_fee_dues', { studentId })
 export const fees_overview = () => invoke<FeeOverviewRow[]>('fees_overview')

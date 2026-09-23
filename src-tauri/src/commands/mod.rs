@@ -67,6 +67,8 @@ pub const COMMANDS: &[&str] = &[
     "get_attendance_sheet",
     "save_attendance_draft",
     "submit_attendance",
+    "attendance_month",
+    "correct_attendance",
     "list_fee_dues",
     "record_payment",
     "list_payments",
@@ -375,6 +377,19 @@ pub fn save_attendance_draft(state: State<RtCtx>, class_id: String, date: String
 pub fn submit_attendance(state: State<RtCtx>, class_id: String, date: String, marks: Vec<MarkInput>) -> CmdResult<()> {
     let actor = state.require_session()?;
     state.with_db(|conn| submit_attendance_logic(conn, &actor, &class_id, &date, &marks))
+}
+
+#[tauri::command]
+pub fn attendance_month(state: State<RtCtx>, class_id: String, month: String) -> CmdResult<AttendanceMonthDto> {
+    let actor = state.require_session()?;
+    state.with_db(|conn| attendance_month_logic(conn, &actor, &class_id, &month))
+}
+
+#[tauri::command]
+pub fn correct_attendance(state: State<RtCtx>, class_id: String, date: String, student_id: String, mark: String, reason: String) -> CmdResult<()> {
+    let actor = state.require_session()?;
+    let mode = state.device_mode;
+    state.with_db(|conn| correct_attendance_mark_logic(conn, &actor, mode, &class_id, &date, &student_id, &mark, &reason))
 }
 
 // ----------------------------------------------------------------- fees ------

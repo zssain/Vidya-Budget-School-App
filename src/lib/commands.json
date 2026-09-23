@@ -43,6 +43,8 @@
     "get_attendance_sheet",
     "save_attendance_draft",
     "submit_attendance",
+    "attendance_month",
+    "correct_attendance",
     "list_fee_dues",
     "record_payment",
     "list_payments",
