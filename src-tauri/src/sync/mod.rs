@@ -5,4 +5,5 @@ pub mod engine;
 pub mod mdns;
 pub mod protocol;
 pub mod scope;
+pub mod seal;
 pub mod transport;

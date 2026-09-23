@@ -9,6 +9,7 @@ use std::path::Path;
 pub const MIGRATIONS: &[(i64, &str)] = &[
     (1, include_str!("migrations/0001_init.sql")),
     (2, include_str!("migrations/0002_p03.sql")),
+    (3, include_str!("migrations/0003_p05.sql")),
 ];
 
 /// Current UTC time as an RFC-3339 string (src-tauri may read the clock).

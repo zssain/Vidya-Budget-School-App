@@ -162,14 +162,22 @@ pub fn join(conn: &mut Connection, req: &JoinReq, now: time::OffsetDateTime) -> 
     let device_id = format!("dev-{}", &sha256_hex(&rand_bytes(16))[..16]);
     let token = sha256_hex(&rand_bytes(32));
     let token_hash = sha256_hex(token.as_bytes());
+    // The per-device session key (P05 Step 2). Generated here and KEPT server-side
+    // (migration 0003) so the server can seal/unseal relay traffic to this device;
+    // it is also returned once in JoinResp for the device to keep.
+    let session_key = {
+        use base64::engine::general_purpose::STANDARD;
+        use base64::Engine;
+        STANDARD.encode(rand_bytes(32))
+    };
     let series = next_series(conn).map_err(|_| JoinError::NoSchool)?;
     let lease = iso_in(now, time::Duration::days(LEASE_DAYS));
 
     let tx = conn.transaction().map_err(|_| JoinError::NoSchool)?;
     tx.execute(
-        "INSERT INTO device(id,staff_id,platform,name,token_hash,receipt_series,admission_series,last_seen_at,lease_expires_at,needs_rejoin) \
-         VALUES (?1,?2,?3,?4,?5,?6,?6,?7,?8,0)",
-        params![device_id, staff_id, req.platform, req.device_name, token_hash, series, now_iso_s, lease],
+        "INSERT INTO device(id,staff_id,platform,name,token_hash,session_key,receipt_series,admission_series,last_seen_at,lease_expires_at,needs_rejoin) \
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?7,?8,?9,0)",
+        params![device_id, staff_id, req.platform, req.device_name, token_hash, session_key, series, now_iso_s, lease],
     ).map_err(|_| JoinError::NoSchool)?;
     tx.execute("UPDATE invite SET used_at=?1 WHERE id=?2", params![now_iso_s, invite_id]).map_err(|_| JoinError::NoSchool)?;
     // Invited staff becomes active on first join.
@@ -191,11 +199,7 @@ pub fn join(conn: &mut Connection, req: &JoinReq, now: time::OffsetDateTime) -> 
         receipt_series: series.clone(),
         admission_series: series,
         audience_keys: audience_keys_for(conn, &staff_id).unwrap_or_default(),
-        session_key: {
-            use base64::engine::general_purpose::STANDARD;
-            use base64::Engine;
-            STANDARD.encode(rand_bytes(32))
-        },
+        session_key,
         school: SchoolLite { id: school.school_id, name: school.school_name },
         lease_expires_at: lease,
         bootstrap_cursor,
