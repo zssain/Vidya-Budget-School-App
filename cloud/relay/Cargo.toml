@@ -1,0 +1,37 @@
+# Vidya relay (prompts/P05 Step 1). A SEPARATE binary — NOT a member of the app
+# workspace, so it never ships inside the desktop/Android apps. It forwards sealed
+# device requests over ONE outbound WebSocket per school. Stateless: no database,
+# no disk writes except rotated logs. It can neither read nor alter school data.
+[package]
+name = "vidya-relay"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# Standalone workspace so `cargo` here never touches the app workspace.
+[workspace]
+
+[[bin]]
+name = "vidya-relay"
+path = "src/main.rs"
+
+[dependencies]
+# axum with `ws` for the school tunnel + HTTP for the device side (Step 1).
+axum = { version = "0.7", features = ["ws"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "sync", "signal"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# Verify each tunnel's relay_secret = HMAC-SHA256(shared_key, school_id) — the same
+# recipe cloud/licence uses, so the relay never calls the licence service (stateless).
+hmac = "0.12"
+sha2 = "0.10"
+base64 = "0.22"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "std"] }
+
+# Test-only: a fake school (WS client) + a device HTTP client to exercise forwarding.
+# Never compiled into the relay binary.
+[dev-dependencies]
+tokio-tungstenite = "0.24"
+futures-util = "0.3"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
