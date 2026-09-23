@@ -1,18 +1,29 @@
 //! # vidya-core
 //!
-//! Pure-Rust business rules for Vidya — no IO, no async, no database
-//! (see `docs/00-SYSTEM-CONTEXT.md` §9). The UI and sync layers never decide
-//! business rules; they call into this crate and the school server re-checks
-//! every change here.
-//!
-//! Phase 1 is a placeholder (fresh-start path): the real modules (money, fees,
-//! grades, permissions, attendance, marks, requests, conflicts, hlc, …) are
-//! built in Phase 2.
+//! Pure-Rust business rules for Vidya — no IO, no async, no database, no clock
+//! reads (time is passed in), no randomness (ids passed in). See
+//! `docs/00-SYSTEM-CONTEXT.md` §9 and `prompts/P02`.
 
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn crate_compiles() {
-        assert_eq!(2 + 2, 4);
-    }
-}
+pub mod errors;
+pub mod money;
+pub mod types;
+
+pub mod admissions;
+pub mod attendance;
+pub mod conflicts;
+pub mod csv;
+pub mod epoch;
+pub mod fees;
+pub mod grades;
+pub mod hlc;
+pub mod lease;
+pub mod licence;
+pub mod marks;
+pub mod permissions;
+pub mod receipts;
+pub mod requests;
+pub mod validation;
+pub mod words;
+
+pub use errors::{CoreError, CoreResult};
+pub use money::Paise;

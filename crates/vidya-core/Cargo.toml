@@ -4,4 +4,13 @@ version = "0.1.0"
 edition = "2021"
 description = "Vidya business rules — pure Rust, no IO, no async, no database."
 
+# vidya-core may depend ONLY on these (prompts/P02 Step 1).
 [dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "1"
+time = { version = "0.3", features = ["macros", "parsing", "formatting"] }
+uuid = { version = "1", features = ["serde"] }
+sha2 = "0.10"
+base64 = "0.22"
+ed25519-dalek = "2"
