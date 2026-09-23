@@ -778,7 +778,7 @@ pub fn check_duplicate_students_logic(
         ors.push("s.guardian_mobile = ?".into());
         args.push(Value::Text(m.to_string()));
     }
-    let first = name.trim().split_whitespace().next().unwrap_or("");
+    let first = name.split_whitespace().next().unwrap_or("");
     if let Some(d) = dob.filter(|s| !s.is_empty()) {
         if !first.is_empty() {
             ors.push("(s.dob = ? AND s.rowid IN (SELECT rowid FROM student_fts WHERE student_fts MATCH ?))".into());
@@ -978,6 +978,7 @@ pub fn get_student_profile_logic(conn: &mut Connection, today: &str, id: &str) -
 
 // ---- Transfer section + Mark as left ---------------------------------------
 
+#[allow(clippy::too_many_arguments)]
 pub fn transfer_student_logic(
     conn: &mut Connection,
     actor_s: &SessionStaff,
@@ -1291,7 +1292,7 @@ fn read_import_file(path: &str) -> CmdResult<Vec<Vec<String>>> {
 
 fn parse_import_rows(conn: &Connection, records: &[Vec<String>]) -> (Vec<ParsedRow>, Option<String>) {
     let classes = class_display_map(conn).unwrap_or_default();
-    let data = if records.is_empty() { &records[..] } else { &records[1..] };
+    let data = records.get(1..).unwrap_or(&[]); // skip the header row
     if data.len() > CSV_MAX_ROWS {
         return (Vec::new(), Some("too_many_rows".into()));
     }
@@ -2167,6 +2168,7 @@ pub fn attendance_month_logic(conn: &mut Connection, actor_s: &SessionStaff, cla
 
 /// Principal direct correction of one mark on a (submitted) sheet, audited with a
 /// reason (§5 EditSubmittedAttendance). Teachers must go through a request.
+#[allow(clippy::too_many_arguments)]
 pub fn correct_attendance_mark_logic(
     conn: &mut Connection,
     actor_s: &SessionStaff,
