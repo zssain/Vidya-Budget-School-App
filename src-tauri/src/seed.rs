@@ -53,8 +53,53 @@ pub fn seed_demo_school(conn: &mut Connection, now: OffsetDateTime) -> rusqlite:
     subjects(&tx)?;
     let assigned = students_and_attendance(&tx, &ctx)?;
     fees_and_payments(&tx, &ctx, &assigned)?;
+    academics(&tx)?;
     requests(&tx, &ctx)?;
     tx.commit()?;
+    Ok(())
+}
+
+/// Default grade scale + one demo exam (VI-B Maths) so the exams / marks / report
+/// card / grade-scale screens have data. Additive; touches only academics tables.
+fn academics(tx: &rusqlite::Transaction) -> rusqlite::Result<()> {
+    tx.execute("INSERT INTO grade_scale(id,name,is_default) VALUES ('gs-default','Default',1)", [])?;
+    for b in vidya_core::grades::default_scale() {
+        tx.execute(
+            "INSERT INTO grade_band(id,scale_id,min_pct,max_pct,grade,grade_point) VALUES (?1,'gs-default',?2,?3,?4,?5)",
+            params![format!("gb-{}", b.grade), b.min_pct_tenths, b.max_pct_tenths, b.grade, b.grade_point],
+        )?;
+    }
+    tx.execute(
+        "INSERT INTO exam(id,session_id,term_id,name,starts_on,ends_on) \
+         VALUES ('exam-hy','sess-2627','term-1','Half-Yearly Exam','2026-09-15','2026-09-22')",
+        [],
+    )?;
+    tx.execute(
+        "INSERT INTO exam_subject(id,exam_id,class_subject_id,max_marks) VALUES ('es-6b-maths','exam-hy','cs-6b-maths',100)",
+        [],
+    )?;
+    tx.execute(
+        "INSERT INTO marks_sheet(id,exam_subject_id,status,created_at,updated_at,sync_state) \
+         VALUES ('ms-6b-maths','es-6b-maths','draft','2026-09-23T09:00:00Z','2026-09-23T09:00:00Z','confirmed')",
+        [],
+    )?;
+    let ids: Vec<String> = {
+        let mut s = tx.prepare("SELECT student_id FROM enrollment WHERE class_id='cls-6b' AND to_date IS NULL ORDER BY roll_no")?;
+        let v: Vec<String> = s.query_map([], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<_>>()?;
+        v
+    };
+    for (i, sid) in ids.iter().enumerate() {
+        // Deterministic demo pattern: mostly graded, one absent, one not-entered.
+        let (marks, absent): (Option<i64>, i64) = match i % 5 {
+            1 => (None, 1),               // absent
+            2 => (None, 0),               // NULL (not entered)
+            _ => (Some(55 + (i as i64 * 7) % 45), 0),
+        };
+        tx.execute(
+            "INSERT INTO mark_entry(id,sheet_id,student_id,marks,absent) VALUES (?1,'ms-6b-maths',?2,?3,?4)",
+            params![format!("me-{sid}"), sid, marks, absent],
+        )?;
+    }
     Ok(())
 }
 

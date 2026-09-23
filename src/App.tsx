@@ -27,6 +27,9 @@ import InboxScreen from '@/screens/desktop/InboxScreen'
 import AccountantHomeScreen from '@/screens/desktop/AccountantHomeScreen'
 import SessionScreen from '@/screens/desktop/SessionScreen'
 import GlobalSearch from '@/screens/desktop/GlobalSearch'
+import MarksScreen from '@/screens/desktop/MarksScreen'
+import GradeScaleScreen from '@/screens/desktop/GradeScaleScreen'
+import ReportCardDoc from '@/screens/print/ReportCardDoc'
 import ReceiptDoc from '@/screens/print/ReceiptDoc'
 import DayBookDoc from '@/screens/print/DayBookDoc'
 import PrincipalHomeContainer from '@/screens/containers/PrincipalHomeContainer'
@@ -131,6 +134,16 @@ export default function App() {
           const q = new URLSearchParams(path.split('?')[1] ?? '')
           return <DayBookDoc date={q.get('date') ?? new Date().toISOString().slice(0, 10)} auto={q.get('auto') === '1'} />
         }
+        const rc = matchRoute('/print/reportcard/:id', base)
+        if (rc) {
+          const q = new URLSearchParams(path.split('?')[1] ?? '')
+          return <ReportCardDoc mode="student" id={rc.id} examId={q.get('exam') ?? ''} auto={q.get('auto') === '1'} />
+        }
+        const rcc = matchRoute('/print/reportcards/:classId', base)
+        if (rcc) {
+          const q = new URLSearchParams(path.split('?')[1] ?? '')
+          return <ReportCardDoc mode="class" id={rcc.classId} examId={q.get('exam') ?? ''} auto={q.get('auto') === '1'} />
+        }
       }
       // Teachers use the phone screens (no desktop shell).
       if (route.role === 'teacher') {
@@ -175,6 +188,8 @@ function desktopRoute(base: string, role: Role): { active: string; node: ReactNo
   if (base === '/principal/students' || base === '/accountant/students')
     return { active: 'students', node: <StudentsScreen role={role} /> }
   if (base === '/principal/attendance') return { active: 'attendance', node: <AttendanceRegisterScreen /> }
+  if (base === '/principal/marks') return { active: 'marks', node: <MarksScreen /> }
+  if (base === '/principal/grade-scale') return { active: 'settings', node: <GradeScaleScreen /> }
   if (base === '/principal/fees') return { active: 'fees', node: <FeesScreen /> }
   if (base === '/principal/receipts' || base === '/accountant/receipts')
     return { active: 'receipts', node: <ReceiptsScreen role={role} /> }

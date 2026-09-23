@@ -309,6 +309,92 @@ export interface AttendanceMonthDto {
   day_marked: number[]
 }
 
+export interface GradeBandDto {
+  min_pct: number
+  max_pct: number
+  grade: string
+  grade_point: number | null
+}
+export interface ClassSubjectDto {
+  id: string
+  class_display: string | null
+  subject_name: string
+}
+export interface ExamSubjectDto {
+  id: string
+  class_subject_id: string
+  class_id: string
+  class_display: string | null
+  subject_name: string
+  max_marks: number
+  status: string
+}
+export interface ExamDto {
+  id: string
+  name: string
+  term_name: string | null
+  starts_on: string | null
+  ends_on: string | null
+  subjects: ExamSubjectDto[]
+}
+export interface ExamSubjectInput {
+  class_subject_id: string
+  max_marks: number
+}
+export interface NewExamInput {
+  name: string
+  term_id?: string | null
+  starts_on?: string | null
+  ends_on?: string | null
+  subjects: ExamSubjectInput[]
+}
+export interface MarksRowDto {
+  student_id: string
+  name: string
+  roll_no: number | null
+  marks: number | null
+  absent: boolean
+}
+export interface MarksSheetDto {
+  exam_subject_id: string
+  class_id: string
+  class_display: string | null
+  subject_name: string
+  max_marks: number
+  status: string
+  rows: MarksRowDto[]
+}
+export interface MarkEntryInput {
+  student_id: string
+  marks: number | null
+  absent: boolean
+}
+export interface ReportSubjectDto {
+  subject_name: string
+  max_marks: number
+  obtained: number | null
+  absent: boolean
+  pct_tenths: number
+  grade: string
+  incomplete: boolean
+}
+export interface ReportCardDto {
+  student_id: string
+  student_name: string
+  class_display: string | null
+  roll_no: number | null
+  admission_no: string | null
+  provisional_no: string | null
+  exam_name: string
+  subjects: ReportSubjectDto[]
+  total_obtained: number
+  total_max: number
+  pct_tenths: number
+  grade: string | null
+  incomplete: boolean
+  attendance: AttendanceSummaryDto
+}
+
 export interface RequestDto {
   id: string
   kind: string
@@ -487,6 +573,19 @@ export const attendance_month = (classId: string, month: string) =>
   invoke<AttendanceMonthDto>('attendance_month', { classId, month })
 export const correct_attendance = (classId: string, date: string, studentId: string, mark: string, reason: string) =>
   invoke<void>('correct_attendance', { classId, date, studentId, mark, reason })
+export const list_grade_bands = () => invoke<GradeBandDto[]>('list_grade_bands')
+export const update_grade_bands = (bands: GradeBandDto[]) => invoke<GradeBandDto[]>('update_grade_bands', { bands })
+export const list_class_subjects = () => invoke<ClassSubjectDto[]>('list_class_subjects')
+export const list_exams = () => invoke<ExamDto[]>('list_exams')
+export const create_exam = (input: NewExamInput) => invoke<ExamDto>('create_exam', { input })
+export const get_marks_sheet = (examSubjectId: string) => invoke<MarksSheetDto>('get_marks_sheet', { examSubjectId })
+export const save_marks_draft = (examSubjectId: string, entries: MarkEntryInput[]) =>
+  invoke<void>('save_marks_draft', { examSubjectId, entries })
+export const submit_marks = (examSubjectId: string, entries: MarkEntryInput[]) =>
+  invoke<void>('submit_marks', { examSubjectId, entries })
+export const get_report_card = (studentId: string, examId: string) =>
+  invoke<ReportCardDto>('get_report_card', { studentId, examId })
+export const class_student_ids = (classId: string) => invoke<string[]>('class_student_ids', { classId })
 export const list_fee_dues = (studentId: string) =>
   invoke<FeeDuesDto>('list_fee_dues', { studentId })
 export const fees_overview = () => invoke<FeeOverviewRow[]>('fees_overview')

@@ -9,6 +9,8 @@ use tauri::State;
 
 use vidya_core::errors::CoreError;
 use vidya_core::fees::{self, Due};
+use vidya_core::grades::{self, GradeBand, SubjectMark};
+use vidya_core::marks::MarkEntry;
 use vidya_core::money::Paise;
 use vidya_core::permissions::{self, Action, Actor, Target, TargetKind};
 use vidya_core::receipts;
@@ -2718,6 +2720,526 @@ pub struct AuditChainDto {
     pub first_bad_seq: Option<i64>,
 }
 
+// ============================================================= academics ======
+//
+// Grade scale (edit bands), exams (list/create + status grid), marks entry
+// (draft/submit with a PER-SUBJECT lock, vidya-core validation), Principal marks
+// correction, and report cards (subjects × marks + totals + grade + attendance).
+
+// ---- Grade scale -----------------------------------------------------------
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct GradeBandDto {
+    pub min_pct: i64, // tenths
+    pub max_pct: i64, // tenths
+    pub grade: String,
+    pub grade_point: Option<i64>,
+}
+
+/// The stored default grade scale, or `grades::default_scale()` if none saved.
+fn load_scale(conn: &Connection) -> Vec<GradeBand> {
+    let mut stmt = match conn.prepare(
+        "SELECT b.min_pct, b.max_pct, b.grade, b.grade_point FROM grade_band b \
+         JOIN grade_scale s ON s.id=b.scale_id WHERE s.is_default=1 ORDER BY b.min_pct DESC",
+    ) {
+        Ok(s) => s,
+        Err(_) => return grades::default_scale(),
+    };
+    let bands: Vec<GradeBand> = stmt
+        .query_map([], |r| {
+            Ok(GradeBand {
+                min_pct_tenths: r.get::<_, i64>(0)? as u32,
+                max_pct_tenths: r.get::<_, i64>(1)? as u32,
+                grade: r.get(2)?,
+                grade_point: r.get::<_, Option<i64>>(3)?.map(|g| g as u32),
+            })
+        })
+        .and_then(|rows| rows.collect::<rusqlite::Result<_>>())
+        .unwrap_or_default();
+    if bands.is_empty() {
+        grades::default_scale()
+    } else {
+        bands
+    }
+}
+
+pub fn list_grade_bands_logic(conn: &mut Connection) -> CmdResult<Vec<GradeBandDto>> {
+    Ok(load_scale(conn)
+        .into_iter()
+        .map(|b| GradeBandDto { min_pct: b.min_pct_tenths as i64, max_pct: b.max_pct_tenths as i64, grade: b.grade, grade_point: b.grade_point.map(|g| g as i64) })
+        .collect())
+}
+
+/// Replace the default scale's bands. Validates full 0..=1000 (tenths) coverage
+/// with no gaps and no overlaps (§7 grade scale).
+pub fn update_grade_bands_logic(conn: &mut Connection, actor_s: &SessionStaff, bands: &[GradeBandDto]) -> CmdResult<Vec<GradeBandDto>> {
+    let actor = actor_from(conn, actor_s)?;
+    require_principal(&actor)?;
+    if bands.is_empty() {
+        return Err(CmdError::validation("bands", "empty"));
+    }
+    // Validate each band + contiguity over 0..=1000 (ascending by min).
+    let mut sorted: Vec<&GradeBandDto> = bands.iter().collect();
+    sorted.sort_by_key(|b| b.min_pct);
+    if sorted.first().unwrap().min_pct != 0 || sorted.last().unwrap().max_pct != 1000 {
+        return Err(CmdError::validation("bands", "coverage"));
+    }
+    for b in &sorted {
+        if b.min_pct < 0 || b.max_pct > 1000 || b.min_pct > b.max_pct || b.grade.trim().is_empty() {
+            return Err(CmdError::validation("bands", "range"));
+        }
+    }
+    for w in sorted.windows(2) {
+        if w[1].min_pct != w[0].max_pct + 1 {
+            return Err(CmdError::validation("bands", "gap_or_overlap"));
+        }
+    }
+    let now = now_iso();
+    let tx = conn.transaction()?;
+    let scale_id: String = tx
+        .query_row("SELECT id FROM grade_scale WHERE is_default=1 LIMIT 1", [], |r| r.get(0))
+        .optional()?
+        .unwrap_or_else(|| {
+            let id = new_id("gs");
+            let _ = tx.execute("INSERT INTO grade_scale(id,name,is_default) VALUES (?1,'Default',1)", params![id]);
+            id
+        });
+    tx.execute("DELETE FROM grade_band WHERE scale_id=?1", params![scale_id])?;
+    for b in bands {
+        tx.execute(
+            "INSERT INTO grade_band(id,scale_id,min_pct,max_pct,grade,grade_point) VALUES (?1,?2,?3,?4,?5,?6)",
+            params![new_id("gb"), scale_id, b.min_pct, b.max_pct, b.grade, b.grade_point],
+        )?;
+    }
+    crate::security::audit::append(&tx, &AuditEntry {
+        at: now,
+        staff_id: Some(actor_s.id.clone()),
+        action: "update_grade_scale".into(),
+        table: Some("grade_band".into()),
+        ..Default::default()
+    })?;
+    tx.commit()?;
+    list_grade_bands_logic(conn)
+}
+
+// ---- Exams -----------------------------------------------------------------
+
+#[derive(Debug, Serialize)]
+pub struct ClassSubjectDto {
+    pub id: String,
+    pub class_display: Option<String>,
+    pub subject_name: String,
+}
+
+pub fn list_class_subjects_logic(conn: &mut Connection) -> CmdResult<Vec<ClassSubjectDto>> {
+    let mut stmt = conn.prepare(
+        "SELECT cs.id, c.display, sub.name FROM class_subject cs \
+         JOIN class c ON c.id=cs.class_id JOIN subject sub ON sub.id=cs.subject_id \
+         ORDER BY c.sort_order, sub.name",
+    )?;
+    let rows = stmt
+        .query_map([], |r| Ok(ClassSubjectDto { id: r.get(0)?, class_display: r.get(1)?, subject_name: r.get(2)? }))?
+        .collect::<rusqlite::Result<_>>()?;
+    Ok(rows)
+}
+
+#[derive(Debug, Serialize)]
+pub struct ExamSubjectDto {
+    pub id: String, // exam_subject_id
+    pub class_subject_id: String,
+    pub class_id: String,
+    pub class_display: Option<String>,
+    pub subject_name: String,
+    pub max_marks: i64,
+    pub status: String, // not_started | draft | submitted
+}
+
+#[derive(Debug, Serialize)]
+pub struct ExamDto {
+    pub id: String,
+    pub name: String,
+    pub term_name: Option<String>,
+    pub starts_on: Option<String>,
+    pub ends_on: Option<String>,
+    pub subjects: Vec<ExamSubjectDto>,
+}
+
+fn exam_subjects(conn: &Connection, exam_id: &str) -> rusqlite::Result<Vec<ExamSubjectDto>> {
+    let mut stmt = conn.prepare(
+        "SELECT es.id, es.class_subject_id, cs.class_id, c.display, sub.name, es.max_marks, \
+                COALESCE((SELECT status FROM marks_sheet ms WHERE ms.exam_subject_id=es.id), 'not_started') \
+         FROM exam_subject es \
+         JOIN class_subject cs ON cs.id=es.class_subject_id \
+         JOIN class c ON c.id=cs.class_id \
+         JOIN subject sub ON sub.id=cs.subject_id \
+         WHERE es.exam_id=?1 ORDER BY c.sort_order, sub.name",
+    )?;
+    let rows: Vec<ExamSubjectDto> = stmt
+        .query_map(params![exam_id], |r| {
+            Ok(ExamSubjectDto {
+                id: r.get(0)?,
+                class_subject_id: r.get(1)?,
+                class_id: r.get(2)?,
+                class_display: r.get(3)?,
+                subject_name: r.get(4)?,
+                max_marks: r.get(5)?,
+                status: r.get(6)?,
+            })
+        })?
+        .collect::<rusqlite::Result<_>>()?;
+    Ok(rows)
+}
+
+pub fn list_exams_logic(conn: &mut Connection) -> CmdResult<Vec<ExamDto>> {
+    let mut stmt = conn.prepare(
+        "SELECT e.id, e.name, t.name, e.starts_on, e.ends_on FROM exam e \
+         LEFT JOIN term t ON t.id=e.term_id ORDER BY e.starts_on DESC, e.name",
+    )?;
+    let exams: Vec<(String, String, Option<String>, Option<String>, Option<String>)> = stmt
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)))?
+        .collect::<rusqlite::Result<_>>()?;
+    let mut out = Vec::new();
+    for (id, name, term_name, starts_on, ends_on) in exams {
+        let subjects = exam_subjects(conn, &id)?;
+        out.push(ExamDto { id, name, term_name, starts_on, ends_on, subjects });
+    }
+    Ok(out)
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ExamSubjectInput {
+    pub class_subject_id: String,
+    pub max_marks: i64,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct NewExamInput {
+    pub name: String,
+    pub term_id: Option<String>,
+    pub starts_on: Option<String>,
+    pub ends_on: Option<String>,
+    pub subjects: Vec<ExamSubjectInput>,
+}
+
+pub fn create_exam_logic(conn: &mut Connection, actor_s: &SessionStaff, input: &NewExamInput) -> CmdResult<ExamDto> {
+    let actor = actor_from(conn, actor_s)?;
+    require_principal(&actor)?;
+    vidya_core::validation::validate_name(&input.name)?;
+    let session_id: String = conn
+        .query_row("SELECT id FROM academic_session WHERE is_current=1 LIMIT 1", [], |r| r.get(0))
+        .optional()?
+        .ok_or_else(CmdError::not_found)?;
+    let now = now_iso();
+    let eid = new_id("exam");
+    let tx = conn.transaction()?;
+    tx.execute(
+        "INSERT INTO exam(id,session_id,term_id,name,starts_on,ends_on) VALUES (?1,?2,?3,?4,?5,?6)",
+        params![eid, session_id, input.term_id, input.name, input.starts_on, input.ends_on],
+    )?;
+    for s in &input.subjects {
+        if s.max_marks <= 0 {
+            return Err(CmdError::validation("max_marks", "range"));
+        }
+        tx.execute(
+            "INSERT INTO exam_subject(id,exam_id,class_subject_id,max_marks) VALUES (?1,?2,?3,?4)",
+            params![new_id("es"), eid, s.class_subject_id, s.max_marks],
+        )?;
+    }
+    crate::security::audit::append(&tx, &AuditEntry {
+        at: now,
+        staff_id: Some(actor_s.id.clone()),
+        action: "create_exam".into(),
+        table: Some("exam".into()),
+        record_id: Some(eid.clone()),
+        after_json: Some(serde_json::json!({ "name": input.name }).to_string()),
+        ..Default::default()
+    })?;
+    tx.commit()?;
+    list_exams_logic(conn)?.into_iter().find(|e| e.id == eid).ok_or_else(CmdError::not_found)
+}
+
+// ---- Marks entry -----------------------------------------------------------
+
+#[derive(Debug, Serialize)]
+pub struct MarksRowDto {
+    pub student_id: String,
+    pub name: String,
+    pub roll_no: Option<i64>,
+    pub marks: Option<i64>,
+    pub absent: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct MarksSheetDto {
+    pub exam_subject_id: String,
+    pub class_id: String,
+    pub class_display: Option<String>,
+    pub subject_name: String,
+    pub max_marks: i64,
+    pub status: String, // not_started | draft | submitted
+    pub rows: Vec<MarksRowDto>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct MarkEntryInput {
+    pub student_id: String,
+    pub marks: Option<i64>,
+    pub absent: bool,
+}
+
+/// (class_subject_id, class_id, subject_name, max_marks) for an exam_subject.
+fn exam_subject_meta(conn: &Connection, exam_subject_id: &str) -> CmdResult<(String, String, String, i64)> {
+    conn.query_row(
+        "SELECT cs.id, cs.class_id, sub.name, es.max_marks FROM exam_subject es \
+         JOIN class_subject cs ON cs.id=es.class_subject_id JOIN subject sub ON sub.id=cs.subject_id \
+         WHERE es.id=?1",
+        params![exam_subject_id],
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+    )
+    .optional()?
+    .ok_or_else(CmdError::not_found)
+}
+
+pub fn get_marks_sheet_logic(conn: &mut Connection, actor_s: &SessionStaff, exam_subject_id: &str) -> CmdResult<MarksSheetDto> {
+    let actor = actor_from(conn, actor_s)?;
+    let (cs_id, class_id, subject_name, max_marks) = exam_subject_meta(conn, exam_subject_id)?;
+    // View: Principal always; teacher only their own class-subject.
+    let own = actor.class_subjects.iter().any(|c| c == &cs_id);
+    vidya_core::marks::can_edit(actor.role, own).map_err(CmdError::from)?;
+    let class_display: Option<String> = conn.query_row("SELECT display FROM class WHERE id=?1", params![class_id], |r| r.get(0)).optional()?;
+    let status: String = conn
+        .query_row("SELECT status FROM marks_sheet WHERE exam_subject_id=?1", params![exam_subject_id], |r| r.get(0))
+        .optional()?
+        .unwrap_or_else(|| "not_started".to_string());
+    let mut stmt = conn.prepare(
+        "SELECT s.id, s.name, e.roll_no, me.marks, me.absent FROM enrollment e \
+         JOIN student s ON s.id=e.student_id \
+         LEFT JOIN marks_sheet ms ON ms.exam_subject_id=?1 \
+         LEFT JOIN mark_entry me ON me.sheet_id=ms.id AND me.student_id=s.id \
+         WHERE e.class_id=?2 AND e.to_date IS NULL ORDER BY e.roll_no, s.name",
+    )?;
+    let rows = stmt
+        .query_map(params![exam_subject_id, class_id], |r| {
+            Ok(MarksRowDto {
+                student_id: r.get(0)?,
+                name: r.get(1)?,
+                roll_no: r.get(2)?,
+                marks: r.get(3)?,
+                absent: r.get::<_, Option<i64>>(4)?.unwrap_or(0) != 0,
+            })
+        })?
+        .collect::<rusqlite::Result<_>>()?;
+    Ok(MarksSheetDto { exam_subject_id: exam_subject_id.to_string(), class_id, class_display, subject_name, max_marks, status, rows })
+}
+
+fn upsert_marks(
+    conn: &mut Connection,
+    actor_s: &SessionStaff,
+    device_mode: DeviceMode,
+    exam_subject_id: &str,
+    entries: &[MarkEntryInput],
+    submit: bool,
+) -> CmdResult<()> {
+    let actor = actor_from(conn, actor_s)?;
+    let (cs_id, class_id, _subject, max_marks) = exam_subject_meta(conn, exam_subject_id)?;
+    let own = actor.class_subjects.iter().any(|c| c == &cs_id);
+    vidya_core::marks::can_edit(actor.role, own).map_err(CmdError::from)?;
+    // A submitted sheet is locked (per subject); direct edits go via correction.
+    let current: Option<String> = conn
+        .query_row("SELECT status FROM marks_sheet WHERE exam_subject_id=?1", params![exam_subject_id], |r| r.get(0))
+        .optional()?;
+    if current.as_deref() == Some("submitted") {
+        return Err(CoreError::Locked.into());
+    }
+    // Validate every entry against max_marks (0..=max, not absent+marks).
+    for e in entries {
+        let entry = MarkEntry { marks: e.marks.map(|m| m as u32), absent: e.absent };
+        vidya_core::marks::validate_entry(&entry, max_marks as u32).map_err(CmdError::from)?;
+    }
+    let now = now_iso();
+    let status = if submit { "submitted" } else { "draft" };
+    let sync_state = if device_mode == DeviceMode::Server { "confirmed" } else { "on_device" };
+    let ctx = WriteCtx { mode: device_mode };
+    let esid = exam_subject_id.to_string();
+    let cid = class_id.clone();
+    let entries_owned: Vec<MarkEntryInput> = entries
+        .iter()
+        .map(|e| MarkEntryInput { student_id: e.student_id.clone(), marks: e.marks, absent: e.absent })
+        .collect();
+    with_write(conn, &ctx, move |tx| {
+        // Upsert the sheet.
+        let sheet_id: String = tx
+            .query_row("SELECT id FROM marks_sheet WHERE exam_subject_id=?1", params![esid], |r| r.get(0))
+            .optional()?
+            .unwrap_or_else(|| {
+                let id = new_id("msheet");
+                let _ = tx.execute(
+                    "INSERT INTO marks_sheet(id,exam_subject_id,status,created_at,updated_at,sync_state) VALUES (?1,?2,?3,?4,?4,?5)",
+                    params![id, esid, status, now, sync_state],
+                );
+                id
+            });
+        tx.execute("UPDATE marks_sheet SET status=?1, updated_at=?2, sync_state=?3 WHERE id=?4", params![status, now, sync_state, sheet_id])?;
+        for e in &entries_owned {
+            tx.execute(
+                "INSERT INTO mark_entry(id,sheet_id,student_id,marks,absent) VALUES (?1,?2,?3,?4,?5) \
+                 ON CONFLICT(sheet_id,student_id) DO UPDATE SET marks=excluded.marks, absent=excluded.absent",
+                params![new_id("me"), sheet_id, e.student_id, e.marks, e.absent as i64],
+            )?;
+        }
+        let audit = AuditEntry {
+            at: now.clone(),
+            staff_id: Some(actor_s.id.clone()),
+            action: if submit { "submit_marks".into() } else { "save_marks_draft".into() },
+            table: Some("marks_sheet".into()),
+            record_id: Some(sheet_id.clone()),
+            ..Default::default()
+        };
+        let op = Op {
+            op_id: new_id("op"),
+            hlc: now.clone(),
+            device_id: String::new(),
+            staff_id: actor_s.id.clone(),
+            audience: format!("class:{cid}"),
+            table: "marks_sheet".into(),
+            record_id: sheet_id.clone(),
+            kind: if submit { "action".into() } else { "update".into() },
+            payload: "{}".into(),
+            base_version: None,
+            server_epoch: 1,
+        };
+        Ok(Effect { value: (), audit, op })
+    })?;
+    Ok(())
+}
+
+pub fn save_marks_draft_logic(conn: &mut Connection, actor_s: &SessionStaff, device_mode: DeviceMode, exam_subject_id: &str, entries: &[MarkEntryInput]) -> CmdResult<()> {
+    upsert_marks(conn, actor_s, device_mode, exam_subject_id, entries, false)
+}
+
+pub fn submit_marks_logic(conn: &mut Connection, actor_s: &SessionStaff, device_mode: DeviceMode, exam_subject_id: &str, entries: &[MarkEntryInput]) -> CmdResult<()> {
+    upsert_marks(conn, actor_s, device_mode, exam_subject_id, entries, true)
+}
+
+// ---- Report card -----------------------------------------------------------
+
+#[derive(Debug, Serialize)]
+pub struct ReportSubjectDto {
+    pub subject_name: String,
+    pub max_marks: i64,
+    pub obtained: Option<i64>,
+    pub absent: bool,
+    pub pct_tenths: i64,
+    pub grade: String,
+    pub incomplete: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ReportCardDto {
+    pub student_id: String,
+    pub student_name: String,
+    pub class_display: Option<String>,
+    pub roll_no: Option<i64>,
+    pub admission_no: Option<String>,
+    pub provisional_no: Option<String>,
+    pub exam_name: String,
+    pub subjects: Vec<ReportSubjectDto>,
+    pub total_obtained: i64,
+    pub total_max: i64,
+    pub pct_tenths: i64,
+    pub grade: Option<String>,
+    pub incomplete: bool,
+    pub attendance: AttendanceSummaryDto,
+}
+
+pub fn get_report_card_logic(conn: &mut Connection, actor_s: &SessionStaff, today: &str, student_id: &str, exam_id: &str) -> CmdResult<ReportCardDto> {
+    let actor = actor_from(conn, actor_s)?;
+    // View gate: Principal all; teacher only students in their classes.
+    let (name, admission_no, provisional_no, class_id, class_display, roll_no): (String, Option<String>, Option<String>, Option<String>, Option<String>, Option<i64>) = conn
+        .query_row(
+            "SELECT s.name, s.admission_no, s.provisional_no, c.id, c.display, e.roll_no FROM student s \
+             LEFT JOIN enrollment e ON e.student_id=s.id AND e.to_date IS NULL LEFT JOIN class c ON c.id=e.class_id WHERE s.id=?1",
+            params![student_id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)),
+        )
+        .optional()?
+        .ok_or_else(CmdError::not_found)?;
+    if actor.role == Role::Teacher {
+        let owns = class_id.as_deref().map(|c| actor.class_teacher_of.iter().any(|x| x == c)).unwrap_or(false);
+        if !owns {
+            return Err(CmdError::forbidden("not_own_class"));
+        }
+    }
+    let exam_name: String = conn.query_row("SELECT name FROM exam WHERE id=?1", params![exam_id], |r| r.get(0)).optional()?.ok_or_else(CmdError::not_found)?;
+
+    let scale = load_scale(conn);
+    // Subjects for the student's class in this exam, with the student's entry.
+    // (Scoped so the prepared statement's borrow ends before the &mut call below.)
+    let raw: Vec<(String, i64, Option<i64>, Option<i64>)> = {
+        let mut stmt = conn.prepare(
+            "SELECT sub.name, es.max_marks, me.marks, me.absent FROM exam_subject es \
+             JOIN class_subject cs ON cs.id=es.class_subject_id \
+             JOIN subject sub ON sub.id=cs.subject_id \
+             LEFT JOIN marks_sheet ms ON ms.exam_subject_id=es.id \
+             LEFT JOIN mark_entry me ON me.sheet_id=ms.id AND me.student_id=?1 \
+             WHERE es.exam_id=?2 AND cs.class_id=?3 ORDER BY sub.name",
+        )?;
+        let v: Vec<(String, i64, Option<i64>, Option<i64>)> = stmt
+            .query_map(params![student_id, exam_id, class_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
+            .collect::<rusqlite::Result<_>>()?;
+        v
+    };
+
+    let mut subjects = Vec::new();
+    let mut card_marks: Vec<SubjectMark> = Vec::new();
+    for (subject_name, max_marks, marks, absent) in raw {
+        let entry = MarkEntry { marks: marks.map(|m| m as u32), absent: absent.unwrap_or(0) != 0 };
+        card_marks.push(SubjectMark { entry, max_marks: max_marks as u32 });
+        let res = grades::grade_subject(&entry, max_marks as u32, &scale);
+        let (pct, grade, incomplete) = match res {
+            grades::SubjectResult::Graded { pct_tenths, grade } => (pct_tenths as i64, grade, false),
+            grades::SubjectResult::Absent => (0, "AB".to_string(), false),
+            grades::SubjectResult::Incomplete => (0, String::new(), true),
+        };
+        subjects.push(ReportSubjectDto { subject_name, max_marks, obtained: marks, absent: entry.absent, pct_tenths: pct, grade, incomplete });
+    }
+
+    let report = grades::grade_report(&card_marks, &scale);
+    let (pct_tenths, grade, incomplete) = match report {
+        grades::ReportResult::Graded { pct_tenths, grade } => (pct_tenths as i64, grade, false),
+        grades::ReportResult::Incomplete => (0, None, true),
+    };
+    let total_obtained: i64 = card_marks.iter().filter(|s| !s.entry.absent).filter_map(|s| s.entry.marks).map(|m| m as i64).sum();
+    let total_max: i64 = card_marks.iter().filter(|s| !s.entry.absent && s.entry.marks.is_some()).map(|s| s.max_marks as i64).sum();
+
+    // Attendance for the current term (reuse the profile helper's approach).
+    let profile = get_student_profile_logic(conn, today, student_id)?;
+
+    Ok(ReportCardDto {
+        student_id: student_id.to_string(),
+        student_name: name,
+        class_display,
+        roll_no,
+        admission_no,
+        provisional_no,
+        exam_name,
+        subjects,
+        total_obtained,
+        total_max,
+        pct_tenths,
+        grade,
+        incomplete,
+        attendance: profile.attendance,
+    })
+}
+
+/// Student ids of a class (for a class report-card batch print).
+pub fn class_student_ids_logic(conn: &mut Connection, class_id: &str) -> CmdResult<Vec<String>> {
+    let mut stmt = conn.prepare("SELECT s.id FROM enrollment e JOIN student s ON s.id=e.student_id WHERE e.class_id=?1 AND e.to_date IS NULL ORDER BY e.roll_no, s.name")?;
+    let rows: Vec<String> = stmt.query_map(params![class_id], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<_>>()?;
+    Ok(rows)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3079,5 +3601,58 @@ mod tests {
         assert_eq!(mark, "A");
         // An accountant (no attendance rights) cannot correct a submitted sheet.
         assert!(correct_attendance_mark_logic(&mut c, &accountant(), DeviceMode::Server, &cid, &date, &stu, "P", "x").is_err());
+    }
+
+    fn teacher_anita() -> SessionStaff {
+        SessionStaff { id: "stf-anita".into(), name: "Anita Rao".into(), role: "teacher".into() }
+    }
+
+    #[test]
+    fn marks_entry_validates_range_and_submit_locks_the_subject() {
+        let mut c = seeded();
+        let sheet = get_marks_sheet_logic(&mut c, &teacher_anita(), "es-6b-maths").unwrap();
+        assert_eq!(sheet.max_marks, 100);
+        assert!(!sheet.rows.is_empty(), "VI-B has students");
+        let first = sheet.rows[0].student_id.clone();
+        let entry = |m: Option<i64>| vec![MarkEntryInput { student_id: first.clone(), marks: m, absent: false }];
+        // Over-max is rejected (0..=max).
+        assert!(save_marks_draft_logic(&mut c, &teacher_anita(), DeviceMode::Server, "es-6b-maths", &entry(Some(101))).is_err());
+        // Valid draft, then submit locks the subject.
+        save_marks_draft_logic(&mut c, &teacher_anita(), DeviceMode::Server, "es-6b-maths", &entry(Some(88))).unwrap();
+        submit_marks_logic(&mut c, &teacher_anita(), DeviceMode::Server, "es-6b-maths", &entry(Some(88))).unwrap();
+        assert_eq!(get_marks_sheet_logic(&mut c, &teacher_anita(), "es-6b-maths").unwrap().status, "submitted");
+        // A submitted sheet is locked to direct edits.
+        assert!(save_marks_draft_logic(&mut c, &teacher_anita(), DeviceMode::Server, "es-6b-maths", &entry(Some(90))).is_err());
+    }
+
+    #[test]
+    fn report_card_grades_a_full_card_and_flags_incomplete() {
+        let mut c = seeded();
+        let graded: String = c
+            .query_row("SELECT student_id FROM mark_entry WHERE sheet_id='ms-6b-maths' AND marks IS NOT NULL AND absent=0 LIMIT 1", [], |r| r.get(0))
+            .unwrap();
+        let card = get_report_card_logic(&mut c, &principal(), "2026-09-24", &graded, "exam-hy").unwrap();
+        assert!(!card.incomplete);
+        assert!(!card.subjects.is_empty() && card.grade.is_some(), "a graded card has a grade");
+        // A student whose Maths mark is NULL → incomplete card (never treated as 0).
+        let null_stu: Option<String> = c
+            .query_row("SELECT student_id FROM mark_entry WHERE sheet_id='ms-6b-maths' AND marks IS NULL AND absent=0 LIMIT 1", [], |r| r.get(0))
+            .optional()
+            .unwrap();
+        if let Some(ns) = null_stu {
+            assert!(get_report_card_logic(&mut c, &principal(), "2026-09-24", &ns, "exam-hy").unwrap().incomplete);
+        }
+    }
+
+    #[test]
+    fn grade_bands_reject_gaps_and_accept_contiguous() {
+        let mut c = seeded();
+        assert!(!list_grade_bands_logic(&mut c).unwrap().is_empty());
+        let band = |min, max, g: &str, gp| GradeBandDto { min_pct: min, max_pct: max, grade: g.into(), grade_point: gp };
+        // A gap (500→600) between bands is rejected.
+        assert!(update_grade_bands_logic(&mut c, &principal(), &[band(0, 500, "F", None), band(600, 1000, "A", Some(10))]).is_err());
+        // Contiguous 0..=1000 is accepted.
+        let saved = update_grade_bands_logic(&mut c, &principal(), &[band(0, 499, "F", None), band(500, 1000, "P", Some(5))]).unwrap();
+        assert_eq!(saved.len(), 2);
     }
 }

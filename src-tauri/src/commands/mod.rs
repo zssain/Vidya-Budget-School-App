@@ -69,6 +69,16 @@ pub const COMMANDS: &[&str] = &[
     "submit_attendance",
     "attendance_month",
     "correct_attendance",
+    "list_grade_bands",
+    "update_grade_bands",
+    "list_class_subjects",
+    "list_exams",
+    "create_exam",
+    "get_marks_sheet",
+    "save_marks_draft",
+    "submit_marks",
+    "get_report_card",
+    "class_student_ids",
     "list_fee_dues",
     "record_payment",
     "list_payments",
@@ -390,6 +400,66 @@ pub fn correct_attendance(state: State<RtCtx>, class_id: String, date: String, s
     let actor = state.require_session()?;
     let mode = state.device_mode;
     state.with_db(|conn| correct_attendance_mark_logic(conn, &actor, mode, &class_id, &date, &student_id, &mark, &reason))
+}
+
+// ------------------------------------------------------------- academics ------
+
+#[tauri::command]
+pub fn list_grade_bands(state: State<RtCtx>) -> CmdResult<Vec<GradeBandDto>> {
+    state.with_db(list_grade_bands_logic)
+}
+
+#[tauri::command]
+pub fn update_grade_bands(state: State<RtCtx>, bands: Vec<GradeBandDto>) -> CmdResult<Vec<GradeBandDto>> {
+    let actor = state.require_session()?;
+    state.with_db(|conn| update_grade_bands_logic(conn, &actor, &bands))
+}
+
+#[tauri::command]
+pub fn list_class_subjects(state: State<RtCtx>) -> CmdResult<Vec<ClassSubjectDto>> {
+    state.with_db(list_class_subjects_logic)
+}
+
+#[tauri::command]
+pub fn list_exams(state: State<RtCtx>) -> CmdResult<Vec<ExamDto>> {
+    state.with_db(list_exams_logic)
+}
+
+#[tauri::command]
+pub fn create_exam(state: State<RtCtx>, input: NewExamInput) -> CmdResult<ExamDto> {
+    let actor = state.require_session()?;
+    state.with_db(|conn| create_exam_logic(conn, &actor, &input))
+}
+
+#[tauri::command]
+pub fn get_marks_sheet(state: State<RtCtx>, exam_subject_id: String) -> CmdResult<MarksSheetDto> {
+    let actor = state.require_session()?;
+    state.with_db(|conn| get_marks_sheet_logic(conn, &actor, &exam_subject_id))
+}
+
+#[tauri::command]
+pub fn save_marks_draft(state: State<RtCtx>, exam_subject_id: String, entries: Vec<MarkEntryInput>) -> CmdResult<()> {
+    let actor = state.require_session()?;
+    let mode = state.device_mode;
+    state.with_db(|conn| save_marks_draft_logic(conn, &actor, mode, &exam_subject_id, &entries))
+}
+
+#[tauri::command]
+pub fn submit_marks(state: State<RtCtx>, exam_subject_id: String, entries: Vec<MarkEntryInput>) -> CmdResult<()> {
+    let actor = state.require_session()?;
+    let mode = state.device_mode;
+    state.with_db(|conn| submit_marks_logic(conn, &actor, mode, &exam_subject_id, &entries))
+}
+
+#[tauri::command]
+pub fn get_report_card(state: State<RtCtx>, student_id: String, exam_id: String) -> CmdResult<ReportCardDto> {
+    let actor = state.require_session()?;
+    state.with_db(|conn| get_report_card_logic(conn, &actor, &today(), &student_id, &exam_id))
+}
+
+#[tauri::command]
+pub fn class_student_ids(state: State<RtCtx>, class_id: String) -> CmdResult<Vec<String>> {
+    state.with_db(|conn| class_student_ids_logic(conn, &class_id))
 }
 
 // ----------------------------------------------------------------- fees ------
