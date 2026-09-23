@@ -1108,6 +1108,342 @@ pub fn mark_student_left_logic(
     get_student_profile_logic(conn, &today, student_id)
 }
 
+// ============================================================= CSV ============
+//
+// Export (scoped, formula-safe via vidya_core::csv::escape_formula) and import
+// (template + dry-run preview + one-transaction commit). Files are read/written
+// by these commands (the path comes from tauri-plugin-dialog); success is
+// reported only after the file is actually written (no fake success, §7).
+
+const CSV_MAX_BYTES: u64 = 5_000_000;
+const CSV_MAX_ROWS: usize = 5_000;
+
+const IMPORT_HEADERS: &[&str] = &[
+    "Name", "Class", "Roll", "Guardian", "Guardian mobile", "Date of birth", "Gender", "Transport", "RTE", "Category", "Aadhaar status",
+];
+const IMPORT_EXAMPLE: &[&str] = &["Aarav Gupta", "I-A", "1", "Rahul Gupta", "9876543210", "2018-06-15", "male", "no", "no", "General", "none"];
+
+fn audit_action(conn: &mut Connection, entry: AuditEntry) -> CmdResult<()> {
+    let tx = conn.transaction()?;
+    crate::security::audit::append(&tx, &entry)?;
+    tx.commit()?;
+    Ok(())
+}
+
+fn students_csv_rows(conn: &Connection) -> rusqlite::Result<Vec<Vec<String>>> {
+    let mut out = vec![vec![
+        "Name".into(), "Admission no.".into(), "Class".into(), "Roll".into(), "Guardian".into(),
+        "Guardian mobile".into(), "Date of birth".into(), "Gender".into(), "Status".into(), "Outstanding (Rs)".into(),
+    ]];
+    let mut stmt = conn.prepare(
+        "SELECT s.name, COALESCE(s.admission_no, s.provisional_no, ''), COALESCE(c.display,''), e.roll_no, \
+                COALESCE(s.guardian_name,''), COALESCE(s.guardian_mobile,''), COALESCE(s.dob,''), COALESCE(s.gender,''), s.status, \
+                COALESCE((SELECT SUM(d.amount_paise) FROM fee_due d WHERE d.student_id=s.id AND d.cancelled_at IS NULL),0) - \
+                COALESCE((SELECT SUM(pa.amount_paise) FROM payment_allocation pa JOIN fee_due d2 ON d2.id=pa.fee_due_id WHERE d2.student_id=s.id AND pa.kind='due'),0) \
+         FROM student s \
+         LEFT JOIN enrollment e ON e.student_id=s.id AND e.to_date IS NULL \
+         LEFT JOIN class c ON c.id=e.class_id ORDER BY c.sort_order, e.roll_no, s.name",
+    )?;
+    let rows = stmt.query_map([], |r| {
+        let roll: String = r.get::<_, Option<i64>>(3)?.map(|n| n.to_string()).unwrap_or_default();
+        let out_paise: i64 = r.get(9)?;
+        Ok(vec![
+            r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, roll,
+            r.get::<_, String>(4)?, r.get::<_, String>(5)?, r.get::<_, String>(6)?, r.get::<_, String>(7)?,
+            r.get::<_, String>(8)?, format!("{}", out_paise.max(0) / 100),
+        ])
+    })?;
+    for row in rows {
+        out.push(row?);
+    }
+    Ok(out)
+}
+
+fn dues_csv_rows(conn: &Connection) -> rusqlite::Result<Vec<Vec<String>>> {
+    let mut out = vec![vec!["Name".into(), "Class".into(), "Outstanding (Rs)".into()]];
+    let mut stmt = conn.prepare(
+        "SELECT s.name, COALESCE(c.display,''), \
+                SUM(d.amount_paise) - COALESCE((SELECT SUM(pa.amount_paise) FROM payment_allocation pa JOIN fee_due d2 ON d2.id=pa.fee_due_id WHERE d2.student_id=s.id AND pa.kind='due'),0) AS bal \
+         FROM student s \
+         LEFT JOIN enrollment e ON e.student_id=s.id AND e.to_date IS NULL \
+         LEFT JOIN class c ON c.id=e.class_id \
+         JOIN fee_due d ON d.student_id=s.id AND d.cancelled_at IS NULL \
+         GROUP BY s.id HAVING bal > 0 ORDER BY bal DESC",
+    )?;
+    let rows = stmt.query_map([], |r| {
+        let bal: i64 = r.get(2)?;
+        Ok(vec![r.get::<_, String>(0)?, r.get::<_, String>(1)?, format!("{}", bal / 100)])
+    })?;
+    for row in rows {
+        out.push(row?);
+    }
+    Ok(out)
+}
+
+/// Export a scoped, formula-safe CSV to `path`. Returns the data-row count
+/// (header excluded). 0 rows → a header-only file (§ edge case).
+pub fn export_csv_logic(conn: &mut Connection, actor_s: &SessionStaff, kind: &str, path: &str) -> CmdResult<i64> {
+    let actor = actor_from(conn, actor_s)?;
+    let rows = match kind {
+        "students" => {
+            require_allow(&actor, Action::StudentCsvExport, &Target::of(TargetKind::Student))?;
+            students_csv_rows(conn)?
+        }
+        "dues" => {
+            require_allow(&actor, Action::FeeReports, &Target::of(TargetKind::Fee))?;
+            dues_csv_rows(conn)?
+        }
+        _ => return Err(CmdError::validation("kind", "unknown")),
+    };
+    let escaped: Vec<Vec<String>> = rows
+        .iter()
+        .map(|r| r.iter().map(|c| vidya_core::csv::escape_formula(c)).collect())
+        .collect();
+    let bytes = vidya_core::csv::write_csv_excel(&escaped);
+    std::fs::write(path, bytes).map_err(|_| CmdError::internal("csv_write"))?;
+    let data_rows = rows.len().saturating_sub(1) as i64;
+    audit_action(conn, AuditEntry {
+        at: now_iso(),
+        staff_id: Some(actor_s.id.clone()),
+        action: "export_csv".into(),
+        table: Some(kind.to_string()),
+        after_json: Some(serde_json::json!({ "kind": kind, "rows": data_rows }).to_string()),
+        ..Default::default()
+    })?;
+    Ok(data_rows)
+}
+
+/// The importable-students template: header row + one English example row,
+/// UTF-8 BOM (Excel-friendly), formula-safe.
+pub fn students_csv_template_logic() -> String {
+    let header: Vec<String> = IMPORT_HEADERS.iter().map(|s| s.to_string()).collect();
+    let example: Vec<String> = IMPORT_EXAMPLE.iter().map(|s| vidya_core::csv::escape_formula(s)).collect();
+    String::from_utf8(vidya_core::csv::write_csv_excel(&[header, example])).unwrap_or_default()
+}
+
+#[derive(Debug, Serialize, Clone)]
+pub struct ImportRowError {
+    pub column: String,
+    pub reason: String,
+}
+
+#[derive(Debug, Serialize, Clone)]
+pub struct ImportRowDto {
+    pub row: i64,
+    pub name: String,
+    pub class: String,
+    pub errors: Vec<ImportRowError>,
+    pub duplicate: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ImportPreviewDto {
+    pub total: i64,
+    pub valid: i64,
+    pub rows: Vec<ImportRowDto>,
+    pub error: Option<String>,
+}
+
+struct ParsedRow {
+    row_num: i64,
+    name: String,
+    class_id: String,
+    roll_no: Option<i64>,
+    guardian_name: Option<String>,
+    guardian_mobile: Option<String>,
+    dob: Option<String>,
+    gender: Option<String>,
+    transport: bool,
+    rte: bool,
+    category: Option<String>,
+    aadhaar: String,
+    errors: Vec<ImportRowError>,
+}
+
+fn yes_no(s: &str) -> bool {
+    matches!(s.trim().to_ascii_lowercase().as_str(), "yes" | "y" | "true" | "1")
+}
+
+fn class_display_map(conn: &Connection) -> rusqlite::Result<std::collections::HashMap<String, String>> {
+    let mut stmt = conn.prepare("SELECT display, id FROM class")?;
+    let mut m = std::collections::HashMap::new();
+    let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+    for row in rows {
+        let (display, id) = row?;
+        m.insert(display, id);
+    }
+    Ok(m)
+}
+
+fn read_import_file(path: &str) -> CmdResult<Vec<Vec<String>>> {
+    let meta = std::fs::metadata(path).map_err(|_| CmdError::internal("csv_read"))?;
+    if meta.len() > CSV_MAX_BYTES {
+        return Err(CmdError::validation("file", "too_large"));
+    }
+    let text = std::fs::read_to_string(path).map_err(|_| CmdError::validation("file", "not_utf8"))?;
+    Ok(vidya_core::csv::read_csv(&text))
+}
+
+fn parse_import_rows(conn: &Connection, records: &[Vec<String>]) -> (Vec<ParsedRow>, Option<String>) {
+    let classes = class_display_map(conn).unwrap_or_default();
+    let data = if records.is_empty() { &records[..] } else { &records[1..] };
+    if data.len() > CSV_MAX_ROWS {
+        return (Vec::new(), Some("too_many_rows".into()));
+    }
+    let get = |r: &[String], i: usize| r.get(i).map(|s| s.trim().to_string()).unwrap_or_default();
+    let mut out = Vec::new();
+    for (idx, rec) in data.iter().enumerate() {
+        let row_num = idx as i64 + 2; // 1-based, +1 for header
+        let name_raw = get(rec, 0);
+        let class_disp = get(rec, 1);
+        let mobile = get(rec, 4);
+        let dob = get(rec, 5);
+        let mut errors = Vec::new();
+        if vidya_core::validation::validate_name(&name_raw).is_err() {
+            errors.push(ImportRowError { column: "Name".into(), reason: "required".into() });
+        }
+        let class_id = match classes.get(&class_disp) {
+            Some(id) => id.clone(),
+            None => {
+                errors.push(ImportRowError { column: "Class".into(), reason: "unknown_class".into() });
+                String::new()
+            }
+        };
+        if !mobile.is_empty() && vidya_core::validation::validate_mobile(&mobile).is_err() {
+            errors.push(ImportRowError { column: "Guardian mobile".into(), reason: "pattern".into() });
+        }
+        let roll_no = {
+            let r = get(rec, 2);
+            if r.is_empty() { None } else { r.parse::<i64>().ok() }
+        };
+        out.push(ParsedRow {
+            row_num,
+            name: name_raw,
+            class_id,
+            roll_no,
+            guardian_name: { let v = get(rec, 3); if v.is_empty() { None } else { Some(v) } },
+            guardian_mobile: if mobile.is_empty() { None } else { Some(mobile) },
+            dob: if dob.is_empty() { None } else { Some(dob) },
+            gender: { let v = get(rec, 6); if v.is_empty() { None } else { Some(v) } },
+            transport: yes_no(&get(rec, 7)),
+            rte: yes_no(&get(rec, 8)),
+            category: { let v = get(rec, 9); if v.is_empty() { None } else { Some(v) } },
+            aadhaar: { let v = get(rec, 10); if v.is_empty() { "none".into() } else { v } },
+            errors,
+        });
+    }
+    (out, None)
+}
+
+pub fn import_students_dry_run_logic(conn: &mut Connection, actor_s: &SessionStaff, path: &str) -> CmdResult<ImportPreviewDto> {
+    let actor = actor_from(conn, actor_s)?;
+    require_allow(&actor, Action::StudentCsvImport, &Target::of(TargetKind::Student))?;
+    let records = read_import_file(path)?;
+    let (parsed, fatal) = parse_import_rows(conn, &records);
+    if let Some(reason) = fatal {
+        return Ok(ImportPreviewDto { total: 0, valid: 0, rows: Vec::new(), error: Some(reason) });
+    }
+    let mut rows = Vec::new();
+    let mut valid = 0i64;
+    for p in &parsed {
+        let dup = if p.errors.is_empty() {
+            !check_duplicate_students_logic(conn, &p.name, p.dob.as_deref(), p.guardian_mobile.as_deref())?.is_empty()
+        } else {
+            false
+        };
+        if p.errors.is_empty() {
+            valid += 1;
+        }
+        let class_disp = records.get(p.row_num as usize - 1).and_then(|r| r.get(1)).cloned().unwrap_or_default();
+        rows.push(ImportRowDto { row: p.row_num, name: p.name.clone(), class: class_disp, errors: p.errors.clone(), duplicate: dup });
+    }
+    Ok(ImportPreviewDto { total: parsed.len() as i64, valid, rows, error: None })
+}
+
+#[derive(Debug, Serialize)]
+pub struct ImportResultDto {
+    pub imported: i64,
+    pub skipped: Vec<ImportRowDto>,
+}
+
+pub fn import_students_commit_logic(
+    conn: &mut Connection,
+    actor_s: &SessionStaff,
+    device_mode: DeviceMode,
+    today: &str,
+    path: &str,
+) -> CmdResult<ImportResultDto> {
+    let actor = actor_from(conn, actor_s)?;
+    require_allow(&actor, Action::StudentCsvImport, &Target::of(TargetKind::Student))?;
+    let records = read_import_file(path)?;
+    let (parsed, fatal) = parse_import_rows(conn, &records);
+    if let Some(reason) = fatal {
+        return Err(CmdError::validation("file", &reason));
+    }
+    let session_id: Option<String> = conn
+        .query_row("SELECT id FROM academic_session WHERE is_current=1 LIMIT 1", [], |r| r.get(0))
+        .optional()?;
+    let sync_state = if device_mode == DeviceMode::Server { "confirmed" } else { "on_device" };
+    let (series, mut last_seq) = admission_series_and_last(conn, None)?;
+    let year: i32 = today.get(0..4).and_then(|y| y.parse().ok()).unwrap_or(0);
+    let mut last_adm: i64 = conn
+        .query_row("SELECT COUNT(*) FROM student WHERE admission_no LIKE ?1", params![format!("{year}/%")], |r| r.get(0))
+        .optional()?
+        .unwrap_or(0);
+
+    let mut skipped = Vec::new();
+    let mut imported = 0i64;
+    let now = now_iso();
+
+    let tx = conn.transaction()?;
+    for p in &parsed {
+        if !p.errors.is_empty() {
+            let class_disp = records.get(p.row_num as usize - 1).and_then(|r| r.get(1)).cloned().unwrap_or_default();
+            skipped.push(ImportRowDto { row: p.row_num, name: p.name.clone(), class: class_disp, errors: p.errors.clone(), duplicate: false });
+            continue;
+        }
+        let sid = new_id("stu");
+        last_seq += 1;
+        let provisional = vidya_core::admissions::provisional_no(&series, last_seq);
+        let admission_no: Option<String> = if device_mode == DeviceMode::Server {
+            last_adm += 1;
+            Some(vidya_core::admissions::next_admission_no(year, (last_adm - 1) as u32))
+        } else {
+            None
+        };
+        tx.execute(
+            "INSERT INTO student(id,admission_no,provisional_no,name,dob,gender,guardian_name,guardian_mobile,transport,category,rte,aadhaar_status,status,created_at,updated_at,sync_state) \
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,'active',?13,?13,?14)",
+            params![sid, admission_no, provisional, p.name, p.dob, p.gender, p.guardian_name, p.guardian_mobile, p.transport as i64, p.category, p.rte as i64, p.aadhaar, now, sync_state],
+        )?;
+        if let Some(sess) = &session_id {
+            tx.execute(
+                "INSERT INTO enrollment(id,student_id,class_id,session_id,roll_no,from_date,created_at,updated_at,sync_state) \
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?7,?8)",
+                params![new_id("enr"), sid, p.class_id, sess, p.roll_no, today, now, sync_state],
+            )?;
+        }
+        for d in dues_for_new_student(&tx, &sid, &p.class_id, p.transport, today)? {
+            tx.execute(
+                "INSERT INTO fee_due(id,student_id,fee_head_id,period,amount_paise,created_at,updated_at,sync_state) \
+                 VALUES (?1,?2,?3,?4,?5,?6,?6,?7)",
+                params![new_id("due"), sid, d.fee_head_id, d.period, d.amount_paise.get(), now, sync_state],
+            )?;
+        }
+        imported += 1;
+    }
+    crate::security::audit::append(&tx, &AuditEntry {
+        at: now.clone(),
+        staff_id: Some(actor_s.id.clone()),
+        action: "import_students".into(),
+        table: Some("student".into()),
+        after_json: Some(serde_json::json!({ "imported": imported, "skipped": skipped.len() }).to_string()),
+        ..Default::default()
+    })?;
+    tx.commit()?;
+    Ok(ImportResultDto { imported, skipped })
+}
+
 // ============================================================ attendance ======
 
 #[derive(Debug, Serialize)]
@@ -1933,5 +2269,56 @@ mod tests {
             )
             .unwrap();
         assert_eq!(bad, 0, "paid dues are never cancelled");
+    }
+
+    #[test]
+    fn export_students_csv_writes_bom_file_with_header() {
+        let mut c = seeded();
+        let path = std::env::temp_dir().join(format!("vidya-export-{}.csv", uuid::Uuid::now_v7()));
+        let p = path.to_str().unwrap();
+        let n = export_csv_logic(&mut c, &accountant(), "students", p).unwrap();
+        assert_eq!(n, 670, "one data row per active student");
+        let bytes = std::fs::read(&path).unwrap();
+        assert_eq!(&bytes[0..3], b"\xEF\xBB\xBF", "UTF-8 BOM for Excel");
+        let text = String::from_utf8_lossy(&bytes);
+        assert!(text.contains("Name") && text.contains("Admission no."));
+        std::fs::remove_file(&path).ok();
+    }
+
+    #[test]
+    fn csv_import_dry_run_flags_errors_then_commit_imports_valid_only() {
+        let mut c = seeded();
+        let csv = [
+            "Name,Class,Roll,Guardian,Guardian mobile,Date of birth,Gender,Transport,RTE,Category,Aadhaar status",
+            "Import One,I-A,,Parent,9998887770,2016-04-01,male,no,no,,none",
+            "Bad Class,ZZ-99,,Parent,9998887771,2016-04-02,female,no,no,,none",
+            "Import Two,I-A,,Parent,,,male,no,no,,none",
+        ]
+        .join("\n");
+        let path = std::env::temp_dir().join(format!("vidya-import-{}.csv", uuid::Uuid::now_v7()));
+        std::fs::write(&path, csv).unwrap();
+        let p = path.to_str().unwrap();
+
+        let preview = import_students_dry_run_logic(&mut c, &accountant(), p).unwrap();
+        assert_eq!(preview.total, 3);
+        assert_eq!(preview.valid, 2);
+        assert!(preview.rows.iter().any(|r| r.name == "Bad Class" && r.errors.iter().any(|e| e.column == "Class")));
+
+        let before: i64 = c.query_row("SELECT COUNT(*) FROM student", [], |r| r.get(0)).unwrap();
+        let result = import_students_commit_logic(&mut c, &accountant(), DeviceMode::Server, "2026-09-24", p).unwrap();
+        assert_eq!(result.imported, 2);
+        assert_eq!(result.skipped.len(), 1);
+        let after: i64 = c.query_row("SELECT COUNT(*) FROM student", [], |r| r.get(0)).unwrap();
+        assert_eq!(after, before + 2, "only valid rows inserted, in one transaction");
+        // Both imported students got dues generated.
+        let with_dues: i64 = c
+            .query_row(
+                "SELECT COUNT(*) FROM student s WHERE s.name IN ('Import One','Import Two') AND EXISTS (SELECT 1 FROM fee_due d WHERE d.student_id=s.id)",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(with_dues, 2);
+        std::fs::remove_file(&path).ok();
     }
 }

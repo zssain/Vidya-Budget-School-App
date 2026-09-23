@@ -49,6 +49,10 @@ pub const COMMANDS: &[&str] = &[
     "check_duplicate_students",
     "transfer_student",
     "mark_student_left",
+    "export_csv",
+    "students_csv_template",
+    "import_students_dry_run",
+    "import_students_commit",
     "get_attendance_sheet",
     "save_attendance_draft",
     "submit_attendance",
@@ -239,6 +243,34 @@ pub fn mark_student_left(state: State<RtCtx>, student_id: String, left_on: Strin
     let device_id = state.device_id.lock().map_err(|_| crate::error::CmdError::internal("lock"))?.clone();
     let mode = state.device_mode;
     state.with_db(|conn| mark_student_left_logic(conn, &actor, device_id.as_deref(), mode, &student_id, &left_on, &reason))
+}
+
+// -------------------------------------------------------------------- CSV -----
+
+#[tauri::command]
+pub fn export_csv(state: State<RtCtx>, kind: String, path: String) -> CmdResult<i64> {
+    let actor = state.require_session()?;
+    state.with_db(|conn| export_csv_logic(conn, &actor, &kind, &path))
+}
+
+#[tauri::command]
+pub fn students_csv_template(path: String) -> CmdResult<()> {
+    std::fs::write(&path, students_csv_template_logic().into_bytes())
+        .map_err(|_| crate::error::CmdError::internal("csv_write"))?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn import_students_dry_run(state: State<RtCtx>, path: String) -> CmdResult<ImportPreviewDto> {
+    let actor = state.require_session()?;
+    state.with_db(|conn| import_students_dry_run_logic(conn, &actor, &path))
+}
+
+#[tauri::command]
+pub fn import_students_commit(state: State<RtCtx>, path: String) -> CmdResult<ImportResultDto> {
+    let actor = state.require_session()?;
+    let mode = state.device_mode;
+    state.with_db(|conn| import_students_commit_logic(conn, &actor, mode, &today(), &path))
 }
 
 // ----------------------------------------------------------- attendance ------

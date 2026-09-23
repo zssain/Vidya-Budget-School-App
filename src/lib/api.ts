@@ -139,6 +139,28 @@ export interface StudentProfileDto {
   attendance: AttendanceSummaryDto
 }
 
+export interface ImportRowError {
+  column: string
+  reason: string
+}
+export interface ImportRowDto {
+  row: number
+  name: string
+  class: string
+  errors: ImportRowError[]
+  duplicate: boolean
+}
+export interface ImportPreviewDto {
+  total: number
+  valid: number
+  rows: ImportRowDto[]
+  error: string | null
+}
+export interface ImportResultDto {
+  imported: number
+  skipped: ImportRowDto[]
+}
+
 export interface FeeLineDto {
   id: string
   label: string
@@ -339,6 +361,10 @@ export const transfer_student = (studentId: string, classId: string, rollNo?: nu
   invoke<StudentDto>('transfer_student', { studentId, classId, rollNo: rollNo ?? null })
 export const mark_student_left = (studentId: string, leftOn: string, reason: string) =>
   invoke<StudentProfileDto>('mark_student_left', { studentId, leftOn, reason })
+export const export_csv = (kind: string, path: string) => invoke<number>('export_csv', { kind, path })
+export const students_csv_template = (path: string) => invoke<void>('students_csv_template', { path })
+export const import_students_dry_run = (path: string) => invoke<ImportPreviewDto>('import_students_dry_run', { path })
+export const import_students_commit = (path: string) => invoke<ImportResultDto>('import_students_commit', { path })
 export const get_attendance_sheet = (classId: string, date: string) =>
   invoke<AttendanceSheetDto>('get_attendance_sheet', { classId, date })
 export const save_attendance_draft = (classId: string, date: string, marks: MarkInput[]) =>

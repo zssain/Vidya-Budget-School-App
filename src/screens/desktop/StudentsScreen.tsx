@@ -5,6 +5,7 @@ import { PageTitle } from '@/components/desktop/PageTitle'
 import { Pill } from '@/components/desktop/Pill'
 import { navigate } from '@/lib/router'
 import { t } from '@/lib/i18n'
+import { pickSavePath } from '@/lib/files'
 import * as api from '@/lib/api'
 import type { ClassDto, StudentRowDto } from '@/lib/api'
 
@@ -73,6 +74,23 @@ export default function StudentsScreen({ role }: { role: string }) {
   const [rows, setRows] = useState<StudentRowDto[]>([])
   const [total, setTotal] = useState(0)
   const [error, setError] = useState(false)
+  const [toast, setToast] = useState<string | null>(null)
+
+  const showToast = (msg: string) => {
+    setToast(msg)
+    window.setTimeout(() => setToast(null), 2600)
+  }
+
+  const exportCsv = async () => {
+    const path = await pickSavePath('students.csv')
+    if (!path) return
+    try {
+      const n = await api.export_csv('students', path)
+      showToast(t('csv.exported', { n }))
+    } catch {
+      showToast(t('students.loadError'))
+    }
+  }
 
   useEffect(() => {
     api.list_classes().then(setClasses).catch(() => setClasses([]))
@@ -129,16 +147,30 @@ export default function StudentsScreen({ role }: { role: string }) {
         title={t('students.title')}
         sub={t('students.sub')}
         actions={
-          <button
-            type="button"
-            onClick={() => navigate(`${base}/new`)}
-            style={{ height: '44px', padding: '0 18px', borderRadius: '6px', border: '1px solid var(--accent)', background: 'var(--accent)', color: 'var(--white)', fontSize: '14px', fontWeight: 500, display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}
-          >
-            <Icon name="plus" size={16} strokeWidth={1.75} />
-            {t('students.newAdmission')}
-          </button>
+          <>
+            <button type="button" onClick={exportCsv} style={{ height: '44px', padding: '0 16px', borderRadius: '6px', border: '1px solid var(--line-strong)', background: 'var(--surface)', color: 'var(--ink)', fontSize: '14px', fontWeight: 500, cursor: 'pointer' }}>
+              {t('csv.export')}
+            </button>
+            <button type="button" onClick={() => navigate(`${base}/import`)} style={{ height: '44px', padding: '0 16px', borderRadius: '6px', border: '1px solid var(--line-strong)', background: 'var(--surface)', color: 'var(--ink)', fontSize: '14px', fontWeight: 500, cursor: 'pointer' }}>
+              {t('csv.import')}
+            </button>
+            <button
+              type="button"
+              onClick={() => navigate(`${base}/new`)}
+              style={{ height: '44px', padding: '0 18px', borderRadius: '6px', border: '1px solid var(--accent)', background: 'var(--accent)', color: 'var(--white)', fontSize: '14px', fontWeight: 500, display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer' }}
+            >
+              <Icon name="plus" size={16} strokeWidth={1.75} />
+              {t('students.newAdmission')}
+            </button>
+          </>
         }
       />
+
+      {toast ? (
+        <div role="status" style={{ position: 'fixed', bottom: 24, left: '50%', transform: 'translateX(-50%)', zIndex: 30, background: 'var(--navy)', color: 'var(--white)', borderRadius: 10, padding: '12px 18px', fontSize: 14 }}>
+          {toast}
+        </div>
+      ) : null}
 
       {/* Filters */}
       <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
