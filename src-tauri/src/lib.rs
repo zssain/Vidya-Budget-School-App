@@ -12,6 +12,7 @@ pub mod error;
 pub mod kv;
 pub mod licence;
 pub mod security;
+pub mod server;
 pub mod state;
 pub mod sync;
 pub mod write;
