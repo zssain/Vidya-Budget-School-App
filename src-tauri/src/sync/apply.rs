@@ -31,8 +31,8 @@ fn flagged(op_id: &str, code: &str) -> OpResult {
     OpResult { op_id: op_id.into(), status: OpStatus::Flagged, server_seq: None, record: None, reason_code: Some(code.into()) }
 }
 
-/// Load the op author's CURRENT actor from the DB (role + state + assignments).
-fn load_actor(conn: &Connection, staff_id: &str) -> rusqlite::Result<Option<Actor>> {
+/// Load a staff member's CURRENT actor from the DB (role + state + assignments).
+pub fn load_actor(conn: &Connection, staff_id: &str) -> rusqlite::Result<Option<Actor>> {
     let row = conn
         .query_row(
             "SELECT role, state FROM staff WHERE id=?1",
@@ -91,6 +91,37 @@ fn target_for(table: &str, payload: &serde_json::Value) -> Target {
     Target { kind, class_id, ..Default::default() }
 }
 
+/// Resolve the class a target belongs to (attendance ops don't carry class_id).
+fn resolve_class_id(conn: &Connection, table: &str, record_id: &str, payload: &serde_json::Value) -> rusqlite::Result<Option<String>> {
+    if let Some(c) = payload.get("class_id").and_then(|v| v.as_str()) {
+        return Ok(Some(c.to_string()));
+    }
+    match table {
+        "attendance_sheet" => conn
+            .query_row("SELECT class_id FROM attendance_sheet WHERE id=?1", params![record_id], |r| r.get::<_, String>(0))
+            .optional(),
+        "attendance_mark" => {
+            // Class of the mark's existing sheet, or of the sheet named in the payload.
+            if let Some(c) = conn
+                .query_row(
+                    "SELECT s.class_id FROM attendance_mark m JOIN attendance_sheet s ON s.id=m.sheet_id WHERE m.id=?1",
+                    params![record_id], |r| r.get::<_, String>(0),
+                )
+                .optional()?
+            {
+                return Ok(Some(c));
+            }
+            if let Some(sheet_id) = payload.get("sheet_id").and_then(|v| v.as_str()) {
+                return conn
+                    .query_row("SELECT class_id FROM attendance_sheet WHERE id=?1", params![sheet_id], |r| r.get::<_, String>(0))
+                    .optional();
+            }
+            Ok(None)
+        }
+        _ => Ok(None),
+    }
+}
+
 /// The current `version` of a synced row, if it exists.
 fn current_version(conn: &Connection, table: &str, id: &str) -> rusqlite::Result<Option<i64>> {
     // Only synced tables carry `version`; the caller only asks for those.
@@ -126,7 +157,11 @@ pub fn apply_op(conn: &mut Connection, op: &Op) -> rusqlite::Result<OpResult> {
 
     // 4) Permission (vidya-core decides).
     if let Some(action) = action_for(&op.table, &op.kind) {
-        let decision = permissions::can(&actor, action, &target_for(&op.table, &op.payload));
+        let mut target = target_for(&op.table, &op.payload);
+        if target.class_id.is_none() {
+            target.class_id = resolve_class_id(conn, &op.table, &op.record_id, &op.payload)?;
+        }
+        let decision = permissions::can(&actor, action, &target);
         if !decision.is_allow() {
             return finalize(conn, op, rejected(&op.op_id, codes::FORBIDDEN));
         }
@@ -207,10 +242,21 @@ fn raise_flag(conn: &mut Connection, kind: &str, table: &str, id: &str, op_id: &
     Ok(())
 }
 
-/// Upsert the row carried in the op, bumping version/hlc, in one audited write.
+/// Tables that carry the §7 sync columns (version, hlc, created/updated_*, sync_state).
+fn is_synced(table: &str) -> bool {
+    matches!(
+        table,
+        "school" | "staff" | "student" | "enrollment" | "attendance_sheet" | "marks_sheet" | "fee_due" | "payment" | "request"
+    )
+}
+
+/// Upsert the row carried in the op, bumping version/hlc for synced tables, in one
+/// audited write. Child tables (attendance_mark, payment_allocation, …) carry no
+/// sync columns, so only their payload columns are written.
 fn apply_upsert(conn: &mut Connection, op: &Op) -> rusqlite::Result<OpResult> {
     let obj = op.payload.as_object().cloned().unwrap_or_default();
     let now = now_iso();
+    let synced = is_synced(&op.table);
     let tx = conn.transaction()?;
 
     let exists: bool = tx
@@ -219,7 +265,7 @@ fn apply_upsert(conn: &mut Connection, op: &Op) -> rusqlite::Result<OpResult> {
         .is_some();
 
     if exists {
-        // UPDATE the carried columns + sync bookkeeping.
+        // UPDATE the carried columns (+ sync bookkeeping for synced tables).
         let mut sets: Vec<String> = Vec::new();
         let mut vals: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
         for (col, val) in &obj {
@@ -229,22 +275,27 @@ fn apply_upsert(conn: &mut Connection, op: &Op) -> rusqlite::Result<OpResult> {
             sets.push(format!("{col}=?"));
             vals.push(json_to_sql(val));
         }
-        sets.push("version=version+1".into());
-        sets.push("hlc=?".into());
-        vals.push(Box::new(op.hlc.clone()));
-        sets.push("updated_at=?".into());
-        vals.push(Box::new(now.clone()));
-        sets.push("updated_by_staff=?".into());
-        vals.push(Box::new(op.staff_id.clone()));
-        sets.push("updated_by_device=?".into());
-        vals.push(Box::new(op.device_id.clone()));
-        sets.push("sync_state='confirmed'".into());
+        if synced {
+            sets.push("version=version+1".into());
+            sets.push("hlc=?".into());
+            vals.push(Box::new(op.hlc.clone()));
+            sets.push("updated_at=?".into());
+            vals.push(Box::new(now.clone()));
+            sets.push("updated_by_staff=?".into());
+            vals.push(Box::new(op.staff_id.clone()));
+            sets.push("updated_by_device=?".into());
+            vals.push(Box::new(op.device_id.clone()));
+            sets.push("sync_state='confirmed'".into());
+        }
+        if sets.is_empty() {
+            return Err(rusqlite::Error::InvalidQuery);
+        }
         vals.push(Box::new(op.record_id.clone()));
         let sql = format!("UPDATE {} SET {} WHERE id=?", op.table, sets.join(", "));
         let refs: Vec<&dyn rusqlite::ToSql> = vals.iter().map(|b| b.as_ref()).collect();
         tx.execute(&sql, refs.as_slice())?;
     } else {
-        // INSERT the carried columns + required bookkeeping.
+        // INSERT the carried columns (+ required bookkeeping for synced tables).
         let mut cols: Vec<String> = vec!["id".into()];
         let mut place: Vec<String> = vec!["?".into()];
         let mut vals: Vec<Box<dyn rusqlite::ToSql>> = vec![Box::new(op.record_id.clone())];
@@ -256,10 +307,12 @@ fn apply_upsert(conn: &mut Connection, op: &Op) -> rusqlite::Result<OpResult> {
             place.push("?".into());
             vals.push(json_to_sql(val));
         }
-        for (c, v) in [("hlc", op.hlc.clone()), ("created_at", now.clone()), ("updated_at", now.clone()), ("updated_by_staff", op.staff_id.clone()), ("updated_by_device", op.device_id.clone()), ("sync_state", "confirmed".to_string())] {
-            cols.push(c.into());
-            place.push("?".into());
-            vals.push(Box::new(v));
+        if synced {
+            for (c, v) in [("hlc", op.hlc.clone()), ("created_at", now.clone()), ("updated_at", now.clone()), ("updated_by_staff", op.staff_id.clone()), ("updated_by_device", op.device_id.clone()), ("sync_state", "confirmed".to_string())] {
+                cols.push(c.into());
+                place.push("?".into());
+                vals.push(Box::new(v));
+            }
         }
         let sql = format!("INSERT INTO {} ({}) VALUES ({})", op.table, cols.join(","), place.join(","));
         let refs: Vec<&dyn rusqlite::ToSql> = vals.iter().map(|b| b.as_ref()).collect();

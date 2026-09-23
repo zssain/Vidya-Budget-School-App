@@ -8,7 +8,7 @@
 
 use std::collections::BTreeSet;
 
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 use vidya_core::permissions::Actor;
 use vidya_core::types::Role;
 
@@ -52,6 +52,91 @@ fn ids_of(conn: &Connection, sql: &str, args: &[&dyn rusqlite::ToSql]) -> rusqli
     let mut stmt = conn.prepare(sql)?;
     let rows = stmt.query_map(args, |r| r.get::<_, String>(0))?;
     rows.collect()
+}
+
+/// Is a single (table, record_id) visible to this actor, and if so its filtered
+/// row? Used by `/sync/pull` to scope incremental changes (docs §8.8).
+pub fn visible_row(conn: &Connection, actor: &Actor, table: &str, id: &str) -> rusqlite::Result<Option<Change>> {
+    if !can_see_table(actor.role, table) {
+        return Ok(None);
+    }
+    let row = match read_row_json(conn, table, id)? {
+        Some(r) => r,
+        None => return Ok(None),
+    };
+    let mk = |mut payload: serde_json::Value, filter: Option<&dyn Fn(&mut serde_json::Value)>| {
+        if let Some(f) = filter {
+            f(&mut payload);
+        }
+        Some(Change { table: table.into(), record_id: id.into(), payload, server_seq: 0, hlc: None })
+    };
+    match actor.role {
+        Role::Principal => Ok(mk(row, None)),
+        Role::Accountant => {
+            // Accountant sees fees/students/classes/staff-names; not marks (already gated).
+            if table == "staff" {
+                let f = |r: &mut serde_json::Value| { if let Some(o) = r.as_object_mut() { o.retain(|k, _| STAFF_PUBLIC.contains(&k.as_str())); } };
+                Ok(mk(row, Some(&f)))
+            } else {
+                Ok(mk(row, None))
+            }
+        }
+        Role::Teacher => {
+            let classes = teacher_class_ids(conn, actor)?;
+            match table {
+                "school" | "academic_session" | "term" | "subject" => Ok(mk(row, None)),
+                "staff" => {
+                    let f = |r: &mut serde_json::Value| { if let Some(o) = r.as_object_mut() { o.retain(|k, _| STAFF_PUBLIC.contains(&k.as_str())); } };
+                    Ok(mk(row, Some(&f)))
+                }
+                "class" => Ok(if classes.contains(id) { mk(row, None) } else { None }),
+                "class_subject" => {
+                    let ok = actor.class_subjects.iter().any(|c| c == id);
+                    Ok(if ok { mk(row, None) } else { None })
+                }
+                "student" => {
+                    // Visible iff enrolled in one of the teacher's classes; address gated.
+                    let cid: Option<String> = conn
+                        .query_row(
+                            "SELECT class_id FROM enrollment WHERE student_id=?1 AND to_date IS NULL LIMIT 1",
+                            [id], |r| r.get(0),
+                        )
+                        .optional()?;
+                    match cid {
+                        Some(c) if classes.contains(&c) => {
+                            let is_ct = actor.class_teacher_of.iter().any(|x| x == &c);
+                            if is_ct {
+                                Ok(mk(row, None))
+                            } else {
+                                let f = |r: &mut serde_json::Value| { if let Some(o) = r.as_object_mut() { o.insert("address".into(), serde_json::Value::Null); } };
+                                Ok(mk(row, Some(&f)))
+                            }
+                        }
+                        _ => Ok(None),
+                    }
+                }
+                "enrollment" => {
+                    let cid: Option<String> = conn.query_row("SELECT class_id FROM enrollment WHERE id=?1", [id], |r| r.get(0)).optional()?;
+                    Ok(if cid.map(|c| classes.contains(&c)).unwrap_or(false) { mk(row, None) } else { None })
+                }
+                "attendance_sheet" => {
+                    let cid: Option<String> = conn.query_row("SELECT class_id FROM attendance_sheet WHERE id=?1", [id], |r| r.get(0)).optional()?;
+                    Ok(if cid.map(|c| classes.contains(&c)).unwrap_or(false) { mk(row, None) } else { None })
+                }
+                "attendance_mark" => {
+                    let cid: Option<String> = conn
+                        .query_row("SELECT s.class_id FROM attendance_mark m JOIN attendance_sheet s ON s.id=m.sheet_id WHERE m.id=?1", [id], |r| r.get(0))
+                        .optional()?;
+                    Ok(if cid.map(|c| classes.contains(&c)).unwrap_or(false) { mk(row, None) } else { None })
+                }
+                "request" => {
+                    let by: Option<String> = conn.query_row("SELECT requested_by FROM request WHERE id=?1", [id], |r| r.get(0)).optional()?;
+                    Ok(if by.as_deref() == Some(actor.staff_id.as_str()) { mk(row, None) } else { None })
+                }
+                _ => Ok(None),
+            }
+        }
+    }
 }
 
 /// Build the full set of rows a device with this actor may see (snapshot).
