@@ -17,6 +17,7 @@
     "list_classes",
     "get_school",
     "list_students",
+    "list_students_page",
     "search_students",
     "get_student",
     "create_student",

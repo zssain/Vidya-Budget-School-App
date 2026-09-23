@@ -467,6 +467,94 @@ pub fn get_student_logic(conn: &mut Connection, id: &str) -> CmdResult<StudentDt
         .ok_or_else(CmdError::not_found)
 }
 
+// ---- Students list: filters (class/section/status) + FTS + real pagination --
+
+#[derive(Debug, Serialize)]
+pub struct StudentRowDto {
+    pub id: String,
+    pub name: String,
+    pub admission_no: Option<String>,
+    pub provisional_no: Option<String>,
+    pub class_display: Option<String>,
+    pub section: Option<String>,
+    pub roll_no: Option<i64>,
+    pub guardian_name: Option<String>,
+    pub status: String, // active | left
+}
+
+#[derive(Debug, Serialize)]
+pub struct StudentsPageDto {
+    pub rows: Vec<StudentRowDto>,
+    pub total: i64,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct StudentQuery {
+    pub class_id: Option<String>,
+    pub section: Option<String>,
+    pub status: Option<String>, // active | left | null(all)
+    pub query: Option<String>,  // FTS prefix
+    pub limit: i64,
+    pub offset: i64,
+}
+
+pub fn list_students_page_logic(conn: &mut Connection, q: &StudentQuery) -> CmdResult<StudentsPageDto> {
+    use rusqlite::params_from_iter;
+    use rusqlite::types::Value;
+
+    let mut wheres: Vec<String> = Vec::new();
+    let mut args: Vec<Value> = Vec::new();
+    match q.status.as_deref() {
+        Some("active") => wheres.push("s.status='active'".into()),
+        Some("left") => wheres.push("s.status='left'".into()),
+        _ => {}
+    }
+    if let Some(cid) = q.class_id.as_deref().filter(|s| !s.is_empty()) {
+        wheres.push("e.class_id = ?".into());
+        args.push(Value::Text(cid.to_string()));
+    }
+    if let Some(sec) = q.section.as_deref().filter(|s| !s.is_empty()) {
+        wheres.push("c.section = ?".into());
+        args.push(Value::Text(sec.to_string()));
+    }
+    if let Some(query) = q.query.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        wheres.push("s.rowid IN (SELECT rowid FROM student_fts WHERE student_fts MATCH ?)".into());
+        args.push(Value::Text(format!("{}*", query.replace('"', ""))));
+    }
+    let where_clause = if wheres.is_empty() { String::new() } else { format!("WHERE {}", wheres.join(" AND ")) };
+    let base_from = "FROM student s \
+        LEFT JOIN enrollment e ON e.student_id = s.id AND e.to_date IS NULL \
+        LEFT JOIN class c ON c.id = e.class_id";
+
+    let count_sql = format!("SELECT COUNT(*) {base_from} {where_clause}");
+    let total: i64 = conn.query_row(&count_sql, params_from_iter(args.iter()), |r| r.get(0))?;
+
+    let sql = format!(
+        "SELECT s.id, s.name, s.admission_no, s.provisional_no, c.display, c.section, e.roll_no, s.guardian_name, s.status \
+         {base_from} {where_clause} ORDER BY s.name COLLATE NOCASE LIMIT ? OFFSET ?"
+    );
+    let mut page_args = args;
+    page_args.push(Value::Integer(q.limit.max(0)));
+    page_args.push(Value::Integer(q.offset.max(0)));
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt
+        .query_map(params_from_iter(page_args.iter()), |r| {
+            Ok(StudentRowDto {
+                id: r.get(0)?,
+                name: r.get(1)?,
+                admission_no: r.get(2)?,
+                provisional_no: r.get(3)?,
+                class_display: r.get(4)?,
+                section: r.get(5)?,
+                roll_no: r.get(6)?,
+                guardian_name: r.get(7)?,
+                status: r.get(8)?,
+            })
+        })?
+        .collect::<rusqlite::Result<_>>()?;
+    Ok(StudentsPageDto { rows, total })
+}
+
 #[derive(Debug, Deserialize)]
 pub struct NewStudentInput {
     pub name: String,
@@ -1218,5 +1306,30 @@ mod tests {
         assert!(names.iter().any(|n| n == "Kavya Singh"));
         assert!(names.iter().any(|n| n == "Kavya Mishra"));
         assert!(names.iter().any(|n| n == "Kavya Reddy"));
+    }
+
+    #[test]
+    fn students_page_paginates_and_filters() {
+        let mut c = seeded();
+        let q = |status: Option<&str>, query: Option<&str>, limit, offset| StudentQuery {
+            class_id: None,
+            section: None,
+            status: status.map(str::to_string),
+            query: query.map(str::to_string),
+            limit,
+            offset,
+        };
+        // Page 1 of active students: 25 rows, full total (seed = 670 active).
+        let p1 = list_students_page_logic(&mut c, &q(Some("active"), None, 25, 0)).unwrap();
+        assert_eq!(p1.rows.len(), 25);
+        assert_eq!(p1.total, 670);
+        // Page 2 keeps the same total but different rows (real offset, no silent cap).
+        let p2 = list_students_page_logic(&mut c, &q(Some("active"), None, 25, 25)).unwrap();
+        assert_eq!(p2.total, 670);
+        assert_ne!(p1.rows[0].id, p2.rows[0].id);
+        // FTS narrows to the three Kavyas; total reflects the filtered count.
+        let kv = list_students_page_logic(&mut c, &q(None, Some("Kavya"), 50, 0)).unwrap();
+        assert_eq!(kv.total, 3);
+        assert!(kv.rows.iter().all(|r| r.name.contains("Kavya")));
     }
 }

@@ -69,6 +69,32 @@ export interface StudentDto {
   roll_no: number | null
 }
 
+export interface StudentRowDto {
+  id: string
+  name: string
+  admission_no: string | null
+  provisional_no: string | null
+  class_display: string | null
+  section: string | null
+  roll_no: number | null
+  guardian_name: string | null
+  status: string
+}
+
+export interface StudentsPageDto {
+  rows: StudentRowDto[]
+  total: number
+}
+
+export interface StudentQuery {
+  class_id?: string | null
+  section?: string | null
+  status?: string | null
+  query?: string | null
+  limit: number
+  offset: number
+}
+
 export interface FeeLineDto {
   id: string
   label: string
@@ -250,6 +276,8 @@ export const list_classes = () => invoke<ClassDto[]>('list_classes')
 export const get_school = () => invoke<SchoolDto>('get_school')
 export const list_students = (classId?: string) =>
   invoke<StudentDto[]>('list_students', { classId: classId ?? null })
+export const list_students_page = (query: StudentQuery) =>
+  invoke<StudentsPageDto>('list_students_page', { query })
 export const search_students = (query: string) => invoke<StudentDto[]>('search_students', { query })
 export const get_student = (id: string) => invoke<StudentDto>('get_student', { id })
 export const create_student = (input: NewStudentInput) => invoke<StudentDto>('create_student', { input })

@@ -41,6 +41,7 @@ pub const COMMANDS: &[&str] = &[
     "list_classes",
     "get_school",
     "list_students",
+    "list_students_page",
     "search_students",
     "get_student",
     "create_student",
@@ -185,6 +186,11 @@ pub fn get_school(state: State<RtCtx>) -> CmdResult<SchoolDto> {
 #[tauri::command]
 pub fn list_students(state: State<RtCtx>, class_id: Option<String>) -> CmdResult<Vec<StudentDto>> {
     state.with_db(|conn| list_students_logic(conn, class_id.as_deref()))
+}
+
+#[tauri::command]
+pub fn list_students_page(state: State<RtCtx>, query: StudentQuery) -> CmdResult<StudentsPageDto> {
+    state.with_db(|conn| list_students_page_logic(conn, &query))
 }
 
 #[tauri::command]
