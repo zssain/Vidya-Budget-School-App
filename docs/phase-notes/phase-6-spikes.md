@@ -181,6 +181,9 @@ Fill A.7 + B verdicts, then pick ONE (§11, prompt Step 0):
 So Steps 1–9 are mostly wiring once the gate clears, the spike-independent, offline-provable pieces
 are done and tested on this branch (see `docs/phase-notes/phase-6.md`): the `DriveApi` trait + a
 fake permission-enforcing Drive, the `.vop` bundle seal/verify + chunking format, the versioned
-audience-key store + rotation, and `vidya_core::audience::audience_for`. The only parts that HARD
-depend on the spike are the **real** `DriveApi` client (Drive v3 over `reqwest`) and **OAuth**
-(desktop loopback + the Spike-B Android method) — deliberately not built yet.
+audience-key store + rotation, `vidya_core::audience::audience_for`, and the **full device-push +
+server-import exchange engine** (`sync::drive::exchange`) — proven end-to-end against the fake Drive
+(`server-off → import → Confirmed`, LAN+Drive dedup, tampered→quarantine, revoked→flagged, acks). The
+only parts that HARD depend on the spike are the **real** `DriveApi` client (Drive v3 over `reqwest`)
+and **OAuth** (desktop loopback + the Spike-B Android method), plus the UI-coupled device
+provisional-pull (Step 5) — deliberately not built yet.

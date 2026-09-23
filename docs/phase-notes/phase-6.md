@@ -13,11 +13,14 @@ continue until the owner chooses."* And standing rule 4 forbids asserting Google
 without real test accounts. I therefore did **not** build Steps 1–9's Google-dependent parts.
 
 **Owner decision this phase (the STOP):** asked how to clear Step 0 given the sandbox can't run the
-spikes, the owner delegated — *"choose the best option and tell me what you did."* I took the option
-that produces the most real, tested, honest progress without crossing the gate or inventing Google
-behaviour: **write the executable spike runbook (the Step-0 deliverable) AND build only the
-spike-independent, offline-provable scaffolding.** Everything that hard-depends on the spike (the
-real Drive v3 client + OAuth) is left for after the owner's (a)/(b) decision.
+spikes, the owner delegated twice — *"choose the best option and tell me what you did"* then
+*"confirmed do the best."* I took the option that produces the most real, tested, honest progress
+without crossing the gate or inventing Google behaviour: **write the executable spike runbook (the
+Step-0 deliverable) AND build every spike-independent, offline-provable piece — including the full
+device-push + server-import exchange engine over the `DriveApi` trait, proven end-to-end against a
+fake Drive.** The only parts left are the ones that hard-depend on the spike (the real Drive v3
+client + OAuth) and the UI-coupled device provisional-pull. I also **made the two open policy calls**
+(below), since they are mine to make and needed no Google.
 
 ## Step 0 — spikes: RUNBOOK delivered, results PENDING
 `docs/phase-notes/phase-6-spikes.md` is the exact, runnable Step-0 runbook: the 4 test accounts +
@@ -32,12 +35,31 @@ All new code is provable offline and interchangeable with the real Drive client 
 
 | Piece | File | For step | Proven by |
 |---|---|---|---|
-| `audience_for(table, class_id)` + `Audience` | `crates/vidya-core/src/audience.rs` | 4 | 7 unit tests |
+| `audience_for(table, class_id)` + `Audience` | `crates/vidya-core/src/audience.rs` | 4 | 8 unit tests |
 | `.vop` bundle seal/verify + chunking (≤500 ops/1 MB) | `src-tauri/src/sync/drive/bundle.rs` | 4/5 | 8 unit tests |
 | Versioned audience-key store + rotation | `src-tauri/src/sync/drive/keys.rs` | 3 | 5 unit tests |
 | `DriveApi` trait + `DriveFile`/`DriveError` | `src-tauri/src/sync/drive/mod.rs` | 2/4/5/6 | (surface) |
 | Fake permission-enforcing, fault-injecting Drive | `src-tauri/src/sync/drive/fake.rs` | 9 | 6 unit tests |
+| **Exchange engine: `push_outbox` + `import_all` + acks** | `src-tauri/src/sync/drive/exchange.rs` | **4/6/7** | via harness |
 | End-to-end exchange harness (offline slice) | `src-tauri/tests/drive_e2e.rs` | 9 | 5 integration tests |
+| **Full server-off→import→Confirmed harness** | `src-tauri/tests/sync_e2e.rs` (+5) | **9** | 5 integration tests |
+
+### Exchange engine as built (Steps 4/6/7 mechanics — transport-agnostic)
+`exchange::push_outbox` (device) groups the outbox by audience, seals each group into a `.vop`
+(`chunk_ops` for the ≤500-op / ≤1 MB caps), uploads temp-name → **verify-by-readback** (re-download +
+compare bytes, so no md5 crate is needed for either the fake or the real Drive) → rename, then marks
+the domain rows `shared_drive` (only advancing from `draft`/`on_device`, never downgrading
+`confirmed`). Retry-safe: the final name is a pure function of the ops, so a re-run finds the file
+already present and skips it. `exchange::import_all` (server) discovers `ops-*` folders under
+`exchange/`, downloads bundles, opens each with the server's held key **version**
+(`keys::key_bytes`), applies **all** ops across all bundles in **global HLC order** through the
+existing `apply::apply_op` (idempotent by op_id; revoked author → `flagged` + `review_flag`; excess
+payment → flagged; conflicts detected — all unchanged), archives processed bundles to `ops-*/_done/`,
+and returns a per-device sealed **ack**. `write_ack`/`read_ack` seal `{last_hlc, results[]}` with the
+device session key (Step 6/7). The new `sync_e2e` scenarios prove the DONE-MEANS server side:
+server-off phone push → server-on import → **Confirmed** (register changes, audit chain valid);
+tampered bundle → **quarantined**, register unchanged; suspended author → **flagged**, not applied;
+same op via LAN **and** Drive → applied **once**; ack round-trips to the device.
 
 ### Bug fixed (pre-P06)
 `server::service::audience_keys_for` minted a **fresh random key on every call and never persisted
@@ -64,45 +86,55 @@ holds every version (opens old bundles on import); a device keeps only versions 
 Proven: teacher V-A's key cannot open a `class:VI-B` bundle; accountant (finance) cannot open class
 bundles; a v1 bundle stays readable after rotation to v2.
 
-## `[OWNER]` decision needed — audience of cross-cutting tables
-`audience_for` covers the tables whose audience is unambiguous:
-- `finance`: fee_head, fee_due, payment, payment_allocation, reversal
+## Policy calls I made (audience of cross-cutting tables) — confirm
+`audience_for` maps every table:
+- `finance`: fee_head, fee_due, payment, payment_allocation, reversal **+ student, enrollment**
 - `class:<id>`: attendance_sheet, attendance_mark, marks_sheet, mark_entry, exam, exam_subject
 - `admin`: school, session, term, subject, class, class_subject, staff, device, invite, conflict,
   review_flag, notification, licence, grade_scale, grade_band
 
-**`student`, `enrollment`, `request` are deliberately undecided** (`audience_for` returns
-`VALIDATION`). They cross the finance/class boundary: the **pushing device must hold the audience
-key**, but an accountant holds only `finance` and a teacher only `class:<own>`, so no single
-table→audience rule keeps every pusher able to seal. Options for the owner:
-- **student/enrollment → `finance`** (accountants + Principal push them; teachers read the roster
-  from the server, so a teacher won't see a *new* admission via Drive during an outage), OR
-- **→ the student's `class:<id>`** (teachers see roster changes, but accountants then can't seal
-  their own admission edits — would need a finance key on those bundles too).
-- **request → the requester's own domain** (a teacher's correction request sealed under
-  `class:<own>`, an accountant's under `finance`) — i.e. audience is record/actor-dependent, not
-  table-only. Until decided, the two existing op sites keep their explicit audiences (`payment` →
-  finance ✓; approve-request → admin) and `audience_for` is not yet wired into the write path.
+**Decision — `student`/`enrollment` → `finance`** (default; changeable). The pusher must hold the
+audience key; student/enrollment are written by accountants + the Principal (both hold `finance`),
+teachers only *read* the roster. `finance` is the one audience every pusher of these tables holds.
+The alternative (`class:<id>`) would let teachers see roster changes via Drive but leave accountants
+unable to seal their own admission edits — worse. **Consequence to accept:** during a server outage a
+teacher won't see a *new* admission via Drive until the server returns (it reconciles on import).
 
-## What's left in Phase 6 (all gated on the Step-0 decision)
-1. **Step 1 OAuth** — desktop PKCE loopback (`reqwest` + `tauri-plugin-opener`), refresh token
-   encrypted in the DB; Android = the Spike-B method (needs Java/NDK/device + possibly an
-   owner-approved Android dep).
-2. **Step 2** the real `DriveApi` over Drive v3 (`reqwest`), folder provisioning + the Settings →
-   Google Drive screen (sharing status per staff).
-3. **Steps 4–6 engine** — device push (group by `audience_for`, temp→verify→rename→`shared_drive`),
-   device pull (20 s ± 3 s, provisional apply, "Shared through school Drive · waiting for school",
-   never overwrite own unsent), server import (every 5 min, HLC order, acks, `_done/` archive).
-4. **Step 7** device acks; **Step 8** the full failure matrix → specific Needs-attention items.
-5. **Step 9** wire the fake Drive into the full `server-off → import → Confirmed` loop in
-   `sync_e2e.rs` (dedup LAN+Drive is already idempotent by op_id; revoked-author flagging already in
-   `apply.rs`). The offline slice is proven in `drive_e2e.rs`.
-6. Wire `audience_for` into the write path once the cross-cutting mapping is chosen.
+**Decision — `request` audience = the requester's own domain** (a teacher's correction under
+`class:<own>`, an accountant's under `finance`), so it is record/actor-dependent, not table-only;
+`audience_for("request", …)` returns `VALIDATION` on purpose and the write site passes it explicitly.
+Today only three sites emit ops (`payment` → finance ✓; approve-request + a p04 admin action → admin,
+both Principal actions ✓); attendance/marks/student **client** writes don't yet emit outbox ops, so
+`audience_for` becomes load-bearing in the write path only when Step 4's client push is wired — the
+exchange engine already groups by each op's stored `audience`.
+
+## What's left in Phase 6 (the Google-dependent + UI parts)
+1. **Step 1 OAuth** *(gated on the spike + needs Java/NDK/device)* — desktop PKCE loopback (`reqwest`
+   + `tauri-plugin-opener`), refresh token encrypted in the DB; Android = the Spike-B method (maybe
+   an owner-approved Android dep).
+2. **Step 2** *(gated)* — a `DriveApi` impl over the **real** Drive v3 (`reqwest`) that satisfies the
+   same trait the engine already uses; folder provisioning + the Settings → Google Drive screen
+   (sharing status per staff). `[VERIFY — Spike A]` whether other `drive.file` users can read a
+   file's public `properties`; if not, fall back to encoding audience+version in the filename.
+3. **Step 5 device pull** *(engine core straightforward; the UI/rules are the work)* — the 20 s ± 3 s
+   foreground loop, **provisional** apply within scope marked "Shared through school Drive · waiting
+   for school", never overwrite the device's own unsent (flag locally instead), payments shown only
+   in "waiting for server" totals. `import_all`'s decrypt/HLC/quarantine logic is reusable; the
+   provisional (non-confirming) client apply + the totals/UI are new.
+4. **Step 8** the full failure matrix → specific Needs-attention items (the `DriveError` variants are
+   already the Step-8 cases; each needs its exact copy + fix action + safe-requeue).
+5. Wire `audience_for` into the client write path once attendance/marks/student client writes emit
+   outbox ops (Step 4's client half).
+
+**Already built (were "left"):** the device push (Step 4 mechanics), server import + HLC order + acks
++ `_done/` archive (Step 6), device ack read (Step 7), and the full `server-off → import → Confirmed`
+harness incl. LAN+Drive dedup, tampered-quarantine and revoked-flagging (Step 9) — all over the
+`DriveApi` trait, so the real client drops straight in.
 
 ## Verification (real output, this branch)
-- `cargo test --workspace` → **394 pass, 0 fail** (was 363 at P05): vidya lib **119** (+19 drive),
-  drive_e2e **5** (new), e2e_flows 4, relay_e2e 5, sync_e2e 8, vidya-core **242** (+7 audience),
-  no_floats 1, doc 10. (benchmark `#[ignore]`.)
+- `cargo test --workspace` → **400 pass, 0 fail** (was 363 at P05): vidya lib **119** (+19 drive),
+  drive_e2e **5** (new), e2e_flows 4, relay_e2e 5, **sync_e2e 13** (+5 Drive exchange), vidya-core
+  **243** (+8 audience), no_floats 1, doc 10. (benchmark `#[ignore]`.)
 - `cargo clippy --workspace --all-targets -- -D warnings` → **clean**.
 - Crypto gate: `cargo tree -i aws-lc-rs` / `-i aws-lc-sys` → *no packages* (absent); `ring` is the
   sole TLS provider — unchanged.
@@ -111,9 +143,12 @@ table→audience rule keeps every pusher able to seal. Options for the owner:
   (no Java on PATH), and the real Drive/OAuth transport (built later, post-spike).
 
 ## Questions for the owner
-1. **Run the Step-0 spikes** (`phase-6-spikes.md`) and record the verdict: does `drive.file` let
+1. **Run the Step-0 spikes** (`phase-6-spikes.md`) — the ONE real blocker: does `drive.file` let
    staff read each other's files in a shared folder? Which Android sign-in works, and its APK delta?
-2. **Audience mapping** for `student`/`enrollment`/`request` (above) — which option?
+   The whole engine is built and green; only the real transport + OAuth wait on this.
+2. **Confirm the two policy calls I made** (above): `student`/`enrollment` → `finance`;
+   `request` → the requester's own domain. Say the word if you want student/enrollment on the class
+   audience instead (with the accountant-sealing caveat).
 3. Confirm the `keys` non-persistence fix (behaviour-preserving; all tests green).
 4. Prior defaults kept (lease 30 d; per-device tokens); the P05 opens (relay host/domain,
    `RELAY_SHARED_KEY` management, `futures-util` companion dep) are still awaiting sign-off.
