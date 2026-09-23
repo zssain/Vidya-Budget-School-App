@@ -18,10 +18,12 @@
 //! * [`fake::FakeDrive`] — a local, permission-enforcing, fault-injecting Drive
 //!   for the Step 9 harness (a "local folder implementing the same trait").
 
+pub mod attention;
 pub mod bundle;
 pub mod exchange;
 pub mod fake;
 pub mod keys;
+pub mod pull;
 
 use std::collections::BTreeMap;
 

@@ -1,4 +1,4 @@
-# Phase 6 handoff — Google Drive fallback (STOPPED at the Step 0 gate; offline scaffolding built)
+# Phase 6 handoff — Google Drive fallback (Step 0 gate open; full offline exchange engine built + tested)
 
 Branch: `rebuild/p06` (from `rebuild/p05`). Start HEAD: `67624e6` (P05 close-out). `git status` at
 start: clean.
@@ -41,7 +41,9 @@ All new code is provable offline and interchangeable with the real Drive client 
 | `DriveApi` trait + `DriveFile`/`DriveError` | `src-tauri/src/sync/drive/mod.rs` | 2/4/5/6 | (surface) |
 | Fake permission-enforcing, fault-injecting Drive | `src-tauri/src/sync/drive/fake.rs` | 9 | 6 unit tests |
 | **Exchange engine: `push_outbox` + `import_all` + acks** | `src-tauri/src/sync/drive/exchange.rs` | **4/6/7** | via harness |
-| End-to-end exchange harness (offline slice) | `src-tauri/tests/drive_e2e.rs` | 9 | 5 integration tests |
+| **Device provisional pull** | `src-tauri/src/sync/drive/pull.rs` | **5** | 3 integration tests |
+| **Failure → "Needs attention" mapping** | `src-tauri/src/sync/drive/attention.rs` | **8** | 3 unit tests |
+| End-to-end exchange + pull harness (offline slice) | `src-tauri/tests/drive_e2e.rs` | 9 | 8 integration tests |
 | **Full server-off→import→Confirmed harness** | `src-tauri/tests/sync_e2e.rs` (+5) | **9** | 5 integration tests |
 
 ### Exchange engine as built (Steps 4/6/7 mechanics — transport-agnostic)
@@ -60,6 +62,27 @@ device session key (Step 6/7). The new `sync_e2e` scenarios prove the DONE-MEANS
 server-off phone push → server-on import → **Confirmed** (register changes, audit chain valid);
 tampered bundle → **quarantined**, register unchanged; suspended author → **flagged**, not applied;
 same op via LAN **and** Drive → applied **once**; ack round-trips to the device.
+
+### Device provisional pull as built (Step 5)
+`pull::pull_provisional` reads every OTHER device's `ops-*` folder, downloads only bundles whose
+`(audience, version)` key the device holds, and applies them as **provisional** rows
+(`sync_state='shared_drive'`, the §8.10 "Shared through school Drive · waiting for school" status) —
+never `confirmed`. A bundle for an audience it lacks is "not for me" and skipped; a bundle it holds
+the key for but that fails AEAD is **quarantined** (recorded for the Principal). It **never overwrites
+the device's own unsent change** (an outbox op for the same record → kept local, flagged), is
+idempotent by op_id, and keeps a **cursor per folder** in `drive_state` so a bundle is processed once.
+Because provisional payments carry `sync_state='shared_drive'`, the existing dashboards already count
+them in "waiting for server", never in confirmed totals. Proven by 3 `drive_e2e` scenarios (phone B
+sees provisional / phone C cannot; own-unsent kept; tampered quarantined). **The 20 s ± 3 s foreground
+loop + the visual marking in the UI are the remaining wiring.**
+
+### Failure handling as built (Step 8)
+`attention::needs_attention_for(&DriveError)` maps every Drive failure to a specific "Needs attention"
+item (stable code + title/fix i18n keys + English defaults + `needs_user_action` + `requeue_safe`):
+quota full, token revoked ("Reconnect Google Drive"), folder deleted/unshared, permission denied,
+rate limited (transient, auto-retry), name conflict (already shared), unreachable. **Pending work
+stays queued in every case** (push returns `Err`, the outbox is never cleared). The React surfacing +
+Hindi copy land with P7/P8.
 
 ### Bug fixed (pre-P06)
 `server::service::audience_keys_for` minted a **fresh random key on every call and never persisted
@@ -108,7 +131,7 @@ both Principal actions ✓); attendance/marks/student **client** writes don't ye
 `audience_for` becomes load-bearing in the write path only when Step 4's client push is wired — the
 exchange engine already groups by each op's stored `audience`.
 
-## What's left in Phase 6 (the Google-dependent + UI parts)
+## What's left in Phase 6 (mostly Google-transport + UI)
 1. **Step 1 OAuth** *(gated on the spike + needs Java/NDK/device)* — desktop PKCE loopback (`reqwest`
    + `tauri-plugin-opener`), refresh token encrypted in the DB; Android = the Spike-B method (maybe
    an owner-approved Android dep).
@@ -116,25 +139,23 @@ exchange engine already groups by each op's stored `audience`.
    same trait the engine already uses; folder provisioning + the Settings → Google Drive screen
    (sharing status per staff). `[VERIFY — Spike A]` whether other `drive.file` users can read a
    file's public `properties`; if not, fall back to encoding audience+version in the filename.
-3. **Step 5 device pull** *(engine core straightforward; the UI/rules are the work)* — the 20 s ± 3 s
-   foreground loop, **provisional** apply within scope marked "Shared through school Drive · waiting
-   for school", never overwrite the device's own unsent (flag locally instead), payments shown only
-   in "waiting for server" totals. `import_all`'s decrypt/HLC/quarantine logic is reusable; the
-   provisional (non-confirming) client apply + the totals/UI are new.
-4. **Step 8** the full failure matrix → specific Needs-attention items (the `DriveError` variants are
-   already the Step-8 cases; each needs its exact copy + fix action + safe-requeue).
-5. Wire `audience_for` into the client write path once attendance/marks/student client writes emit
+3. **UI wiring** — the 20 s ± 3 s foreground pull loop calling `pull_provisional`; the visual
+   "Shared through school Drive · waiting for school" marker; the Step-8 `needs_attention_for` items
+   rendered on Home + their Hindi copy (P7/P8).
+4. Wire `audience_for` into the client write path once attendance/marks/student client writes emit
    outbox ops (Step 4's client half).
 
-**Already built (were "left"):** the device push (Step 4 mechanics), server import + HLC order + acks
-+ `_done/` archive (Step 6), device ack read (Step 7), and the full `server-off → import → Confirmed`
-harness incl. LAN+Drive dedup, tampered-quarantine and revoked-flagging (Step 9) — all over the
-`DriveApi` trait, so the real client drops straight in.
+**Already built (were "left"):** device push (Step 4), server import + HLC order + acks + `_done/`
+archive (Step 6), device ack read (Step 7), **device provisional pull** with own-unsent protection +
+quarantine + per-folder cursor (Step 5 engine), the **failure→Needs-attention mapping** (Step 8
+engine), and the full `server-off → import → Confirmed` harness incl. LAN+Drive dedup,
+tampered-quarantine, revoked-flagging, and phone-B-provisional/phone-C-excluded (Step 9) — all over
+the `DriveApi` trait, so the real client drops straight in.
 
 ## Verification (real output, this branch)
-- `cargo test --workspace` → **400 pass, 0 fail** (was 363 at P05): vidya lib **119** (+19 drive),
-  drive_e2e **5** (new), e2e_flows 4, relay_e2e 5, **sync_e2e 13** (+5 Drive exchange), vidya-core
-  **243** (+8 audience), no_floats 1, doc 10. (benchmark `#[ignore]`.)
+- `cargo test --workspace` → **406 pass, 0 fail** (was 363 at P05): vidya lib **122** (+19 drive,
+  +3 attention), drive_e2e **8** (+3 pull), e2e_flows 4, relay_e2e 5, **sync_e2e 13** (+5 Drive
+  exchange), vidya-core **243** (+8 audience), no_floats 1, doc 10. (benchmark `#[ignore]`.)
 - `cargo clippy --workspace --all-targets -- -D warnings` → **clean**.
 - Crypto gate: `cargo tree -i aws-lc-rs` / `-i aws-lc-sys` → *no packages* (absent); `ring` is the
   sole TLS provider — unchanged.

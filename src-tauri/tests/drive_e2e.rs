@@ -18,11 +18,13 @@
 
 use std::collections::BTreeMap;
 
+use rusqlite::{params, Connection};
 use vidya_core::audience::{audience_for, Audience};
 use vidya_lib::db;
 use vidya_lib::sync::drive::bundle::{self, PROP_AUDIENCE, PROP_KEYVER};
+use vidya_lib::sync::drive::exchange::{self, HeldKeys};
 use vidya_lib::sync::drive::fake::{Access, FakeDrive, PRINCIPAL};
-use vidya_lib::sync::drive::keys;
+use vidya_lib::sync::drive::{keys, pull};
 use vidya_lib::sync::drive::{DriveApi, DriveError};
 use vidya_lib::sync::protocol::Op;
 
@@ -240,4 +242,120 @@ fn actor_writes_are_confined_to_their_own_ops_folder() {
 #[allow(dead_code)]
 fn _access_is_ordered() {
     assert!(Access::Owner > Access::Writer && Access::Writer > Access::Reader);
+}
+
+// ============================ Step 5 — device provisional pull ================
+
+const FIN_KEY: [u8; 32] = [0x11; 32];
+const CLASS_KEY: [u8; 32] = [0x22; 32];
+
+fn phone() -> Connection {
+    let mut c = db::open_in_memory(DBKEY).unwrap();
+    db::run_migrations(&mut c).unwrap();
+    c
+}
+
+fn queue(dev: &Connection, o: &Op) {
+    dev.execute(
+        "INSERT INTO outbox(op_id,hlc,device_id,staff_id,audience,\"table\",record_id,kind,payload,base_version,server_epoch) \
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
+        params![o.op_id, o.hlc, o.device_id, o.staff_id, o.audience, o.table, o.record_id, o.kind, o.payload.to_string(), o.base_version, o.server_epoch],
+    ).unwrap();
+}
+
+fn student_op(id: &str, device: &str, name: &str) -> Op {
+    Op {
+        op_id: format!("op-{id}"),
+        hlc: format!("00000000000000000001{id}"),
+        device_id: device.into(),
+        staff_id: "accA".into(),
+        audience: "finance".into(),
+        table: "student".into(),
+        record_id: id.into(),
+        kind: "insert".into(),
+        payload: serde_json::json!({ "name": name, "status": "active" }),
+        base_version: None,
+        server_epoch: 1,
+    }
+}
+
+fn held(audience: &str, key: [u8; 32]) -> HeldKeys {
+    let mut h = HeldKeys::new();
+    h.insert((audience.to_string(), 1), key);
+    h
+}
+
+/// DONE-MEANS phone side: phone A (finance) shares a student to Drive → phone B
+/// (finance) sees it PROVISIONALLY; phone C (a class device) cannot.
+#[test]
+fn phone_b_sees_provisional_phone_c_cannot() {
+    let drive = FakeDrive::new();
+    let l = drive.provision_school(&[("accA", "devA"), ("accB", "devB"), ("teacherC", "devC")]);
+
+    // Phone A (accountant) records a student while the server is off, shares it.
+    let mut a = phone();
+    queue(&a, &student_op("stu-p5", "devA", "Provisional Priya"));
+    exchange::push_outbox(&mut a, &drive.as_actor("accA"), &l.ops["devA"], &held("finance", FIN_KEY)).unwrap();
+
+    // Phone B (also finance) pulls → provisional row, marked shared_drive.
+    let mut b = phone();
+    let out = pull::pull_provisional(&mut b, &drive.as_actor("accB"), &l.exchange, "devB", &held("finance", FIN_KEY)).unwrap();
+    assert_eq!((out.applied, out.bundles_seen, out.quarantined), (1, 1, 0));
+    let (name, state): (String, String) = b
+        .query_row("SELECT name, sync_state FROM student WHERE id='stu-p5'", [], |r| Ok((r.get(0)?, r.get(1)?)))
+        .unwrap();
+    assert_eq!(name, "Provisional Priya");
+    assert_eq!(state, "shared_drive", "marked 'Shared through school Drive · waiting for school'");
+    assert_eq!(pull::PROVISIONAL_STATUS, "Shared through school Drive · waiting for school");
+
+    // A second pull is a no-op (cursor per folder).
+    let again = pull::pull_provisional(&mut b, &drive.as_actor("accB"), &l.exchange, "devB", &held("finance", FIN_KEY)).unwrap();
+    assert_eq!((again.applied, again.bundles_seen), (0, 0));
+
+    // Phone C holds only a class key → the finance bundle is "not for me".
+    let mut c = phone();
+    let cout = pull::pull_provisional(&mut c, &drive.as_actor("teacherC"), &l.exchange, "devC", &held("class:cls-1", CLASS_KEY)).unwrap();
+    assert_eq!((cout.applied, cout.skipped_not_for_me), (0, 1));
+    let n: i64 = c.query_row("SELECT COUNT(*) FROM student WHERE id='stu-p5'", [], |r| r.get(0)).unwrap();
+    assert_eq!(n, 0, "other-audience device never sees the row");
+}
+
+/// Step 5: a provisional pull never overwrites the device's own unsent change.
+#[test]
+fn pull_never_overwrites_own_unsent() {
+    let drive = FakeDrive::new();
+    let l = drive.provision_school(&[("accA", "devA"), ("accB", "devB")]);
+    let mut a = phone();
+    queue(&a, &student_op("stu-shared", "devA", "From A"));
+    exchange::push_outbox(&mut a, &drive.as_actor("accA"), &l.ops["devA"], &held("finance", FIN_KEY)).unwrap();
+
+    // Phone B has its OWN unsent edit to the same record (an outbox op).
+    let mut b = phone();
+    queue(&b, &student_op("stu-shared", "devB", "My local edit"));
+    let out = pull::pull_provisional(&mut b, &drive.as_actor("accB"), &l.exchange, "devB", &held("finance", FIN_KEY)).unwrap();
+    assert_eq!((out.applied, out.kept_local), (0, 1), "own unsent kept, remote flagged not applied");
+    let n: i64 = b.query_row("SELECT COUNT(*) FROM student WHERE id='stu-shared'", [], |r| r.get(0)).unwrap();
+    assert_eq!(n, 0, "the remote value did not overwrite the local unsent change");
+}
+
+/// Step 5: a bundle the device holds the key for but that fails AEAD → quarantined.
+#[test]
+fn pull_quarantines_a_tampered_bundle() {
+    let drive = FakeDrive::new();
+    let l = drive.provision_school(&[("accA", "devA"), ("accB", "devB")]);
+    // Put a tampered finance bundle in A's folder (correct properties).
+    let o = student_op("stu-bad", "devA", "Tampered");
+    let mut body = bundle::seal_bundle(&FIN_KEY, "finance", 1, std::slice::from_ref(&o)).unwrap();
+    let last = body.len() - 1;
+    body[last] ^= 0x01;
+    drive
+        .as_actor("accA")
+        .create(&l.ops["devA"], "bad.vop", &body, &bundle::bundle_properties("finance", 1))
+        .unwrap();
+
+    let mut b = phone();
+    let out = pull::pull_provisional(&mut b, &drive.as_actor("accB"), &l.exchange, "devB", &held("finance", FIN_KEY)).unwrap();
+    assert_eq!((out.quarantined, out.applied), (1, 0));
+    let q: i64 = b.query_row("SELECT COUNT(*) FROM drive_state WHERE key LIKE 'quarantine:%'", [], |r| r.get(0)).unwrap();
+    assert_eq!(q, 1, "the tampered bundle is recorded for the Principal");
 }
