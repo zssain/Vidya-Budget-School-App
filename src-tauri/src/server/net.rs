@@ -50,6 +50,14 @@ impl ServerState {
         self
     }
 
+    /// Emit `sync://changed` so local screens refresh after ops are applied (Step 11).
+    pub fn emit_changed(&self) {
+        if let Some(app) = &self.app {
+            use tauri::Emitter;
+            let _ = app.emit(EVENT_SYNC_CHANGED, ());
+        }
+    }
+
     /// 30 requests / 10 s / device (§2). Returns false when over the limit.
     fn allow(&self, device_id: &str, now_unix: i64) -> bool {
         let mut m = self.limiter.lock().unwrap();
@@ -122,10 +130,7 @@ async fn push(State(st): State<Arc<ServerState>>, headers: HeaderMap, Json(req):
     match result {
         Ok(resp) => {
             // Live-update the local screens after applying ops (Step 11).
-            if let Some(app) = &st.app {
-                use tauri::Emitter;
-                let _ = app.emit(EVENT_SYNC_CHANGED, ());
-            }
+            st.emit_changed();
             (StatusCode::OK, Json(resp)).into_response()
         }
         Err(_) => err(StatusCode::INTERNAL_SERVER_ERROR, "INTERNAL"),
@@ -233,14 +238,22 @@ pub async fn bind_with_fallback() -> std::io::Result<(TcpListener, u16)> {
     Err(last_err.unwrap_or_else(|| std::io::Error::other("no port available")))
 }
 
-/// Serve TLS connections until cancelled (axum low-level rustls pattern).
-pub async fn serve(state: Arc<ServerState>, tls: Arc<rustls::ServerConfig>, listener: TcpListener) {
+/// Serve TLS connections until `stop` is fired (axum low-level rustls pattern).
+/// `stop` fires when this PC is fenced out (licence `moved`, P05 Step 5) so the
+/// server stops accepting new LAN connections.
+pub async fn serve(state: Arc<ServerState>, tls: Arc<rustls::ServerConfig>, listener: TcpListener, stop: Arc<tokio::sync::Notify>) {
     let app = router(state);
     let acceptor = TlsAcceptor::from(tls);
     loop {
-        let (tcp, _peer) = match listener.accept().await {
-            Ok(v) => v,
-            Err(_) => continue,
+        let (tcp, _peer) = tokio::select! {
+            _ = stop.notified() => {
+                tracing::info!("school server stopping (fenced/moved)");
+                return;
+            }
+            accepted = listener.accept() => match accepted {
+                Ok(v) => v,
+                Err(_) => continue,
+            },
         };
         let acceptor = acceptor.clone();
         let app = app.clone();

@@ -77,6 +77,11 @@ tokio-tungstenite = { version = "0.24", default-features = false, features = [
   "handshake",
   "rustls-tls-webpki-roots",
 ] }
+# Required companion of tokio-tungstenite: its WebSocketStream is a Stream + Sink and
+# cannot be driven without the futures Stream/Sink extension traits. Already present
+# transitively (via tokio-tungstenite / hyper-util); minimal features only. Flagged in
+# the P05 handoff as a §13 companion dep (cf. P04's hyper-util `service` feature).
+futures-util = { version = "0.3", default-features = false, features = ["std", "sink"] }
 
 # --- Encrypted database (SQLCipher) ---
 rusqlite = { version = "0.32", features = ["bundled-sqlcipher-vendored-openssl"] }

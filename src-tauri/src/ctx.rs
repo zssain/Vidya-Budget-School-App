@@ -40,6 +40,9 @@ pub struct RtCtx {
     pub db_key_hex: Option<String>,
     /// True when the DB key is missing → the UI shows the Recover screen.
     pub key_missing: Mutex<bool>,
+    /// Fired to stop the school server + relay tunnel when this PC is fenced out
+    /// (licence `moved`, P05 Step 5). The LAN accept loop and the tunnel both watch it.
+    pub server_stop: std::sync::Arc<tokio::sync::Notify>,
 }
 
 impl RtCtx {

@@ -5283,6 +5283,7 @@ dependencies = [
  "base64 0.22.1",
  "chacha20poly1305",
  "ed25519-dalek",
+ "futures-util",
  "hmac",
  "hyper",
  "hyper-util",

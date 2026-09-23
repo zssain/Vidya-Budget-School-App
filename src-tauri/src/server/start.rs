@@ -12,6 +12,7 @@ use std::sync::Arc;
 use base64::engine::general_purpose::STANDARD;
 use base64::Engine;
 use rusqlite::{Connection, OptionalExtension};
+use tokio::sync::Notify;
 
 use crate::server::{cert, net};
 
@@ -44,13 +45,15 @@ fn school_exists(conn: &Connection) -> bool {
 
 /// Spawn the server if this device is the school server and a school exists.
 /// Safe to call at startup: returns quietly (logging) if it should not serve.
-pub async fn run_server(app: tauri::AppHandle, db_path: std::path::PathBuf, key_hex: String) {
-    if let Err(e) = try_run_server(app, &db_path, &key_hex).await {
+/// `stop` is fired when this PC is fenced out (licence `moved`) → the LAN listener
+/// and the relay tunnel both stop.
+pub async fn run_server(app: tauri::AppHandle, db_path: std::path::PathBuf, key_hex: String, stop: Arc<Notify>) {
+    if let Err(e) = try_run_server(app, &db_path, &key_hex, stop).await {
         tracing::warn!("school server not started: {e}");
     }
 }
 
-async fn try_run_server(app: tauri::AppHandle, db_path: &Path, key_hex: &str) -> Result<(), String> {
+async fn try_run_server(app: tauri::AppHandle, db_path: &Path, key_hex: &str, stop: Arc<Notify>) -> Result<(), String> {
     // The server's own WAL connection to the same encrypted DB.
     let conn = crate::db::open_encrypted(db_path, key_hex).map_err(|e| e.to_string())?;
     if !school_exists(&conn) {
@@ -63,6 +66,8 @@ async fn try_run_server(app: tauri::AppHandle, db_path: &Path, key_hex: &str) ->
     let (school_id, _name): (String, String) = conn
         .query_row("SELECT id, name FROM school LIMIT 1", [], |r| Ok((r.get(0)?, r.get(1)?)))
         .map_err(|e| e.to_string())?;
+    let epoch: i64 = conn.query_row("SELECT server_epoch FROM school LIMIT 1", [], |r| r.get(0)).unwrap_or(1);
+    let relay_secret: Option<String> = crate::kv::get(&conn, crate::state::KV_RELAY_SECRET).ok().flatten();
     let lan = local_ipv4().into_iter().collect::<Vec<_>>();
 
     // Publish the LAN facts so invites carry the right address/port/fingerprint.
@@ -78,6 +83,22 @@ async fn try_run_server(app: tauri::AppHandle, db_path: &Path, key_hex: &str) ->
 
     tracing::info!("school server listening on 0.0.0.0:{port}");
     let state = Arc::new(net::ServerState::new(conn).with_app(app));
-    net::serve(state, tls, listener).await;
+
+    // Keep ONE outbound tunnel to the relay so devices can reach us over the
+    // internet (P05 Step 1). Skipped until the school has a relay secret (issued at
+    // activation). The tunnel shares the server's DB + stops on the same signal.
+    if let Some(secret) = relay_secret.filter(|s| !s.is_empty()) {
+        let relay_url = crate::config::get().relay_url.clone();
+        if !relay_url.is_empty() {
+            let ts = state.clone();
+            let stop_t = stop.clone();
+            let sid = school_id.clone();
+            tauri::async_runtime::spawn(async move {
+                crate::server::tunnel::run_tunnel(ts, relay_url, sid, secret, epoch, stop_t).await;
+            });
+        }
+    }
+
+    net::serve(state, tls, listener, stop).await;
     Ok(())
 }

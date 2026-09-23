@@ -6,3 +6,4 @@ pub mod net;
 pub mod sealed;
 pub mod service;
 pub mod start;
+pub mod tunnel;

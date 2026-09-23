@@ -87,6 +87,7 @@ fn build_ctx(data_dir: std::path::PathBuf) -> RtCtx {
         data_dir,
         db_key_hex,
         key_missing: Mutex::new(key_missing),
+        server_stop: std::sync::Arc::new(tokio::sync::Notify::new()),
     }
 }
 
@@ -112,7 +113,8 @@ pub fn run() {
                     if let Some(key_hex) = ctx.db_key_hex.clone() {
                         let db_path = ctx.db_path();
                         let handle = app.handle().clone();
-                        tauri::async_runtime::spawn(server::start::run_server(handle, db_path, key_hex));
+                        let stop = ctx.server_stop.clone();
+                        tauri::async_runtime::spawn(server::start::run_server(handle, db_path, key_hex, stop));
                     }
                 }
             }
