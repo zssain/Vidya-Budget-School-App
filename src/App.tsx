@@ -15,6 +15,8 @@ import StaffAccessScreen from '@/screens/desktop/StaffAccessScreen'
 import ConflictReviewScreen from '@/screens/desktop/ConflictReviewScreen'
 import SyncDevicesScreen from '@/screens/desktop/SyncDevicesScreen'
 import StudentsScreen from '@/screens/desktop/StudentsScreen'
+import StudentProfileScreen from '@/screens/desktop/StudentProfileScreen'
+import AdmissionSheet from '@/screens/desktop/AdmissionSheet'
 import PrincipalHomeContainer from '@/screens/containers/PrincipalHomeContainer'
 import CollectFeeContainer from '@/screens/containers/CollectFeeContainer'
 import AttendanceContainer from '@/screens/containers/AttendanceContainer'
@@ -129,6 +131,12 @@ function desktopRoute(base: string, role: Role): { active: string; node: ReactNo
   if (base === '/principal/conflicts') return { active: '', node: <ConflictReviewScreen /> }
   if (matchRoute('/principal/approvals', base)) return { active: 'approvals', node: <ApprovalsScreen /> }
   if (base === '/principal/staff') return { active: 'staff', node: <StaffAccessScreen /> }
+  if (base === '/principal/students/new' || base === '/accountant/students/new')
+    return { active: 'students', node: (<><StudentsScreen role={role} /><AdmissionSheet role={role} /></>) }
+  {
+    const m = matchRoute(`/${role}/students/:id`, base)
+    if (m && m.id !== 'new') return { active: 'students', node: <StudentProfileScreen id={m.id} role={role} /> }
+  }
   if (base === '/principal/students' || base === '/accountant/students')
     return { active: 'students', node: <StudentsScreen role={role} /> }
   if (base === '/principal/home') return { active: 'home', node: <PrincipalHomeContainer /> }

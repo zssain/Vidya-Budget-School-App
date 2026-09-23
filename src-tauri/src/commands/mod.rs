@@ -44,7 +44,11 @@ pub const COMMANDS: &[&str] = &[
     "list_students_page",
     "search_students",
     "get_student",
+    "get_student_profile",
     "create_student",
+    "check_duplicate_students",
+    "transfer_student",
+    "mark_student_left",
     "get_attendance_sheet",
     "save_attendance_draft",
     "submit_attendance",
@@ -206,7 +210,35 @@ pub fn get_student(state: State<RtCtx>, id: String) -> CmdResult<StudentDto> {
 #[tauri::command]
 pub fn create_student(state: State<RtCtx>, input: NewStudentInput) -> CmdResult<StudentDto> {
     let actor = state.require_session()?;
-    state.with_db(|conn| create_student_logic(conn, &actor, &input))
+    let device_id = state.device_id.lock().map_err(|_| crate::error::CmdError::internal("lock"))?.clone();
+    let mode = state.device_mode;
+    state.with_db(|conn| create_student_logic(conn, &actor, device_id.as_deref(), mode, &today(), &input))
+}
+
+#[tauri::command]
+pub fn get_student_profile(state: State<RtCtx>, id: String) -> CmdResult<StudentProfileDto> {
+    state.with_db(|conn| get_student_profile_logic(conn, &today(), &id))
+}
+
+#[tauri::command]
+pub fn check_duplicate_students(state: State<RtCtx>, name: String, dob: Option<String>, guardian_mobile: Option<String>) -> CmdResult<Vec<StudentRowDto>> {
+    state.with_db(|conn| check_duplicate_students_logic(conn, &name, dob.as_deref(), guardian_mobile.as_deref()))
+}
+
+#[tauri::command]
+pub fn transfer_student(state: State<RtCtx>, student_id: String, class_id: String, roll_no: Option<i64>) -> CmdResult<StudentDto> {
+    let actor = state.require_session()?;
+    let device_id = state.device_id.lock().map_err(|_| crate::error::CmdError::internal("lock"))?.clone();
+    let mode = state.device_mode;
+    state.with_db(|conn| transfer_student_logic(conn, &actor, device_id.as_deref(), mode, &today(), &student_id, &class_id, roll_no))
+}
+
+#[tauri::command]
+pub fn mark_student_left(state: State<RtCtx>, student_id: String, left_on: String, reason: String) -> CmdResult<StudentProfileDto> {
+    let actor = state.require_session()?;
+    let device_id = state.device_id.lock().map_err(|_| crate::error::CmdError::internal("lock"))?.clone();
+    let mode = state.device_mode;
+    state.with_db(|conn| mark_student_left_logic(conn, &actor, device_id.as_deref(), mode, &student_id, &left_on, &reason))
 }
 
 // ----------------------------------------------------------- attendance ------

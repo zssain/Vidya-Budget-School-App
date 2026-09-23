@@ -559,12 +559,108 @@ pub fn list_students_page_logic(conn: &mut Connection, q: &StudentQuery) -> CmdR
 pub struct NewStudentInput {
     pub name: String,
     pub class_id: String,
+    pub roll_no: Option<i64>,
     pub guardian_name: Option<String>,
     pub guardian_mobile: Option<String>,
     pub dob: Option<String>,
+    pub gender: Option<String>,
+    pub address: Option<String>,
+    pub transport: Option<bool>,
+    pub rte: Option<bool>,
+    pub category: Option<String>,
+    pub aadhaar_status: Option<String>, // none | submitted | verified
 }
 
-pub fn create_student_logic(conn: &mut Connection, actor_s: &SessionStaff, input: &NewStudentInput) -> CmdResult<StudentDto> {
+/// This device's admission series (A1 = server) and the highest provisional seq
+/// already issued on it, so the next provisional number is series-unique.
+fn admission_series_and_last(conn: &Connection, device_id: Option<&str>) -> rusqlite::Result<(String, u32)> {
+    let series: String = match device_id {
+        Some(d) => conn
+            .query_row("SELECT admission_series FROM device WHERE id=?1", params![d], |r| r.get(0))
+            .optional()?
+            .flatten()
+            .unwrap_or_else(|| "A1".to_string()),
+        None => "A1".to_string(),
+    };
+    let prefix = format!("P-{series}-");
+    let last: u32 = conn
+        .query_row(
+            "SELECT provisional_no FROM student WHERE provisional_no LIKE ?1 ORDER BY LENGTH(provisional_no) DESC, provisional_no DESC LIMIT 1",
+            params![format!("{prefix}%")],
+            |r| r.get::<_, String>(0),
+        )
+        .optional()?
+        .and_then(|p| p.rsplit('-').next().and_then(|s| s.parse::<u32>().ok()))
+        .unwrap_or(0);
+    Ok((series, last))
+}
+
+fn parse_applies_to(s: &str) -> vidya_core::fees::AppliesTo {
+    use vidya_core::fees::AppliesTo;
+    match s {
+        "all" => AppliesTo::All,
+        "transport" => AppliesTo::Transport,
+        other => serde_json::from_str::<Vec<String>>(other)
+            .map(AppliesTo::ClassIds)
+            .unwrap_or(AppliesTo::All),
+    }
+}
+
+fn frequency_from(s: &str) -> vidya_core::types::FeeFrequency {
+    use vidya_core::types::FeeFrequency;
+    match s {
+        "month" => FeeFrequency::Month,
+        "once" => FeeFrequency::Once,
+        _ => FeeFrequency::Term,
+    }
+}
+
+/// Dues a single new admission owes: every active head that applies to the
+/// student, for each term of the current session (`term` heads), the current
+/// month (`month` heads) and once (`once` heads). Uses vidya-core.
+fn dues_for_new_student(
+    conn: &Connection,
+    student_id: &str,
+    class_id: &str,
+    transport: bool,
+    today: &str,
+) -> rusqlite::Result<Vec<vidya_core::fees::FeeDue>> {
+    use vidya_core::fees::{FeeHead, PeriodSpec, Student as FeeStudent};
+    use vidya_core::money::Paise;
+
+    let mut stmt = conn.prepare("SELECT id, amount_paise, frequency, applies_to FROM fee_head WHERE active=1")?;
+    let heads: Vec<FeeHead> = stmt
+        .query_map([], |r| {
+            let id: String = r.get(0)?;
+            let amount: i64 = r.get(1)?;
+            let freq: String = r.get(2)?;
+            let applies: String = r.get(3)?;
+            Ok(FeeHead { id, amount_paise: Paise(amount), frequency: frequency_from(&freq), applies_to: parse_applies_to(&applies) })
+        })?
+        .collect::<rusqlite::Result<_>>()?;
+
+    // Terms of the current session (term heads → one due each).
+    let mut ts = conn.prepare("SELECT t.name FROM term t JOIN academic_session s ON s.id=t.session_id AND s.is_current=1 ORDER BY t.starts_on")?;
+    let terms: Vec<String> = ts.query_map([], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<_>>()?;
+    let month = today.get(0..7).unwrap_or(today).to_string();
+    let session_label: String = conn
+        .query_row("SELECT label FROM academic_session WHERE is_current=1 LIMIT 1", [], |r| r.get(0))
+        .optional()?
+        .unwrap_or_default();
+
+    let spec = PeriodSpec { terms, months: vec![month] };
+    let student = FeeStudent { id: student_id.to_string(), class_id: class_id.to_string(), transport, admitted_period: session_label };
+    Ok(vidya_core::fees::generate_dues(&heads, &[student], &spec, &[]))
+}
+
+pub fn create_student_logic(
+    conn: &mut Connection,
+    actor_s: &SessionStaff,
+    device_id: Option<&str>,
+    device_mode: DeviceMode,
+    today: &str,
+    input: &NewStudentInput,
+) -> CmdResult<StudentDto> {
     let actor = actor_from(conn, actor_s)?;
     require_allow(&actor, Action::CreateStudent, &Target::of(TargetKind::Student))?;
     let name = vidya_core::validation::validate_name(&input.name)?;
@@ -575,23 +671,441 @@ pub fn create_student_logic(conn: &mut Connection, actor_s: &SessionStaff, input
     }
     let sid = new_id("stu");
     let now = now_iso();
-    // Offline devices get a provisional number; the server assigns the official
-    // admission_no. Single-PC server: still provisional until confirmed elsewhere.
-    let prov = format!("P-A1-{}", &sid[sid.len().saturating_sub(4)..]);
-    conn.execute(
-        "INSERT INTO student(id,name,provisional_no,guardian_name,guardian_mobile,dob,status,created_at,updated_at,sync_state) \
-         VALUES (?1,?2,?3,?4,?5,?6,'active',?7,?7,'confirmed')",
-        params![sid, name, prov, input.guardian_name, input.guardian_mobile, input.dob, now],
-    )?;
-    let session = conn.query_row("SELECT id FROM academic_session WHERE is_current=1 LIMIT 1", [], |r| r.get::<_, String>(0)).optional()?;
-    if let Some(session_id) = session {
-        conn.execute(
-            "INSERT INTO enrollment(id,student_id,class_id,session_id,from_date,created_at,updated_at,sync_state) \
-             VALUES (?1,?2,?3,?4,?5,?6,?6,'confirmed')",
-            params![new_id("enr"), sid, input.class_id, session_id, now, now],
+    let transport = input.transport.unwrap_or(false);
+    let rte = input.rte.unwrap_or(false);
+    let aadhaar = input.aadhaar_status.clone().unwrap_or_else(|| "none".to_string());
+
+    // Offline devices get a provisional number; the school server assigns the
+    // official admission_no when it confirms (§8.7). In single-PC Server mode
+    // this device IS the server, so it assigns the official number now.
+    let (series, last) = admission_series_and_last(conn, device_id)?;
+    let provisional = vidya_core::admissions::provisional_no(&series, last + 1);
+    let admission_no: Option<String> = if device_mode == DeviceMode::Server {
+        let year: i32 = today.get(0..4).and_then(|y| y.parse().ok()).unwrap_or(0);
+        let last_adm: i64 = conn
+            .query_row("SELECT COUNT(*) FROM student WHERE admission_no LIKE ?1", params![format!("{year}/%")], |r| r.get(0))
+            .optional()?
+            .unwrap_or(0);
+        Some(vidya_core::admissions::next_admission_no(year, last_adm as u32))
+    } else {
+        None
+    };
+
+    let session_id: Option<String> = conn
+        .query_row("SELECT id FROM academic_session WHERE is_current=1 LIMIT 1", [], |r| r.get(0))
+        .optional()?;
+    // Auto roll = max roll in the class + 1 (unless the caller supplied one).
+    let roll_no: Option<i64> = match input.roll_no {
+        Some(r) => Some(r),
+        None => conn
+            .query_row(
+                "SELECT COALESCE(MAX(roll_no),0)+1 FROM enrollment WHERE class_id=?1 AND to_date IS NULL",
+                params![input.class_id],
+                |r| r.get::<_, i64>(0),
+            )
+            .optional()?,
+    };
+    let dues = dues_for_new_student(conn, &sid, &input.class_id, transport, today)?;
+
+    let confirmed = device_mode == DeviceMode::Server;
+    let sync_state = if confirmed { "confirmed" } else { "on_device" };
+    let ctx = WriteCtx { mode: device_mode };
+    let sid2 = sid.clone();
+    let dev = device_id.map(str::to_string);
+    with_write(conn, &ctx, move |tx| {
+        tx.execute(
+            "INSERT INTO student(id,admission_no,provisional_no,name,dob,gender,guardian_name,guardian_mobile,address,transport,category,rte,aadhaar_status,status,created_at,updated_at,sync_state) \
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,'active',?14,?14,?15)",
+            params![sid2, admission_no, provisional, name, input.dob, input.gender, input.guardian_name, input.guardian_mobile,
+                input.address, transport as i64, input.category, rte as i64, aadhaar, now, sync_state],
         )?;
-    }
+        if let Some(sess) = &session_id {
+            tx.execute(
+                "INSERT INTO enrollment(id,student_id,class_id,session_id,roll_no,from_date,created_at,updated_at,sync_state) \
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?7,?8)",
+                params![new_id("enr"), sid2, input.class_id, sess, roll_no, now, now, sync_state],
+            )?;
+        }
+        for d in &dues {
+            tx.execute(
+                "INSERT INTO fee_due(id,student_id,fee_head_id,period,amount_paise,created_at,updated_at,sync_state) \
+                 VALUES (?1,?2,?3,?4,?5,?6,?6,?7)",
+                params![new_id("due"), sid2, d.fee_head_id, d.period, d.amount_paise.get(), now, sync_state],
+            )?;
+        }
+        let audit = AuditEntry {
+            at: now.clone(),
+            staff_id: Some(actor_s.id.clone()),
+            action: "create_student".into(),
+            table: Some("student".into()),
+            record_id: Some(sid2.clone()),
+            after_json: Some(serde_json::json!({ "name": name, "admission_no": admission_no, "provisional_no": provisional }).to_string()),
+            ..Default::default()
+        };
+        let op = Op {
+            op_id: new_id("op"),
+            hlc: now.clone(),
+            device_id: dev.clone().unwrap_or_default(),
+            staff_id: actor_s.id.clone(),
+            audience: "finance".into(),
+            table: "student".into(),
+            record_id: sid2.clone(),
+            kind: "insert".into(),
+            payload: "{}".into(),
+            base_version: None,
+            server_epoch: 1,
+        };
+        Ok(Effect { value: (), audit, op })
+    })?;
     get_student_logic(conn, &sid)
+}
+
+// ---- Duplicate check (before saving an admission, §2) ----------------------
+
+/// Candidate duplicates: same guardian mobile, OR same DOB with a name that
+/// shares the first token (FTS prefix). The UI shows these before saving.
+pub fn check_duplicate_students_logic(
+    conn: &mut Connection,
+    name: &str,
+    dob: Option<&str>,
+    guardian_mobile: Option<&str>,
+) -> CmdResult<Vec<StudentRowDto>> {
+    use rusqlite::params_from_iter;
+    use rusqlite::types::Value;
+    let mut ors: Vec<String> = Vec::new();
+    let mut args: Vec<Value> = Vec::new();
+    if let Some(m) = guardian_mobile.filter(|s| !s.is_empty()) {
+        ors.push("s.guardian_mobile = ?".into());
+        args.push(Value::Text(m.to_string()));
+    }
+    let first = name.trim().split_whitespace().next().unwrap_or("");
+    if let Some(d) = dob.filter(|s| !s.is_empty()) {
+        if !first.is_empty() {
+            ors.push("(s.dob = ? AND s.rowid IN (SELECT rowid FROM student_fts WHERE student_fts MATCH ?))".into());
+            args.push(Value::Text(d.to_string()));
+            args.push(Value::Text(format!("{}*", first.replace('"', ""))));
+        } else {
+            ors.push("s.dob = ?".into());
+            args.push(Value::Text(d.to_string()));
+        }
+    }
+    if ors.is_empty() {
+        return Ok(vec![]);
+    }
+    let sql = format!(
+        "SELECT s.id, s.name, s.admission_no, s.provisional_no, c.display, c.section, e.roll_no, s.guardian_name, s.status \
+         FROM student s \
+         LEFT JOIN enrollment e ON e.student_id=s.id AND e.to_date IS NULL \
+         LEFT JOIN class c ON c.id=e.class_id WHERE {} LIMIT 20",
+        ors.join(" OR ")
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt
+        .query_map(params_from_iter(args.iter()), |r| {
+            Ok(StudentRowDto {
+                id: r.get(0)?,
+                name: r.get(1)?,
+                admission_no: r.get(2)?,
+                provisional_no: r.get(3)?,
+                class_display: r.get(4)?,
+                section: r.get(5)?,
+                roll_no: r.get(6)?,
+                guardian_name: r.get(7)?,
+                status: r.get(8)?,
+            })
+        })?
+        .collect::<rusqlite::Result<_>>()?;
+    Ok(rows)
+}
+
+// ---- Student profile -------------------------------------------------------
+
+#[derive(Debug, Serialize)]
+pub struct EnrollmentHistoryDto {
+    pub class_display: Option<String>,
+    pub session_label: Option<String>,
+    pub roll_no: Option<i64>,
+    pub from_date: String,
+    pub to_date: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AttendanceSummaryDto {
+    pub present: i64,
+    pub absent: i64,
+    pub leave: i64,
+    pub marked: i64,
+    pub pct_tenths: i64,
+    pub term_label: Option<String>,
+    pub from_date: Option<String>,
+    pub to_date: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct StudentProfileDto {
+    pub id: String,
+    pub name: String,
+    pub admission_no: Option<String>,
+    pub provisional_no: Option<String>,
+    pub dob: Option<String>,
+    pub gender: Option<String>,
+    pub guardian_name: Option<String>,
+    pub guardian_mobile: Option<String>,
+    pub address: Option<String>,
+    pub transport: bool,
+    pub category: Option<String>,
+    pub rte: bool,
+    pub aadhaar_status: String,
+    pub status: String,
+    pub left_on: Option<String>,
+    pub left_reason: Option<String>,
+    pub class_id: Option<String>,
+    pub class_display: Option<String>,
+    pub roll_no: Option<i64>,
+    pub version: i64,
+    pub enrollment_history: Vec<EnrollmentHistoryDto>,
+    pub attendance: AttendanceSummaryDto,
+}
+
+/// The current term of the current session (the one containing `today`), else
+/// the latest term. Returns (name, starts_on, ends_on).
+fn current_term(conn: &Connection, today: &str) -> rusqlite::Result<Option<(String, String, String)>> {
+    let containing = conn
+        .query_row(
+            "SELECT t.name, t.starts_on, t.ends_on FROM term t JOIN academic_session s ON s.id=t.session_id AND s.is_current=1 \
+             WHERE ?1 BETWEEN t.starts_on AND t.ends_on ORDER BY t.starts_on LIMIT 1",
+            params![today],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .optional()?;
+    if containing.is_some() {
+        return Ok(containing);
+    }
+    conn.query_row(
+        "SELECT t.name, t.starts_on, t.ends_on FROM term t JOIN academic_session s ON s.id=t.session_id AND s.is_current=1 \
+         ORDER BY t.starts_on DESC LIMIT 1",
+        [],
+        |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+    )
+    .optional()
+}
+
+pub fn get_student_profile_logic(conn: &mut Connection, today: &str, id: &str) -> CmdResult<StudentProfileDto> {
+    let profile = conn
+        .query_row(
+            "SELECT s.id,s.name,s.admission_no,s.provisional_no,s.dob,s.gender,s.guardian_name,s.guardian_mobile,s.address,\
+                    s.transport,s.category,s.rte,s.aadhaar_status,s.status,s.left_on,s.left_reason,s.version, c.id, c.display, e.roll_no \
+             FROM student s \
+             LEFT JOIN enrollment e ON e.student_id=s.id AND e.to_date IS NULL \
+             LEFT JOIN class c ON c.id=e.class_id WHERE s.id=?1",
+            params![id],
+            |r| {
+                Ok(StudentProfileDto {
+                    id: r.get(0)?,
+                    name: r.get(1)?,
+                    admission_no: r.get(2)?,
+                    provisional_no: r.get(3)?,
+                    dob: r.get(4)?,
+                    gender: r.get(5)?,
+                    guardian_name: r.get(6)?,
+                    guardian_mobile: r.get(7)?,
+                    address: r.get(8)?,
+                    transport: r.get::<_, i64>(9)? != 0,
+                    category: r.get(10)?,
+                    rte: r.get::<_, i64>(11)? != 0,
+                    aadhaar_status: r.get(12)?,
+                    status: r.get(13)?,
+                    left_on: r.get(14)?,
+                    left_reason: r.get(15)?,
+                    version: r.get(16)?,
+                    class_id: r.get(17)?,
+                    class_display: r.get(18)?,
+                    roll_no: r.get(19)?,
+                    enrollment_history: Vec::new(),
+                    attendance: AttendanceSummaryDto { present: 0, absent: 0, leave: 0, marked: 0, pct_tenths: 0, term_label: None, from_date: None, to_date: None },
+                })
+            },
+        )
+        .optional()?
+        .ok_or_else(CmdError::not_found)?;
+
+    let mut hstmt = conn.prepare(
+        "SELECT c.display, ses.label, e.roll_no, e.from_date, e.to_date FROM enrollment e \
+         LEFT JOIN class c ON c.id=e.class_id LEFT JOIN academic_session ses ON ses.id=e.session_id \
+         WHERE e.student_id=?1 ORDER BY e.from_date DESC, e.to_date IS NULL DESC",
+    )?;
+    let history: Vec<EnrollmentHistoryDto> = hstmt
+        .query_map(params![id], |r| {
+            Ok(EnrollmentHistoryDto {
+                class_display: r.get(0)?,
+                session_label: r.get(1)?,
+                roll_no: r.get(2)?,
+                from_date: r.get(3)?,
+                to_date: r.get(4)?,
+            })
+        })?
+        .collect::<rusqlite::Result<_>>()?;
+
+    let (present, absent, leave, term_label, from_date, to_date) = match current_term(conn, today)? {
+        Some((name, starts, ends)) => {
+            let mut counts = (0i64, 0i64, 0i64);
+            let mut st = conn.prepare(
+                "SELECT am.mark, COUNT(*) FROM attendance_mark am JOIN attendance_sheet sh ON sh.id=am.sheet_id \
+                 WHERE am.student_id=?1 AND sh.status='submitted' AND sh.date BETWEEN ?2 AND ?3 GROUP BY am.mark",
+            )?;
+            let rows = st.query_map(params![id, starts, ends], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)))?;
+            for row in rows {
+                let (m, n) = row?;
+                match m.as_str() {
+                    "P" => counts.0 = n,
+                    "A" => counts.1 = n,
+                    "L" => counts.2 = n,
+                    _ => {}
+                }
+            }
+            (counts.0, counts.1, counts.2, Some(name), Some(starts), Some(ends))
+        }
+        None => (0, 0, 0, None, None, None),
+    };
+    let pct = vidya_core::attendance::percent_present(present as u32, absent as u32, leave as u32) as i64;
+
+    Ok(StudentProfileDto {
+        enrollment_history: history,
+        attendance: AttendanceSummaryDto { present, absent, leave, marked: present + absent + leave, pct_tenths: pct, term_label, from_date, to_date },
+        ..profile
+    })
+}
+
+// ---- Transfer section + Mark as left ---------------------------------------
+
+pub fn transfer_student_logic(
+    conn: &mut Connection,
+    actor_s: &SessionStaff,
+    device_id: Option<&str>,
+    device_mode: DeviceMode,
+    today: &str,
+    student_id: &str,
+    new_class_id: &str,
+    roll_no: Option<i64>,
+) -> CmdResult<StudentDto> {
+    let actor = actor_from(conn, actor_s)?;
+    require_allow(&actor, Action::TransferSection, &Target::of(TargetKind::Student))?;
+    let session_id: String = conn
+        .query_row("SELECT id FROM academic_session WHERE is_current=1 LIMIT 1", [], |r| r.get(0))
+        .optional()?
+        .ok_or_else(CmdError::not_found)?;
+    let now = now_iso();
+    let roll = match roll_no {
+        Some(r) => Some(r),
+        None => conn
+            .query_row(
+                "SELECT COALESCE(MAX(roll_no),0)+1 FROM enrollment WHERE class_id=?1 AND to_date IS NULL",
+                params![new_class_id],
+                |r| r.get::<_, i64>(0),
+            )
+            .optional()?,
+    };
+    let sync_state = if device_mode == DeviceMode::Server { "confirmed" } else { "on_device" };
+    let ctx = WriteCtx { mode: device_mode };
+    let sid = student_id.to_string();
+    let ncid = new_class_id.to_string();
+    let day = today.to_string();
+    let dev = device_id.map(str::to_string);
+    with_write(conn, &ctx, move |tx| {
+        // Close the open enrollment as of the transfer date (history never rewritten).
+        tx.execute(
+            "UPDATE enrollment SET to_date=?1, updated_at=?2 WHERE student_id=?3 AND to_date IS NULL",
+            params![day, now, sid],
+        )?;
+        // Open a new enrollment in the target class from the transfer date.
+        tx.execute(
+            "INSERT INTO enrollment(id,student_id,class_id,session_id,roll_no,from_date,created_at,updated_at,sync_state) \
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?7,?8)",
+            params![new_id("enr"), sid, ncid, session_id, roll, day, now, sync_state],
+        )?;
+        let audit = AuditEntry {
+            at: now.clone(),
+            staff_id: Some(actor_s.id.clone()),
+            action: "transfer_section".into(),
+            table: Some("enrollment".into()),
+            record_id: Some(sid.clone()),
+            after_json: Some(serde_json::json!({ "class_id": ncid }).to_string()),
+            ..Default::default()
+        };
+        let op = Op {
+            op_id: new_id("op"),
+            hlc: now.clone(),
+            device_id: dev.clone().unwrap_or_default(),
+            staff_id: actor_s.id.clone(),
+            audience: "finance".into(),
+            table: "enrollment".into(),
+            record_id: sid.clone(),
+            kind: "action".into(),
+            payload: "{}".into(),
+            base_version: None,
+            server_epoch: 1,
+        };
+        Ok(Effect { value: (), audit, op })
+    })?;
+    get_student_logic(conn, student_id)
+}
+
+pub fn mark_student_left_logic(
+    conn: &mut Connection,
+    actor_s: &SessionStaff,
+    device_id: Option<&str>,
+    device_mode: DeviceMode,
+    student_id: &str,
+    left_on: &str,
+    reason: &str,
+) -> CmdResult<StudentProfileDto> {
+    let actor = actor_from(conn, actor_s)?;
+    require_allow(&actor, Action::MarkStudentLeft, &Target::of(TargetKind::Student))?;
+    let now = now_iso();
+    let today = now.get(0..10).unwrap_or("").to_string();
+    let sync_state = if device_mode == DeviceMode::Server { "confirmed" } else { "on_device" };
+    let ctx = WriteCtx { mode: device_mode };
+    let sid = student_id.to_string();
+    let left_on = left_on.to_string();
+    let reason_s = reason.to_string();
+    let dev = device_id.map(str::to_string);
+    with_write(conn, &ctx, move |tx| {
+        tx.execute(
+            "UPDATE student SET status='left', left_on=?1, left_reason=?2, updated_at=?3, sync_state=?4, version=version+1 WHERE id=?5",
+            params![left_on, reason_s, now, sync_state, sid],
+        )?;
+        // Cancel FUTURE (fully-unpaid) dues; paid/partly-paid dues are untouched.
+        tx.execute(
+            "UPDATE fee_due SET cancelled_at=?1, updated_at=?1 WHERE student_id=?2 AND cancelled_at IS NULL \
+             AND id NOT IN (SELECT fee_due_id FROM payment_allocation WHERE fee_due_id IS NOT NULL)",
+            params![now, sid],
+        )?;
+        let audit = AuditEntry {
+            at: now.clone(),
+            staff_id: Some(actor_s.id.clone()),
+            action: "mark_left".into(),
+            table: Some("student".into()),
+            record_id: Some(sid.clone()),
+            reason: Some(reason_s.clone()),
+            after_json: Some(serde_json::json!({ "status": "left", "left_on": left_on }).to_string()),
+            ..Default::default()
+        };
+        let op = Op {
+            op_id: new_id("op"),
+            hlc: now.clone(),
+            device_id: dev.clone().unwrap_or_default(),
+            staff_id: actor_s.id.clone(),
+            audience: "finance".into(),
+            table: "student".into(),
+            record_id: sid.clone(),
+            kind: "update".into(),
+            payload: "{}".into(),
+            base_version: None,
+            server_epoch: 1,
+        };
+        Ok(Effect { value: (), audit, op })
+    })?;
+    get_student_profile_logic(conn, &today, student_id)
 }
 
 // ============================================================ attendance ======
@@ -1331,5 +1845,93 @@ mod tests {
         let kv = list_students_page_logic(&mut c, &q(None, Some("Kavya"), 50, 0)).unwrap();
         assert_eq!(kv.total, 3);
         assert!(kv.rows.iter().all(|r| r.name.contains("Kavya")));
+    }
+
+    fn admission_input(class_id: String, name: &str) -> NewStudentInput {
+        NewStudentInput {
+            name: name.into(),
+            class_id,
+            roll_no: None,
+            guardian_name: Some("Parent".into()),
+            guardian_mobile: Some("9876500000".into()),
+            dob: Some("2016-04-01".into()),
+            gender: Some("female".into()),
+            address: None,
+            transport: Some(false),
+            rte: Some(false),
+            category: None,
+            aadhaar_status: None,
+        }
+    }
+
+    #[test]
+    fn admission_generates_dues_and_official_number_on_server() {
+        let mut c = seeded();
+        let cid = list_classes_logic(&mut c).unwrap()[0].id.clone();
+        let dto = create_student_logic(&mut c, &accountant(), None, DeviceMode::Server, "2026-09-24", &admission_input(cid, "New Admit")).unwrap();
+        // Single-PC server assigns the official admission number (YYYY/NNNN).
+        let adm = dto.admission_no.expect("server assigns admission_no");
+        assert!(vidya_core::admissions::validate_admission_no(&adm).is_ok(), "{adm} is well-formed");
+        // Dues were generated from the active fee heads.
+        let dues = list_fee_dues_logic(&mut c, &dto.id).unwrap();
+        assert!(dues.total_due_paise > 0, "a new admission owes the current-period fees");
+    }
+
+    #[test]
+    fn admission_offline_gets_provisional_number() {
+        let mut c = seeded();
+        let cid = list_classes_logic(&mut c).unwrap()[0].id.clone();
+        let dto = create_student_logic(&mut c, &accountant(), Some("dev-x"), DeviceMode::Client, "2026-09-24", &admission_input(cid, "Offline Admit")).unwrap();
+        assert!(dto.admission_no.is_none(), "offline admission has no official number yet");
+        assert!(dto.provisional_no.as_deref().unwrap_or("").starts_with("P-"), "offline admission gets a provisional number");
+    }
+
+    #[test]
+    fn transfer_closes_old_and_opens_one_new_enrollment() {
+        let mut c = seeded();
+        let classes = list_classes_logic(&mut c).unwrap();
+        let target = classes.last().unwrap().id.clone();
+        let stu = "stu-kavya-singh";
+        let before: i64 = c.query_row("SELECT COUNT(*) FROM enrollment WHERE student_id=?1", params![stu], |r| r.get(0)).unwrap();
+        transfer_student_logic(&mut c, &accountant(), None, DeviceMode::Server, "2026-09-24", stu, &target, None).unwrap();
+        let after: i64 = c.query_row("SELECT COUNT(*) FROM enrollment WHERE student_id=?1", params![stu], |r| r.get(0)).unwrap();
+        assert_eq!(after, before + 1, "history is kept — a new row is opened, not overwritten");
+        let open_count: i64 = c.query_row("SELECT COUNT(*) FROM enrollment WHERE student_id=?1 AND to_date IS NULL", params![stu], |r| r.get(0)).unwrap();
+        assert_eq!(open_count, 1, "exactly one open enrollment");
+        let open_class: String = c.query_row("SELECT class_id FROM enrollment WHERE student_id=?1 AND to_date IS NULL", params![stu], |r| r.get(0)).unwrap();
+        assert_eq!(open_class, target);
+    }
+
+    #[test]
+    fn leave_cancels_unpaid_dues_but_keeps_paid() {
+        let mut c = seeded();
+        let cid = list_classes_logic(&mut c).unwrap()[0].id.clone();
+        let stu = create_student_logic(&mut c, &accountant(), None, DeviceMode::Server, "2026-09-24", &admission_input(cid, "Leaver Child")).unwrap();
+        let dues = list_fee_dues_logic(&mut c, &stu.id).unwrap();
+        assert!(dues.total_due_paise > 0);
+        // Pay the oldest due in full so it carries an allocation (must survive the leave).
+        let first_id = dues.lines[0].id.clone();
+        let first_balance = dues.lines[0].balance_paise;
+        record_payment_logic(
+            &mut c,
+            &accountant(),
+            None,
+            DeviceMode::Server,
+            &PaymentInput { student_id: stu.id.clone(), amount_paise: first_balance, mode: "cash".into(), reference: None },
+        )
+        .unwrap();
+        mark_student_left_logic(&mut c, &accountant(), None, DeviceMode::Server, &stu.id, "2026-09-24", "Moved city").unwrap();
+        let after = list_fee_dues_logic(&mut c, &stu.id).unwrap();
+        assert_eq!(after.total_due_paise, 0, "no outstanding once left (unpaid dues cancelled)");
+        assert!(after.lines.iter().any(|l| l.id == first_id && l.balance_paise == 0), "the paid due is kept, not cancelled");
+        // No due that carries a payment was ever cancelled.
+        let bad: i64 = c
+            .query_row(
+                "SELECT COUNT(*) FROM fee_due WHERE student_id=?1 AND cancelled_at IS NOT NULL AND id IN (SELECT fee_due_id FROM payment_allocation WHERE fee_due_id IS NOT NULL)",
+                params![stu.id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(bad, 0, "paid dues are never cancelled");
     }
 }

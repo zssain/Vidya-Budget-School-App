@@ -95,6 +95,50 @@ export interface StudentQuery {
   offset: number
 }
 
+export interface EnrollmentHistoryDto {
+  class_display: string | null
+  session_label: string | null
+  roll_no: number | null
+  from_date: string
+  to_date: string | null
+}
+
+export interface AttendanceSummaryDto {
+  present: number
+  absent: number
+  leave: number
+  marked: number
+  pct_tenths: number
+  term_label: string | null
+  from_date: string | null
+  to_date: string | null
+}
+
+export interface StudentProfileDto {
+  id: string
+  name: string
+  admission_no: string | null
+  provisional_no: string | null
+  dob: string | null
+  gender: string | null
+  guardian_name: string | null
+  guardian_mobile: string | null
+  address: string | null
+  transport: boolean
+  category: string | null
+  rte: boolean
+  aadhaar_status: string
+  status: string
+  left_on: string | null
+  left_reason: string | null
+  class_id: string | null
+  class_display: string | null
+  roll_no: number | null
+  version: number
+  enrollment_history: EnrollmentHistoryDto[]
+  attendance: AttendanceSummaryDto
+}
+
 export interface FeeLineDto {
   id: string
   label: string
@@ -230,9 +274,16 @@ export interface ClassInput {
 export interface NewStudentInput {
   name: string
   class_id: string
+  roll_no?: number | null
   guardian_name?: string | null
   guardian_mobile?: string | null
   dob?: string | null
+  gender?: string | null
+  address?: string | null
+  transport?: boolean | null
+  rte?: boolean | null
+  category?: string | null
+  aadhaar_status?: string | null
 }
 export interface MarkInput {
   student_id: string
@@ -280,7 +331,14 @@ export const list_students_page = (query: StudentQuery) =>
   invoke<StudentsPageDto>('list_students_page', { query })
 export const search_students = (query: string) => invoke<StudentDto[]>('search_students', { query })
 export const get_student = (id: string) => invoke<StudentDto>('get_student', { id })
+export const get_student_profile = (id: string) => invoke<StudentProfileDto>('get_student_profile', { id })
 export const create_student = (input: NewStudentInput) => invoke<StudentDto>('create_student', { input })
+export const check_duplicate_students = (name: string, dob?: string, guardianMobile?: string) =>
+  invoke<StudentRowDto[]>('check_duplicate_students', { name, dob: dob ?? null, guardianMobile: guardianMobile ?? null })
+export const transfer_student = (studentId: string, classId: string, rollNo?: number) =>
+  invoke<StudentDto>('transfer_student', { studentId, classId, rollNo: rollNo ?? null })
+export const mark_student_left = (studentId: string, leftOn: string, reason: string) =>
+  invoke<StudentProfileDto>('mark_student_left', { studentId, leftOn, reason })
 export const get_attendance_sheet = (classId: string, date: string) =>
   invoke<AttendanceSheetDto>('get_attendance_sheet', { classId, date })
 export const save_attendance_draft = (classId: string, date: string, marks: MarkInput[]) =>
