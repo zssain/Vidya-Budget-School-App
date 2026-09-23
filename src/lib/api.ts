@@ -266,4 +266,91 @@ export const dashboard_accountant = () => invoke<AccountantDashboard>('dashboard
 export const dashboard_teacher = () => invoke<TeacherDashboard>('dashboard_teacher')
 export const set_accent = (hex: string) => invoke<void>('set_accent', { hex })
 export const verify_audit_chain = () => invoke<AuditChainDto>('verify_audit_chain')
+
+// ---- Phase 4: staff & access, invitations, devices, sync, conflicts --------
+export interface StaffFullDto {
+  id: string
+  name: string
+  role: string
+  mobile: string | null
+  google_email: string | null
+  state: string
+  class_teacher_of: string[]
+  class_subjects: string[]
+}
+export interface InviteDto {
+  staff_id: string
+  code: string
+  link: string
+  qr_svg: string
+  short_fingerprint: string
+  expires_at: string
+}
+export interface AddStaffInput {
+  name: string
+  role: string
+  mobile: string
+  google_email?: string | null
+}
+export interface DeviceDto {
+  id: string
+  owner_name: string
+  platform: string
+  series: string | null
+  last_seen_at: string | null
+  revoked: boolean
+  needs_rejoin: boolean
+}
+export interface ServerStatusDto {
+  school_name: string
+  server_epoch: number
+  port: number
+  fingerprint: string
+  lan_addrs: string[]
+  device_count: number
+}
+export interface SyncStatusDto {
+  pending_count: number
+  pending_paise: number
+  last_confirmed_at: string | null
+}
+export interface ConflictDto {
+  id: string
+  table: string
+  record_id: string
+  field: string
+  value_a: string | null
+  value_b: string | null
+  staff_b: string | null
+  hlc_b: string | null
+}
+export interface ReviewFlagDto {
+  id: string
+  kind: string
+  ref_table: string
+  ref_id: string
+  details_json: string | null
+}
+
+export const list_staff_access = () => invoke<StaffFullDto[]>('list_staff_access')
+export const add_staff = (input: AddStaffInput) => invoke<InviteDto>('add_staff', { input })
+export const suspend_staff = (id: string) => invoke<void>('suspend_staff', { id })
+export const remove_staff = (id: string) => invoke<void>('remove_staff', { id })
+export const create_invite = (staffId: string) => invoke<InviteDto>('create_invite', { staffId })
+export const revoke_invite = (staffId: string) => invoke<void>('revoke_invite', { staffId })
+export const set_class_teacher = (classId: string, staffId?: string) =>
+  invoke<void>('set_class_teacher', { classId, staffId: staffId ?? null })
+export const assign_subject_teacher = (classSubjectId: string, staffId?: string) =>
+  invoke<void>('assign_subject_teacher', { classSubjectId, staffId: staffId ?? null })
+export const effective_access = (staffId: string) => invoke<string[]>('effective_access', { staffId })
+export const list_devices = () => invoke<DeviceDto[]>('list_devices')
+export const revoke_device = (id: string) => invoke<void>('revoke_device', { id })
+export const server_status = () => invoke<ServerStatusDto>('server_status')
+export const sync_status = () => invoke<SyncStatusDto>('sync_status')
+export const sync_now = () => invoke<SyncStatusDto>('sync_now')
+export const list_conflicts = () => invoke<ConflictDto[]>('list_conflicts')
+export const resolve_conflict = (id: string, choice: string, value?: string) =>
+  invoke<void>('resolve_conflict', { id, choice, value: value ?? null })
+export const list_review_flags = () => invoke<ReviewFlagDto[]>('list_review_flags')
+export const resolve_review_flag = (id: string) => invoke<void>('resolve_review_flag', { id })
 export const seed_demo_school = () => invoke<void>('seed_demo_school')

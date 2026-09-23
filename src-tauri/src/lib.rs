@@ -118,7 +118,11 @@ fn invoke_handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'stat
         get_attendance_sheet, save_attendance_draft, submit_attendance, list_fee_dues,
         record_payment, list_payments, create_request, cancel_request, list_requests, get_request,
         decide_request, dashboard_principal, dashboard_accountant, dashboard_teacher, set_accent,
-        verify_audit_chain, seed_demo_school
+        verify_audit_chain,
+        list_staff_access, add_staff, suspend_staff, remove_staff, create_invite, revoke_invite,
+        set_class_teacher, assign_subject_teacher, effective_access, list_devices, revoke_device,
+        server_status, sync_status, sync_now, list_conflicts, resolve_conflict, list_review_flags,
+        resolve_review_flag, seed_demo_school
     ]
 }
 
@@ -132,6 +136,10 @@ fn invoke_handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'stat
         get_attendance_sheet, save_attendance_draft, submit_attendance, list_fee_dues,
         record_payment, list_payments, create_request, cancel_request, list_requests, get_request,
         decide_request, dashboard_principal, dashboard_accountant, dashboard_teacher, set_accent,
-        verify_audit_chain
+        verify_audit_chain,
+        list_staff_access, add_staff, suspend_staff, remove_staff, create_invite, revoke_invite,
+        set_class_teacher, assign_subject_teacher, effective_access, list_devices, revoke_device,
+        server_status, sync_status, sync_now, list_conflicts, resolve_conflict, list_review_flags,
+        resolve_review_flag
     ]
 }

@@ -7,6 +7,7 @@
 //! `RtCtx` and call it.
 
 pub mod logic;
+pub mod p04;
 
 use tauri::State;
 
@@ -15,6 +16,11 @@ use crate::error::CmdResult;
 use crate::state::AppStateResponse;
 
 use logic::*;
+use p04::*;
+
+fn now_utc() -> time::OffsetDateTime {
+    time::OffsetDateTime::now_utc()
+}
 
 /// Every registered command name. A test asserts this matches
 /// `src/lib/commands.json`, which `src/lib/api.ts` is checked against.
@@ -53,6 +59,25 @@ pub const COMMANDS: &[&str] = &[
     "dashboard_teacher",
     "set_accent",
     "verify_audit_chain",
+    // Phase 4 — staff & access, invitations, devices, sync, conflicts.
+    "list_staff_access",
+    "add_staff",
+    "suspend_staff",
+    "remove_staff",
+    "create_invite",
+    "revoke_invite",
+    "set_class_teacher",
+    "assign_subject_teacher",
+    "effective_access",
+    "list_devices",
+    "revoke_device",
+    "server_status",
+    "sync_status",
+    "sync_now",
+    "list_conflicts",
+    "resolve_conflict",
+    "list_review_flags",
+    "resolve_review_flag",
     #[cfg(debug_assertions)]
     "seed_demo_school",
 ];
@@ -275,6 +300,114 @@ pub fn seed_demo_school(state: State<RtCtx>) -> CmdResult<()> {
         crate::seed::seed_demo_school(conn, time::OffsetDateTime::now_utc())?;
         Ok(())
     })
+}
+
+// -------------------------------------------------- P04: staff & access ------
+
+#[tauri::command]
+pub fn list_staff_access(state: State<RtCtx>) -> CmdResult<Vec<StaffFullDto>> {
+    state.with_db(list_staff_full_logic)
+}
+
+#[tauri::command]
+pub fn add_staff(state: State<RtCtx>, input: AddStaffInput) -> CmdResult<InviteDto> {
+    let actor = state.require_session()?;
+    state.with_db(|conn| add_staff_logic(conn, &actor, &input, now_utc()))
+}
+
+#[tauri::command]
+pub fn suspend_staff(state: State<RtCtx>, id: String) -> CmdResult<()> {
+    let actor = state.require_session()?;
+    state.with_db(|conn| suspend_staff_logic(conn, &actor, &id))
+}
+
+#[tauri::command]
+pub fn remove_staff(state: State<RtCtx>, id: String) -> CmdResult<()> {
+    let actor = state.require_session()?;
+    state.with_db(|conn| remove_staff_logic(conn, &actor, &id))
+}
+
+#[tauri::command]
+pub fn create_invite(state: State<RtCtx>, staff_id: String) -> CmdResult<InviteDto> {
+    let actor = state.require_session()?;
+    state.with_db(|conn| create_invite_logic(conn, &actor, &staff_id, now_utc()))
+}
+
+#[tauri::command]
+pub fn revoke_invite(state: State<RtCtx>, staff_id: String) -> CmdResult<()> {
+    let actor = state.require_session()?;
+    state.with_db(|conn| revoke_invite_logic(conn, &actor, &staff_id))
+}
+
+#[tauri::command]
+pub fn set_class_teacher(state: State<RtCtx>, class_id: String, staff_id: Option<String>) -> CmdResult<()> {
+    let actor = state.require_session()?;
+    state.with_db(|conn| set_class_teacher_logic(conn, &actor, &class_id, staff_id.as_deref()))
+}
+
+#[tauri::command]
+pub fn assign_subject_teacher(state: State<RtCtx>, class_subject_id: String, staff_id: Option<String>) -> CmdResult<()> {
+    let actor = state.require_session()?;
+    state.with_db(|conn| assign_subject_teacher_logic(conn, &actor, &class_subject_id, staff_id.as_deref()))
+}
+
+#[tauri::command]
+pub fn effective_access(state: State<RtCtx>, staff_id: String) -> CmdResult<Vec<String>> {
+    state.with_db(|conn| effective_access_logic(conn, &staff_id))
+}
+
+// ----------------------------------------------------- P04: sync & devices ----
+
+#[tauri::command]
+pub fn list_devices(state: State<RtCtx>) -> CmdResult<Vec<DeviceDto>> {
+    state.with_db(list_devices_logic)
+}
+
+#[tauri::command]
+pub fn revoke_device(state: State<RtCtx>, id: String) -> CmdResult<()> {
+    let actor = state.require_session()?;
+    state.with_db(|conn| revoke_device_logic(conn, &actor, &id, now_utc()))
+}
+
+#[tauri::command]
+pub fn server_status(state: State<RtCtx>) -> CmdResult<ServerStatusDto> {
+    state.with_db(server_status_logic)
+}
+
+#[tauri::command]
+pub fn sync_status(state: State<RtCtx>) -> CmdResult<SyncStatusDto> {
+    state.with_db(sync_status_logic)
+}
+
+#[tauri::command]
+pub fn sync_now(state: State<RtCtx>) -> CmdResult<SyncStatusDto> {
+    // Single-PC server: nothing to push (it IS the server) — report current state,
+    // honestly (no fake "synced"). On client devices this triggers the engine.
+    state.with_db(sync_status_logic)
+}
+
+// ------------------------------------------------------ P04: conflict review ---
+
+#[tauri::command]
+pub fn list_conflicts(state: State<RtCtx>) -> CmdResult<Vec<ConflictDto>> {
+    state.with_db(list_conflicts_logic)
+}
+
+#[tauri::command]
+pub fn resolve_conflict(state: State<RtCtx>, id: String, choice: String, value: Option<String>) -> CmdResult<()> {
+    let actor = state.require_session()?;
+    state.with_db(|conn| resolve_conflict_logic(conn, &actor, &id, &choice, value.as_deref()))
+}
+
+#[tauri::command]
+pub fn list_review_flags(state: State<RtCtx>) -> CmdResult<Vec<ReviewFlagDto>> {
+    state.with_db(list_review_flags_logic)
+}
+
+#[tauri::command]
+pub fn resolve_review_flag(state: State<RtCtx>, id: String) -> CmdResult<()> {
+    let actor = state.require_session()?;
+    state.with_db(|conn| resolve_review_flag_logic(conn, &actor, &id))
 }
 
 /// Today's date (YYYY-MM-DD) in UTC.
