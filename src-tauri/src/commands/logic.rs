@@ -1633,6 +1633,183 @@ pub fn deactivate_fee_head_logic(conn: &mut Connection, actor_s: &SessionStaff, 
     Ok(())
 }
 
+// ============================================================= receipts =======
+//
+// Receipt search / open (full receipt data incl. amount in words en+hi, heads
+// paid from allocations, advance credit, balance after, sync state) and
+// Principal direct reverse (creates request + decision + reversal for audit).
+
+#[derive(Debug, Serialize)]
+pub struct ReceiptLineDto {
+    pub label: String,
+    pub amount_paise: i64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ReceiptDto {
+    pub id: String,
+    pub receipt_no: String,
+    pub student_id: String,
+    pub student_name: String,
+    pub guardian_mobile: Option<String>,
+    pub class_display: Option<String>,
+    pub admission_no: Option<String>,
+    pub provisional_no: Option<String>,
+    pub amount_paise: i64,
+    pub amount_words_en: String,
+    pub amount_words_hi: String,
+    pub mode: String,
+    pub reference: Option<String>,
+    pub collected_by_name: Option<String>,
+    pub collected_at: String,
+    pub confirmed: bool,
+    pub lines: Vec<ReceiptLineDto>,
+    pub advance_credit_paise: i64,
+    pub balance_after_paise: i64,
+    pub reversed: bool,
+}
+
+pub fn get_receipt_logic(conn: &mut Connection, actor_s: &SessionStaff, id: &str) -> CmdResult<ReceiptDto> {
+    let actor = actor_from(conn, actor_s)?;
+    require_allow(&actor, Action::PrintShareReceipt, &Target::of(TargetKind::Fee))?;
+    // Accept a receipt number or a payment id.
+    let (pid, receipt_no, student_id, amount, mode, reference, collected_by, collected_at, sync_state): (
+        String, String, String, i64, String, Option<String>, Option<String>, String, String,
+    ) = conn
+        .query_row(
+            "SELECT id, receipt_no, student_id, amount_paise, mode, reference, collected_by, collected_at, sync_state \
+             FROM payment WHERE id=?1 OR receipt_no=?1",
+            params![id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?, r.get(7)?, r.get(8)?)),
+        )
+        .optional()?
+        .ok_or_else(CmdError::not_found)?;
+
+    let (student_name, guardian_mobile, class_display, admission_no, provisional_no): (String, Option<String>, Option<String>, Option<String>, Option<String>) = conn
+        .query_row(
+            "SELECT s.name, s.guardian_mobile, c.display, s.admission_no, s.provisional_no FROM student s \
+             LEFT JOIN enrollment e ON e.student_id=s.id AND e.to_date IS NULL \
+             LEFT JOIN class c ON c.id=e.class_id WHERE s.id=?1",
+            params![student_id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+        )
+        .optional()?
+        .ok_or_else(CmdError::not_found)?;
+
+    let collected_by_name: Option<String> = match &collected_by {
+        Some(sid) => conn.query_row("SELECT name FROM staff WHERE id=?1", params![sid], |r| r.get(0)).optional()?,
+        None => None,
+    };
+
+    // Heads paid (kind='due') + advance credit (kind='advance_credit').
+    let mut lstmt = conn.prepare(
+        "SELECT COALESCE(h.name, d.period, 'Fee'), pa.amount_paise FROM payment_allocation pa \
+         LEFT JOIN fee_due d ON d.id=pa.fee_due_id LEFT JOIN fee_head h ON h.id=d.fee_head_id \
+         WHERE pa.payment_id=?1 AND pa.kind='due' ORDER BY pa.amount_paise DESC",
+    )?;
+    let lines: Vec<ReceiptLineDto> = lstmt
+        .query_map(params![pid], |r| Ok(ReceiptLineDto { label: r.get(0)?, amount_paise: r.get(1)? }))?
+        .collect::<rusqlite::Result<_>>()?;
+    let advance_credit_paise: i64 = conn
+        .query_row("SELECT COALESCE(SUM(amount_paise),0) FROM payment_allocation WHERE payment_id=?1 AND kind='advance_credit'", params![pid], |r| r.get(0))
+        .optional()?
+        .unwrap_or(0);
+
+    let balance_after_paise: i64 = student_dues(conn, &student_id)?.iter().map(|l| l.balance_paise.max(0)).sum();
+    let reversed: bool = conn
+        .query_row("SELECT 1 FROM reversal WHERE payment_id=?1 LIMIT 1", params![pid], |_| Ok(()))
+        .optional()?
+        .is_some();
+
+    Ok(ReceiptDto {
+        id: pid,
+        receipt_no,
+        student_id,
+        student_name,
+        guardian_mobile,
+        class_display,
+        admission_no,
+        provisional_no,
+        amount_paise: amount,
+        amount_words_en: vidya_core::words::amount_in_words_en(Paise(amount)),
+        amount_words_hi: vidya_core::words::amount_in_words_hi(Paise(amount)),
+        mode,
+        reference,
+        collected_by_name,
+        collected_at,
+        confirmed: sync_state == "confirmed",
+        lines,
+        advance_credit_paise,
+        balance_after_paise,
+        reversed,
+    })
+}
+
+#[derive(Debug, Serialize)]
+pub struct ReceiptSummaryDto {
+    pub id: String,
+    pub receipt_no: String,
+    pub student_name: String,
+    pub amount_paise: i64,
+    pub mode: String,
+    pub collected_at: String,
+    pub confirmed: bool,
+    pub reversed: bool,
+}
+
+pub fn search_receipts_logic(conn: &mut Connection, actor_s: &SessionStaff, query: &str) -> CmdResult<Vec<ReceiptSummaryDto>> {
+    let actor = actor_from(conn, actor_s)?;
+    require_allow(&actor, Action::PrintShareReceipt, &Target::of(TargetKind::Fee))?;
+    let like = format!("%{}%", query.trim().replace('%', ""));
+    let mut stmt = conn.prepare(
+        "SELECT p.id, p.receipt_no, s.name, p.amount_paise, p.mode, p.collected_at, p.sync_state, \
+                EXISTS(SELECT 1 FROM reversal rv WHERE rv.payment_id=p.id) \
+         FROM payment p JOIN student s ON s.id=p.student_id \
+         WHERE p.receipt_no LIKE ?1 OR s.name LIKE ?1 OR p.collected_at LIKE ?1 \
+         ORDER BY p.collected_at DESC LIMIT 100",
+    )?;
+    let rows = stmt
+        .query_map(params![like], |r| {
+            Ok(ReceiptSummaryDto {
+                id: r.get(0)?,
+                receipt_no: r.get(1)?,
+                student_name: r.get(2)?,
+                amount_paise: r.get(3)?,
+                mode: r.get(4)?,
+                collected_at: r.get(5)?,
+                confirmed: r.get::<_, String>(6)? == "confirmed",
+                reversed: r.get::<_, i64>(7)? != 0,
+            })
+        })?
+        .collect::<rusqlite::Result<_>>()?;
+    Ok(rows)
+}
+
+/// Principal direct reversal: still creates a request + a decision + the reversal
+/// row (for audit), by opening the request and immediately approving it.
+pub fn reverse_payment_logic(
+    conn: &mut Connection,
+    actor_s: &SessionStaff,
+    device_mode: DeviceMode,
+    payment_id: &str,
+    reason: &str,
+) -> CmdResult<RequestDto> {
+    let actor = actor_from(conn, actor_s)?;
+    // Only the Principal reverses directly; accountants raise a request instead.
+    require_allow(&actor, Action::PaymentReversal, &Target::of(TargetKind::Fee))?;
+    let input = RequestInput {
+        kind: "payment_reversal".into(),
+        target_table: "payment".into(),
+        target_id: payment_id.to_string(),
+        base_version: 0,
+        reason: reason.to_string(),
+        before_json: None,
+        after_json: Some(serde_json::json!({ "summary": format!("Reverse payment {payment_id}") }).to_string()),
+    };
+    let req = create_request_logic(conn, actor_s, &input)?;
+    decide_request_logic(conn, actor_s, device_mode, &req.id, "approve", Some(reason))
+}
+
 // ============================================================ attendance ======
 
 #[derive(Debug, Serialize)]
@@ -2550,5 +2727,28 @@ mod tests {
 
         // Accountants cannot edit the fee structure.
         assert!(create_fee_head_logic(&mut c, &accountant(), &head_input("X", 1)).is_err());
+    }
+
+    #[test]
+    fn receipt_has_words_and_principal_reverse_creates_reversal() {
+        let mut c = seeded();
+        let pay = record_payment_logic(
+            &mut c,
+            &accountant(),
+            None,
+            DeviceMode::Server,
+            &PaymentInput { student_id: "stu-kavya-singh".into(), amount_paise: 240_000, mode: "cash".into(), reference: None },
+        )
+        .unwrap();
+        let r = get_receipt_logic(&mut c, &accountant(), &pay.receipt_no).unwrap();
+        assert_eq!(r.amount_paise, 240_000);
+        assert!(!r.amount_words_en.is_empty() && !r.amount_words_hi.is_empty(), "figures + words in both languages");
+        assert!(!r.lines.is_empty(), "heads paid come from allocations");
+        assert!(!r.reversed);
+        // Principal reverse → request + decision + one reversal row (all audited).
+        reverse_payment_logic(&mut c, &principal(), DeviceMode::Server, &pay.id, "Duplicate entry").unwrap();
+        let rows: i64 = c.query_row("SELECT COUNT(*) FROM reversal WHERE payment_id=?1", params![pay.id], |r| r.get(0)).unwrap();
+        assert_eq!(rows, 1);
+        assert!(get_receipt_logic(&mut c, &accountant(), &pay.id).unwrap().reversed);
     }
 }

@@ -19,6 +19,8 @@ import StudentProfileScreen from '@/screens/desktop/StudentProfileScreen'
 import AdmissionSheet from '@/screens/desktop/AdmissionSheet'
 import CsvImportScreen from '@/screens/desktop/CsvImportScreen'
 import FeesScreen from '@/screens/desktop/FeesScreen'
+import ReceiptsScreen from '@/screens/desktop/ReceiptsScreen'
+import ReceiptDoc from '@/screens/print/ReceiptDoc'
 import PrincipalHomeContainer from '@/screens/containers/PrincipalHomeContainer'
 import CollectFeeContainer from '@/screens/containers/CollectFeeContainer'
 import AttendanceContainer from '@/screens/containers/AttendanceContainer'
@@ -107,6 +109,17 @@ export default function App() {
     case 'moved':
       return <StatusScreen messageKey="licence.banner_moved" />
     case 'home': {
+      // Hidden print routes render the document full-bleed (no shell), with the
+      // print @page CSS. Opened from within the app (session is set).
+      {
+        const pm = matchRoute('/print/receipt/:id', base)
+        if (pm) {
+          const q = new URLSearchParams(path.split('?')[1] ?? '')
+          const size = q.get('size') === '80mm' ? '80mm' : 'a5'
+          const lang = q.get('lang') === 'hi' ? 'hi' : 'en'
+          return <ReceiptDoc id={pm.id} size={size} lang={lang} duplicate={q.get('duplicate') === '1'} auto={q.get('auto') === '1'} />
+        }
+      }
       // Teachers use the phone screens (no desktop shell).
       if (route.role === 'teacher') {
         const m = matchRoute('/teacher/attendance/:classId', base)
@@ -144,6 +157,8 @@ function desktopRoute(base: string, role: Role): { active: string; node: ReactNo
   if (base === '/principal/students' || base === '/accountant/students')
     return { active: 'students', node: <StudentsScreen role={role} /> }
   if (base === '/principal/fees') return { active: 'fees', node: <FeesScreen /> }
+  if (base === '/principal/receipts' || base === '/accountant/receipts')
+    return { active: 'receipts', node: <ReceiptsScreen role={role} /> }
   if (base === '/principal/home') return { active: 'home', node: <PrincipalHomeContainer /> }
   if (base === '/accountant/collect') return { active: 'collect', node: <CollectFeeContainer /> }
   if (role === 'accountant') return { active: 'collect', node: <CollectFeeContainer /> }

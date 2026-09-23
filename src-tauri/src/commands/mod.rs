@@ -59,6 +59,10 @@ pub const COMMANDS: &[&str] = &[
     "preview_fee_head_change",
     "update_fee_head",
     "deactivate_fee_head",
+    "get_receipt",
+    "search_receipts",
+    "reverse_payment",
+    "print_page",
     "get_attendance_sheet",
     "save_attendance_draft",
     "submit_attendance",
@@ -315,6 +319,36 @@ pub fn update_fee_head(state: State<RtCtx>, id: String, input: FeeHeadInput) -> 
 pub fn deactivate_fee_head(state: State<RtCtx>, id: String) -> CmdResult<()> {
     let actor = state.require_session()?;
     state.with_db(|conn| deactivate_fee_head_logic(conn, &actor, &id))
+}
+
+// -------------------------------------------------------------- receipts ------
+
+#[tauri::command]
+pub fn get_receipt(state: State<RtCtx>, id: String) -> CmdResult<ReceiptDto> {
+    let actor = state.require_session()?;
+    state.with_db(|conn| get_receipt_logic(conn, &actor, &id))
+}
+
+#[tauri::command]
+pub fn search_receipts(state: State<RtCtx>, query: String) -> CmdResult<Vec<ReceiptSummaryDto>> {
+    let actor = state.require_session()?;
+    state.with_db(|conn| search_receipts_logic(conn, &actor, &query))
+}
+
+#[tauri::command]
+pub fn reverse_payment(state: State<RtCtx>, payment_id: String, reason: String) -> CmdResult<RequestDto> {
+    let actor = state.require_session()?;
+    let mode = state.device_mode;
+    state.with_db(|conn| reverse_payment_logic(conn, &actor, mode, &payment_id, &reason))
+}
+
+/// Open the OS print dialog for the current window (Tauri 2 WebviewWindow::print,
+/// verified present in tauri 2.11). "Printed" means only that the dialog opened
+/// (§7); the caller falls back to window.print() if this errors.
+#[tauri::command]
+pub fn print_page(window: tauri::WebviewWindow) -> CmdResult<()> {
+    window.print().map_err(|_| crate::error::CmdError::internal("print_unavailable"))?;
+    Ok(())
 }
 
 // ----------------------------------------------------------- attendance ------

@@ -174,6 +174,43 @@ export interface FeeDuesDto {
   lines: FeeLineDto[]
 }
 
+export interface ReceiptLineDto {
+  label: string
+  amount_paise: number
+}
+export interface ReceiptDto {
+  id: string
+  receipt_no: string
+  student_id: string
+  student_name: string
+  guardian_mobile: string | null
+  class_display: string | null
+  admission_no: string | null
+  provisional_no: string | null
+  amount_paise: number
+  amount_words_en: string
+  amount_words_hi: string
+  mode: string
+  reference: string | null
+  collected_by_name: string | null
+  collected_at: string
+  confirmed: boolean
+  lines: ReceiptLineDto[]
+  advance_credit_paise: number
+  balance_after_paise: number
+  reversed: boolean
+}
+export interface ReceiptSummaryDto {
+  id: string
+  receipt_no: string
+  student_name: string
+  amount_paise: number
+  mode: string
+  collected_at: string
+  confirmed: boolean
+  reversed: boolean
+}
+
 export interface FeeOverviewRow {
   class_id: string
   class_display: string
@@ -412,6 +449,11 @@ export const preview_fee_head_change = (id: string, newAmount: number) =>
 export const update_fee_head = (id: string, input: FeeHeadInput) =>
   invoke<FeeHeadDto>('update_fee_head', { id, input })
 export const deactivate_fee_head = (id: string) => invoke<void>('deactivate_fee_head', { id })
+export const get_receipt = (id: string) => invoke<ReceiptDto>('get_receipt', { id })
+export const search_receipts = (query: string) => invoke<ReceiptSummaryDto[]>('search_receipts', { query })
+export const reverse_payment = (paymentId: string, reason: string) =>
+  invoke<RequestDto>('reverse_payment', { paymentId, reason })
+export const print_page = () => invoke<void>('print_page')
 export const record_payment = (input: PaymentInput) => invoke<PaymentDto>('record_payment', { input })
 export const list_payments = (studentId?: string) =>
   invoke<PaymentDto[]>('list_payments', { studentId: studentId ?? null })
