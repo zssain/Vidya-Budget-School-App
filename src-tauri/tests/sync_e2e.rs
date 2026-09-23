@@ -6,10 +6,14 @@
 //!
 //! A real TLS transport is verified separately (server::cert pinned-verifier test).
 
-use rusqlite::Connection;
+use rusqlite::{params, Connection};
 use time::OffsetDateTime;
 
 use vidya_lib::server::service;
+use vidya_lib::sync::drive::exchange::{self, HeldKeys};
+use vidya_lib::sync::drive::fake::{FakeDrive, PRINCIPAL};
+use vidya_lib::sync::drive::keys;
+use vidya_lib::sync::drive::DriveApi;
 use vidya_lib::sync::protocol::{Op, OpStatus};
 use vidya_lib::sync::scope;
 use vidya_lib::{db, seed};
@@ -200,4 +204,188 @@ fn five_thousand_queued_ops_apply() {
     let after: i64 = s.query_row("SELECT COUNT(*) FROM student", [], |r| r.get(0)).unwrap();
     assert_eq!(after - before, 5000);
     assert_eq!(vidya_lib::security::audit::verify_chain(&s).unwrap(), None, "audit chain stays valid at scale");
+}
+
+// ======================================================================
+// P06 — Google Drive fallback exchange (Step 9), over the fake DriveApi.
+// Server off → phone seals ops into a `.vop` and uploads to its own Drive
+// folder → server on → imports in HLC order via the SAME apply_op path →
+// Confirmed. Uses the real `sync::drive::{exchange, keys, bundle, fake}`.
+// ======================================================================
+
+/// A fresh, migrated "phone" DB with an outbox (no seed needed on the device).
+fn phone() -> Connection {
+    let mut c = db::open_in_memory(KEY).unwrap();
+    db::run_migrations(&mut c).unwrap();
+    c
+}
+
+/// Queue one op into a device's outbox (what `with_write` does in Client mode).
+fn queue(dev: &Connection, o: &Op) {
+    dev.execute(
+        "INSERT INTO outbox(op_id,hlc,device_id,staff_id,audience,\"table\",record_id,kind,payload,base_version,server_epoch) \
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
+        params![o.op_id, o.hlc, o.device_id, o.staff_id, o.audience, o.table, o.record_id, o.kind, o.payload.to_string(), o.base_version, o.server_epoch],
+    ).unwrap();
+}
+
+/// Deliver the server's current key for `audience` to a device (as join would).
+fn deliver(server: &Connection, audience: &str) -> HeldKeys {
+    let k = keys::get_or_create(server, audience).unwrap();
+    let mut h = HeldKeys::new();
+    h.insert((audience.to_string(), k.version), keys::decode_key(&k.key_b64).unwrap());
+    h
+}
+
+fn attendance_op(id: &str, mark_id: &str) -> Op {
+    let mut o = op(id, "stf-meena", "dev-phone", "attendance_mark", mark_id, "update", serde_json::json!({ "mark": "P" }), None);
+    o.audience = "class:cls-5a".into(); // decided by vidya_core::audience::audience_for
+    o
+}
+
+/// DONE-MEANS: server PC off → phone records attendance → shared to Drive →
+/// server PC on → imports → Confirmed by school server. The mark changes.
+#[test]
+fn drive_server_off_phone_pushes_then_server_imports_confirmed() {
+    let mut s = server();
+    let mark_id: String = s
+        .query_row(
+            "SELECT m.id FROM attendance_mark m JOIN attendance_sheet sh ON sh.id=m.sheet_id WHERE sh.class_id='cls-5a' AND m.mark='A' LIMIT 1",
+            [], |r| r.get(0),
+        )
+        .unwrap();
+
+    // Phone (server unreachable) queues the mark A→P and holds the class key.
+    let mut ph = phone();
+    let o = attendance_op("op-att-drive", &mark_id);
+    queue(&ph, &o);
+    let held = deliver(&s, "class:cls-5a");
+
+    // Drive: provision the school; the phone pushes its outbox.
+    let drive = FakeDrive::new();
+    let l = drive.provision_school(&[("stf-meena", "dev-phone")]);
+    let pushed = exchange::push_outbox(&mut ph, &drive.as_actor("stf-meena"), &l.ops["dev-phone"], &held).unwrap();
+    assert_eq!((pushed.bundles, pushed.ops), (1, 1), "one bundle, one op shared to Drive");
+
+    // Server comes back and imports everything from exchange/.
+    let out = exchange::import_all(&mut s, &drive.as_actor(PRINCIPAL), &l.exchange).unwrap();
+    assert_eq!(out.confirmed, 1, "the attendance op is confirmed on import");
+    assert_eq!(out.archived, 1, "processed bundle archived to _done/");
+    let mark: String = s.query_row("SELECT mark FROM attendance_mark WHERE id=?1", [&mark_id], |r| r.get(0)).unwrap();
+    assert_eq!(mark, "P", "the register changed on the server");
+    assert_eq!(vidya_lib::security::audit::verify_chain(&s).unwrap(), None);
+
+    // The ack tells the phone its op is confirmed (Step 7).
+    let ack = out.acks.get("dev-phone").expect("ack for the phone");
+    assert_eq!(ack.results[0].status, OpStatus::Confirmed);
+
+    // Re-import is a no-op (bundle archived + idempotent by op_id).
+    let again = exchange::import_all(&mut s, &drive.as_actor(PRINCIPAL), &l.exchange).unwrap();
+    assert_eq!((again.confirmed, again.bundles), (0, 0));
+}
+
+/// Step 9: a tampered bundle a holder should read fails AEAD → quarantined, not applied.
+#[test]
+fn drive_tampered_bundle_is_quarantined_on_import() {
+    let mut s = server();
+    let mark_id: String = s
+        .query_row("SELECT m.id FROM attendance_mark m JOIN attendance_sheet sh ON sh.id=m.sheet_id WHERE sh.class_id='cls-5a' AND m.mark='A' LIMIT 1", [], |r| r.get(0))
+        .unwrap();
+    let key = keys::get_or_create(&s, "class:cls-5a").unwrap();
+    let kb = keys::decode_key(&key.key_b64).unwrap();
+    let o = attendance_op("op-tamper", &mark_id);
+    let mut body = vidya_lib::sync::drive::bundle::seal_bundle(&kb, "class:cls-5a", key.version, std::slice::from_ref(&o)).unwrap();
+    let last = body.len() - 1;
+    body[last] ^= 0x01; // tamper in transit
+
+    let drive = FakeDrive::new();
+    let l = drive.provision_school(&[("stf-meena", "dev-phone")]);
+    let props = vidya_lib::sync::drive::bundle::bundle_properties("class:cls-5a", key.version);
+    drive.as_actor("stf-meena").create(&l.ops["dev-phone"], "bad.vop", &body, &props).unwrap();
+
+    let out = exchange::import_all(&mut s, &drive.as_actor(PRINCIPAL), &l.exchange).unwrap();
+    assert_eq!((out.quarantined, out.confirmed, out.archived), (1, 0, 0), "tampered bundle not applied");
+    let mark: String = s.query_row("SELECT mark FROM attendance_mark WHERE id=?1", [&mark_id], |r| r.get(0)).unwrap();
+    assert_eq!(mark, "A", "the register is unchanged");
+}
+
+/// Step 9: a revoked/suspended author's later bundle is flagged, not applied.
+#[test]
+fn drive_revoked_author_bundle_is_flagged_not_applied() {
+    let mut s = server();
+    let mark_id: String = s
+        .query_row("SELECT m.id FROM attendance_mark m JOIN attendance_sheet sh ON sh.id=m.sheet_id WHERE sh.class_id='cls-5a' AND m.mark='A' LIMIT 1", [], |r| r.get(0))
+        .unwrap();
+    s.execute("UPDATE staff SET state='suspended' WHERE id='stf-meena'", []).unwrap();
+
+    let mut ph = phone();
+    let o = attendance_op("op-revoked", &mark_id);
+    queue(&ph, &o);
+    let held = deliver(&s, "class:cls-5a");
+    let drive = FakeDrive::new();
+    let l = drive.provision_school(&[("stf-meena", "dev-phone")]);
+    exchange::push_outbox(&mut ph, &drive.as_actor("stf-meena"), &l.ops["dev-phone"], &held).unwrap();
+
+    let out = exchange::import_all(&mut s, &drive.as_actor(PRINCIPAL), &l.exchange).unwrap();
+    assert_eq!((out.flagged, out.confirmed), (1, 0), "suspended author → flagged");
+    let flags: i64 = s.query_row("SELECT COUNT(*) FROM review_flag WHERE kind='revoked_author' AND status='open'", [], |r| r.get(0)).unwrap();
+    assert_eq!(flags, 1);
+    let mark: String = s.query_row("SELECT mark FROM attendance_mark WHERE id=?1", [&mark_id], |r| r.get(0)).unwrap();
+    assert_eq!(mark, "A", "not applied");
+}
+
+/// Step 9: the same op via LAN and via Drive is applied exactly once (§8.4).
+#[test]
+fn drive_same_op_via_lan_and_drive_applies_once() {
+    let mut s = server();
+    // The op the accountant records (audience = finance).
+    let sid = "stu-lan-drive";
+    let mut o = op("op-lan-drive", "stf-suresh", "dev-a2", "student", sid, "insert", serde_json::json!({ "name": "Once Only", "status": "active" }), None);
+    o.audience = "finance".into();
+
+    // (1) it reaches the server over LAN first → confirmed.
+    assert_eq!(push1(&mut s, &o), OpStatus::Confirmed);
+
+    // (2) the same op also went out over Drive; the server imports it → no double apply.
+    let drive = FakeDrive::new();
+    let l = drive.provision_school(&[("stf-suresh", "dev-a2")]);
+    let held = deliver(&s, "finance");
+    let mut ph = phone();
+    queue(&ph, &o);
+    exchange::push_outbox(&mut ph, &drive.as_actor("stf-suresh"), &l.ops["dev-a2"], &held).unwrap();
+    let out = exchange::import_all(&mut s, &drive.as_actor(PRINCIPAL), &l.exchange).unwrap();
+
+    // apply_op is idempotent by op_id: the import "confirms" from the remembered
+    // result but the student exists exactly once.
+    assert_eq!(out.confirmed, 1);
+    let n: i64 = s.query_row("SELECT COUNT(*) FROM student WHERE id=?1", [sid], |r| r.get(0)).unwrap();
+    assert_eq!(n, 1, "applied once despite arriving via both routes");
+    let oplog: i64 = s.query_row("SELECT COUNT(*) FROM op_log WHERE op_id='op-lan-drive'", [], |r| r.get(0)).unwrap();
+    assert_eq!(oplog, 1, "one op_log entry");
+}
+
+/// Step 6/7: the server's sealed ack round-trips to the device.
+#[test]
+fn drive_ack_round_trips_to_the_device() {
+    use base64::engine::general_purpose::STANDARD;
+    use base64::Engine;
+    let mut s = server();
+    let mark_id: String = s
+        .query_row("SELECT m.id FROM attendance_mark m JOIN attendance_sheet sh ON sh.id=m.sheet_id WHERE sh.class_id='cls-5a' AND m.mark='A' LIMIT 1", [], |r| r.get(0))
+        .unwrap();
+    let mut ph = phone();
+    let o = attendance_op("op-ack", &mark_id);
+    queue(&ph, &o);
+    let held = deliver(&s, "class:cls-5a");
+    let drive = FakeDrive::new();
+    let l = drive.provision_school(&[("stf-meena", "dev-phone")]);
+    exchange::push_outbox(&mut ph, &drive.as_actor("stf-meena"), &l.ops["dev-phone"], &held).unwrap();
+    let out = exchange::import_all(&mut s, &drive.as_actor(PRINCIPAL), &l.exchange).unwrap();
+
+    // Server seals the ack with the device session key; the device reads it back.
+    let session = STANDARD.encode([0x33u8; 32]);
+    exchange::write_ack(&drive.as_actor(PRINCIPAL), &l.acks, "dev-phone", &out.acks["dev-phone"], &session).unwrap();
+    let ack = exchange::read_ack(&drive.as_actor("stf-meena"), &l.acks, "dev-phone", &session).unwrap().unwrap();
+    assert_eq!(ack.results[0].status, OpStatus::Confirmed);
+    assert_eq!(ack.last_hlc, o.hlc);
 }
