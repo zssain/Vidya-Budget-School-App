@@ -103,14 +103,15 @@ impl ServerCertVerifier for PinnedServerCertVerifier {
 }
 
 /// A client TLS config that trusts ONLY the pinned fingerprint (ring provider).
-pub fn client_config(fingerprint: impl Into<String>) -> Result<Arc<ClientConfig>, String> {
+/// Returned owned so it can be handed to `reqwest`'s `use_preconfigured_tls`.
+pub fn client_config(fingerprint: impl Into<String>) -> Result<ClientConfig, String> {
     let cfg = ClientConfig::builder_with_provider(Arc::new(rustls::crypto::ring::default_provider()))
         .with_safe_default_protocol_versions()
         .map_err(|e| e.to_string())?
         .dangerous()
         .with_custom_certificate_verifier(Arc::new(PinnedServerCertVerifier::new(fingerprint)))
         .with_no_client_auth();
-    Ok(Arc::new(cfg))
+    Ok(cfg)
 }
 
 /// The server TLS config from stored DER cert + key (ring provider).
