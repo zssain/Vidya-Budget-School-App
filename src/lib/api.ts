@@ -211,6 +211,29 @@ export interface ReceiptSummaryDto {
   reversed: boolean
 }
 
+export interface DayBookEntry {
+  time: string
+  receipt_no: string
+  student_name: string
+  class_display: string | null
+  mode: string
+  reference_last4: string | null
+  amount_paise: number
+  collected_by: string | null
+  confirmed: boolean
+  reversed: boolean
+}
+export interface DayBookDto {
+  date: string
+  cash_paise: number
+  upi_paise: number
+  cheque_paise: number
+  total_paise: number
+  reversals_paise: number
+  provisional_paise: number
+  entries: DayBookEntry[]
+}
+
 export interface FeeOverviewRow {
   class_id: string
   class_display: string
@@ -429,7 +452,8 @@ export const transfer_student = (studentId: string, classId: string, rollNo?: nu
   invoke<StudentDto>('transfer_student', { studentId, classId, rollNo: rollNo ?? null })
 export const mark_student_left = (studentId: string, leftOn: string, reason: string) =>
   invoke<StudentProfileDto>('mark_student_left', { studentId, leftOn, reason })
-export const export_csv = (kind: string, path: string) => invoke<number>('export_csv', { kind, path })
+export const export_csv = (kind: string, path: string, arg?: string) =>
+  invoke<number>('export_csv', { kind, path, arg: arg ?? null })
 export const students_csv_template = (path: string) => invoke<void>('students_csv_template', { path })
 export const import_students_dry_run = (path: string) => invoke<ImportPreviewDto>('import_students_dry_run', { path })
 export const import_students_commit = (path: string) => invoke<ImportResultDto>('import_students_commit', { path })
@@ -454,6 +478,7 @@ export const search_receipts = (query: string) => invoke<ReceiptSummaryDto[]>('s
 export const reverse_payment = (paymentId: string, reason: string) =>
   invoke<RequestDto>('reverse_payment', { paymentId, reason })
 export const print_page = () => invoke<void>('print_page')
+export const day_book = (date: string) => invoke<DayBookDto>('day_book', { date })
 export const record_payment = (input: PaymentInput) => invoke<PaymentDto>('record_payment', { input })
 export const list_payments = (studentId?: string) =>
   invoke<PaymentDto[]>('list_payments', { studentId: studentId ?? null })

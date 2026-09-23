@@ -1180,9 +1180,10 @@ fn dues_csv_rows(conn: &Connection) -> rusqlite::Result<Vec<Vec<String>>> {
     Ok(out)
 }
 
-/// Export a scoped, formula-safe CSV to `path`. Returns the data-row count
+/// Export a scoped, formula-safe CSV to `path`. `arg` carries a parameter for
+/// kinds that need one (e.g. the date for `daybook`). Returns the data-row count
 /// (header excluded). 0 rows → a header-only file (§ edge case).
-pub fn export_csv_logic(conn: &mut Connection, actor_s: &SessionStaff, kind: &str, path: &str) -> CmdResult<i64> {
+pub fn export_csv_logic(conn: &mut Connection, actor_s: &SessionStaff, kind: &str, path: &str, arg: Option<&str>) -> CmdResult<i64> {
     let actor = actor_from(conn, actor_s)?;
     let rows = match kind {
         "students" => {
@@ -1192,6 +1193,10 @@ pub fn export_csv_logic(conn: &mut Connection, actor_s: &SessionStaff, kind: &st
         "dues" => {
             require_allow(&actor, Action::FeeReports, &Target::of(TargetKind::Fee))?;
             dues_csv_rows(conn)?
+        }
+        "daybook" => {
+            require_allow(&actor, Action::DayBook, &Target::of(TargetKind::Fee))?;
+            daybook_csv_rows(conn, arg.unwrap_or(""))?
         }
         _ => return Err(CmdError::validation("kind", "unknown")),
     };
@@ -1808,6 +1813,149 @@ pub fn reverse_payment_logic(
     };
     let req = create_request_logic(conn, actor_s, &input)?;
     decide_request_logic(conn, actor_s, device_mode, &req.id, "approve", Some(reason))
+}
+
+// ============================================================= day book =======
+//
+// All money movement on a date: totals by mode, reversals, provisional (unsent)
+// amounts shown separately, and the chronological list. Print + CSV export.
+
+#[derive(Debug, Serialize)]
+pub struct DayBookEntry {
+    pub time: String,
+    pub receipt_no: String,
+    pub student_name: String,
+    pub class_display: Option<String>,
+    pub mode: String,
+    pub reference_last4: Option<String>,
+    pub amount_paise: i64,
+    pub collected_by: Option<String>,
+    pub confirmed: bool,
+    pub reversed: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct DayBookDto {
+    pub date: String,
+    pub cash_paise: i64,
+    pub upi_paise: i64,
+    pub cheque_paise: i64,
+    pub total_paise: i64,
+    pub reversals_paise: i64,
+    pub provisional_paise: i64,
+    pub entries: Vec<DayBookEntry>,
+}
+
+fn last4(s: &Option<String>) -> Option<String> {
+    s.as_ref().filter(|v| !v.is_empty()).map(|v| {
+        let chars: Vec<char> = v.chars().collect();
+        chars[chars.len().saturating_sub(4)..].iter().collect()
+    })
+}
+
+pub fn day_book_logic(conn: &mut Connection, actor_s: &SessionStaff, date: &str) -> CmdResult<DayBookDto> {
+    let actor = actor_from(conn, actor_s)?;
+    require_allow(&actor, Action::DayBook, &Target::of(TargetKind::Fee))?;
+    let like = format!("{date}%");
+    let mut stmt = conn.prepare(
+        "SELECT p.id, p.collected_at, p.receipt_no, s.name, c.display, p.mode, p.reference, p.amount_paise, st.name, p.sync_state, \
+                EXISTS(SELECT 1 FROM reversal rv WHERE rv.payment_id=p.id) \
+         FROM payment p JOIN student s ON s.id=p.student_id \
+         LEFT JOIN enrollment e ON e.student_id=s.id AND e.to_date IS NULL \
+         LEFT JOIN class c ON c.id=e.class_id \
+         LEFT JOIN staff st ON st.id=p.collected_by \
+         WHERE p.collected_at LIKE ?1 ORDER BY p.collected_at",
+    )?;
+    let mut entries = Vec::new();
+    let (mut cash, mut upi, mut cheque, mut provisional) = (0i64, 0i64, 0i64, 0i64);
+    let rows = stmt.query_map(params![like], |r| {
+        let collected_at: String = r.get(1)?;
+        let mode: String = r.get(5)?;
+        let reference: Option<String> = r.get(6)?;
+        let amount: i64 = r.get(7)?;
+        let sync_state: String = r.get(9)?;
+        Ok(DayBookEntry {
+            time: collected_at.get(11..16).unwrap_or("").to_string(),
+            receipt_no: r.get(2)?,
+            student_name: r.get(3)?,
+            class_display: r.get(4)?,
+            mode: mode.clone(),
+            reference_last4: last4(&reference),
+            amount_paise: amount,
+            collected_by: r.get(8)?,
+            confirmed: sync_state == "confirmed",
+            reversed: r.get::<_, i64>(10)? != 0,
+        })
+    })?;
+    for row in rows {
+        let e = row?;
+        if e.confirmed {
+            match e.mode.as_str() {
+                "cash" => cash += e.amount_paise,
+                "upi" => upi += e.amount_paise,
+                "cheque" => cheque += e.amount_paise,
+                _ => {}
+            }
+        } else {
+            provisional += e.amount_paise;
+        }
+        entries.push(e);
+    }
+    // Reversals applied on this date.
+    let reversals_paise: i64 = conn
+        .query_row(
+            "SELECT COALESCE(SUM(p.amount_paise),0) FROM reversal rv JOIN payment p ON p.id=rv.payment_id WHERE rv.applied_at LIKE ?1",
+            params![like],
+            |r| r.get(0),
+        )
+        .optional()?
+        .unwrap_or(0);
+    Ok(DayBookDto {
+        date: date.to_string(),
+        cash_paise: cash,
+        upi_paise: upi,
+        cheque_paise: cheque,
+        total_paise: cash + upi + cheque,
+        reversals_paise,
+        provisional_paise: provisional,
+        entries,
+    })
+}
+
+fn daybook_csv_rows(conn: &Connection, date: &str) -> rusqlite::Result<Vec<Vec<String>>> {
+    let mut out = vec![vec![
+        "Time".into(), "Receipt".into(), "Student".into(), "Class".into(), "Mode".into(),
+        "Reference".into(), "Amount (Rs)".into(), "Collected by".into(), "Status".into(),
+    ]];
+    let like = format!("{date}%");
+    let mut stmt = conn.prepare(
+        "SELECT p.collected_at, p.receipt_no, s.name, COALESCE(c.display,''), p.mode, COALESCE(p.reference,''), p.amount_paise, COALESCE(st.name,''), p.sync_state \
+         FROM payment p JOIN student s ON s.id=p.student_id \
+         LEFT JOIN enrollment e ON e.student_id=s.id AND e.to_date IS NULL \
+         LEFT JOIN class c ON c.id=e.class_id \
+         LEFT JOIN staff st ON st.id=p.collected_by \
+         WHERE p.collected_at LIKE ?1 ORDER BY p.collected_at",
+    )?;
+    let rows = stmt.query_map(params![like], |r| {
+        let at: String = r.get(0)?;
+        let amount: i64 = r.get(6)?;
+        let sync: String = r.get(8)?;
+        Ok(vec![
+            at.get(11..16).unwrap_or("").to_string(),
+            r.get::<_, String>(1)?,
+            r.get::<_, String>(2)?,
+            r.get::<_, String>(3)?,
+            r.get::<_, String>(4)?,
+            r.get::<_, String>(5)?,
+            format!("{}", amount / 100),
+            r.get::<_, String>(7)?,
+            if sync == "confirmed" { "Confirmed".into() } else { "Waiting".into() },
+        ])
+    })?;
+    for row in rows {
+        out.push(row?);
+    }
+    Ok(out)
 }
 
 // ============================================================ attendance ======
@@ -2650,7 +2798,7 @@ mod tests {
         let mut c = seeded();
         let path = std::env::temp_dir().join(format!("vidya-export-{}.csv", uuid::Uuid::now_v7()));
         let p = path.to_str().unwrap();
-        let n = export_csv_logic(&mut c, &accountant(), "students", p).unwrap();
+        let n = export_csv_logic(&mut c, &accountant(), "students", p, None).unwrap();
         assert_eq!(n, 670, "one data row per active student");
         let bytes = std::fs::read(&path).unwrap();
         assert_eq!(&bytes[0..3], b"\xEF\xBB\xBF", "UTF-8 BOM for Excel");

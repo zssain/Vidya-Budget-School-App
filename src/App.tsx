@@ -20,7 +20,9 @@ import AdmissionSheet from '@/screens/desktop/AdmissionSheet'
 import CsvImportScreen from '@/screens/desktop/CsvImportScreen'
 import FeesScreen from '@/screens/desktop/FeesScreen'
 import ReceiptsScreen from '@/screens/desktop/ReceiptsScreen'
+import DayBookScreen from '@/screens/desktop/DayBookScreen'
 import ReceiptDoc from '@/screens/print/ReceiptDoc'
+import DayBookDoc from '@/screens/print/DayBookDoc'
 import PrincipalHomeContainer from '@/screens/containers/PrincipalHomeContainer'
 import CollectFeeContainer from '@/screens/containers/CollectFeeContainer'
 import AttendanceContainer from '@/screens/containers/AttendanceContainer'
@@ -119,6 +121,10 @@ export default function App() {
           const lang = q.get('lang') === 'hi' ? 'hi' : 'en'
           return <ReceiptDoc id={pm.id} size={size} lang={lang} duplicate={q.get('duplicate') === '1'} auto={q.get('auto') === '1'} />
         }
+        if (base === '/print/daybook') {
+          const q = new URLSearchParams(path.split('?')[1] ?? '')
+          return <DayBookDoc date={q.get('date') ?? new Date().toISOString().slice(0, 10)} auto={q.get('auto') === '1'} />
+        }
       }
       // Teachers use the phone screens (no desktop shell).
       if (route.role === 'teacher') {
@@ -159,6 +165,8 @@ function desktopRoute(base: string, role: Role): { active: string; node: ReactNo
   if (base === '/principal/fees') return { active: 'fees', node: <FeesScreen /> }
   if (base === '/principal/receipts' || base === '/accountant/receipts')
     return { active: 'receipts', node: <ReceiptsScreen role={role} /> }
+  if (base === '/principal/daybook' || base === '/accountant/daybook')
+    return { active: 'daybook', node: <DayBookScreen /> }
   if (base === '/principal/home') return { active: 'home', node: <PrincipalHomeContainer /> }
   if (base === '/accountant/collect') return { active: 'collect', node: <CollectFeeContainer /> }
   if (role === 'accountant') return { active: 'collect', node: <CollectFeeContainer /> }

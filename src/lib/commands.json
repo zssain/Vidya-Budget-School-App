@@ -38,6 +38,7 @@
     "get_receipt",
     "search_receipts",
     "reverse_payment",
+    "day_book",
     "print_page",
     "get_attendance_sheet",
     "save_attendance_draft",

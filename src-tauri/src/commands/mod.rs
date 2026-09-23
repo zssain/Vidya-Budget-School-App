@@ -62,6 +62,7 @@ pub const COMMANDS: &[&str] = &[
     "get_receipt",
     "search_receipts",
     "reverse_payment",
+    "day_book",
     "print_page",
     "get_attendance_sheet",
     "save_attendance_draft",
@@ -258,9 +259,9 @@ pub fn mark_student_left(state: State<RtCtx>, student_id: String, left_on: Strin
 // -------------------------------------------------------------------- CSV -----
 
 #[tauri::command]
-pub fn export_csv(state: State<RtCtx>, kind: String, path: String) -> CmdResult<i64> {
+pub fn export_csv(state: State<RtCtx>, kind: String, path: String, arg: Option<String>) -> CmdResult<i64> {
     let actor = state.require_session()?;
-    state.with_db(|conn| export_csv_logic(conn, &actor, &kind, &path))
+    state.with_db(|conn| export_csv_logic(conn, &actor, &kind, &path, arg.as_deref()))
 }
 
 #[tauri::command]
@@ -340,6 +341,12 @@ pub fn reverse_payment(state: State<RtCtx>, payment_id: String, reason: String) 
     let actor = state.require_session()?;
     let mode = state.device_mode;
     state.with_db(|conn| reverse_payment_logic(conn, &actor, mode, &payment_id, &reason))
+}
+
+#[tauri::command]
+pub fn day_book(state: State<RtCtx>, date: String) -> CmdResult<DayBookDto> {
+    let actor = state.require_session()?;
+    state.with_db(|conn| day_book_logic(conn, &actor, &date))
 }
 
 /// Open the OS print dialog for the current window (Tauri 2 WebviewWindow::print,
