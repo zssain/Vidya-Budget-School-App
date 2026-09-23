@@ -20,6 +20,8 @@ interface CollectFeeState {
   amount: string
   mode: Mode
   done: boolean
+  reference: string
+  receiptNo: string | null
 }
 
 const SERIF = "'Newsreader', Georgia, serif"
@@ -50,14 +52,25 @@ const PILL: Record<CollectFeeData['rows'][number]['pill'], CSSProperties> = {
 export default function CollectFeeScreen({
   data,
   initial,
+  onRecord,
+  onSelectStudent,
+  onCommsNotice,
 }: {
   data: CollectFeeData
   initial?: { amount?: string; mode?: Mode; done?: boolean }
+  /** Real flow: record the payment → returns the real receipt number. */
+  onRecord?: (amountPaise: number, mode: Mode, reference: string) => Promise<string>
+  /** Real flow: a search row was clicked (id is carried on the row when wired). */
+  onSelectStudent?: (id: string) => void
+  /** Real flow: Print / Share are Phase-7 — show a "coming later" notice. */
+  onCommsNotice?: () => void
 }) {
   const [state, setState] = useState<CollectFeeState>({
     amount: initial?.amount ?? '1000',
     mode: initial?.mode ?? 'upi',
     done: initial?.done ?? false,
+    reference: '',
+    receiptNo: null,
   })
 
   const due = data.due
@@ -86,9 +99,17 @@ export default function CollectFeeScreen({
 
   const onAmount = (v: string) => setState((s) => ({ ...s, amount: parseDigits(v, 7) }))
   const save = () => {
-    if (!cantSave) setState((s) => ({ ...s, done: true }))
+    if (cantSave) return
+    if (onRecord) {
+      // Real flow: record via the backend, then show the REAL receipt number.
+      void onRecord(amt * 100, state.mode, state.reference).then((receiptNo) =>
+        setState((s) => ({ ...s, done: true, receiptNo })),
+      )
+    } else {
+      setState((s) => ({ ...s, done: true }))
+    }
   }
-  const reset = () => setState({ done: false, amount: '1000', mode: 'upi' })
+  const reset = () => setState({ done: false, amount: '1000', mode: 'upi', reference: '', receiptNo: null })
   const close = () => navigate('/placeholder')
 
   // Amount chips — [label, value]; selected chip goes navy when amt === value.
@@ -235,7 +256,7 @@ export default function CollectFeeScreen({
               <span>{t('fee.table.status')}</span>
             </div>
             {data.rows.map((s) => (
-              <div key={s.adm} style={{ display: 'grid', gridTemplateColumns: '2.2fr 1fr 1fr 1fr', alignItems: 'center', padding: '14px 24px', borderBottom: '1px solid #E8EDEC' }}>
+              <div key={s.adm} onClick={() => { if (s.id && onSelectStudent) onSelectStudent(s.id) }} style={{ display: 'grid', gridTemplateColumns: '2.2fr 1fr 1fr 1fr', alignItems: 'center', padding: '14px 24px', borderBottom: '1px solid #E8EDEC' }}>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
                   <span style={{ fontWeight: 500 }}>{s.name}</span>
                   <span style={{ fontSize: 12, color: '#56657A' }}>{t('fee.table.adm', { adm: s.adm })}</span>
@@ -391,6 +412,8 @@ export default function CollectFeeScreen({
                   <label htmlFor="ref" style={{ fontSize: 13, fontWeight: 500 }}>{refLabel}</label>
                   <input
                     id="ref"
+                    value={state.reference}
+                    onChange={(e) => setState((s) => ({ ...s, reference: e.target.value }))}
                     placeholder={refHint}
                     style={{ height: 46, borderRadius: 6, border: '1px solid #C9D3D2', background: '#FFFFFF', padding: '0 14px', fontFamily: 'inherit', fontSize: 15, color: '#13233F' }}
                   />
@@ -439,7 +462,7 @@ export default function CollectFeeScreen({
             </div>
             <div style={{ display: 'flex', flexDirection: 'column', animation: 'vIn8 320ms 120ms ease both' }}>
               <span className="v-serif" style={{ fontFamily: SERIF, fontSize: 40, lineHeight: 1.05, letterSpacing: '-0.02em' }}>{t('fee.success.title')}</span>
-              <span className="v-serif" style={{ fontFamily: SERIF, fontStyle: 'italic', fontSize: 40, lineHeight: 1.1, letterSpacing: '-0.02em', color: '#C5AB7A' }}>{t('fee.success.receipt')}</span>
+              <span className="v-serif" style={{ fontFamily: SERIF, fontStyle: 'italic', fontSize: 40, lineHeight: 1.1, letterSpacing: '-0.02em', color: '#C5AB7A' }}>{state.receiptNo ? t('fee.success.receiptDyn', { no: state.receiptNo }) : t('fee.success.receipt')}</span>
             </div>
             <span style={{ fontSize: 14, color: '#C9D2DE', animation: 'vIn8 320ms 200ms ease both' }}>{t('fee.success.line', { pay: amt.toLocaleString('en-IN'), mode: modeLabel, bal: Math.max(due - amt, 0).toLocaleString('en-IN') })}</span>
             <span style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: '#BFE8D6', border: '1px solid rgba(95,208,160,0.35)', borderRadius: 16, padding: '5px 12px', animation: 'vIn8 320ms 280ms ease both' }}>
@@ -447,8 +470,8 @@ export default function CollectFeeScreen({
               {t('fee.confirmed')}
             </span>
             <div style={{ display: 'flex', gap: 10, marginTop: 10, animation: 'vIn8 320ms 360ms ease both' }}>
-              <button type="button" style={{ height: 46, padding: '0 20px', borderRadius: 23, border: 0, background: '#C5AB7A', color: '#0C1B38', fontSize: 14, fontWeight: 600 }}>{t('fee.print')}</button>
-              <button type="button" style={{ height: 46, padding: '0 20px', borderRadius: 23, border: '1px solid rgba(255,255,255,0.3)', background: 'transparent', color: '#FFFFFF', fontSize: 14, fontWeight: 500 }}>{t('fee.whatsapp')}</button>
+              <button type="button" onClick={onCommsNotice} style={{ height: 46, padding: '0 20px', borderRadius: 23, border: 0, background: '#C5AB7A', color: '#0C1B38', fontSize: 14, fontWeight: 600 }}>{t('fee.print')}</button>
+              <button type="button" onClick={onCommsNotice} style={{ height: 46, padding: '0 20px', borderRadius: 23, border: '1px solid rgba(255,255,255,0.3)', background: 'transparent', color: '#FFFFFF', fontSize: 14, fontWeight: 500 }}>{t('fee.whatsapp')}</button>
             </div>
             <button type="button" onClick={reset} style={{ border: 0, background: 'transparent', color: '#C9D2DE', fontSize: 14, height: 40, textDecoration: 'underline', textUnderlineOffset: 4 }}>{t('fee.another')}</button>
           </div>

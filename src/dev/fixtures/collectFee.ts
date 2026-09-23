@@ -6,6 +6,8 @@
 
 /** One row in the student search table. */
 export interface CollectFeeStudentRow {
+  /** Real student id (only set when wired to live data; not rendered). */
+  id?: string
   /** Full name, e.g. "Kavya Singh". */
   name: string
   /** Admission number, e.g. "2023/0287". */

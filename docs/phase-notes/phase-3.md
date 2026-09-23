@@ -139,15 +139,36 @@ the prompt where given; `TODO-HI` mirrors for Phase 8; a couple of `[OWNER]` cop
 below). The Welcome CTA is wired to `activate_licence` with a **non-visual** edit (added
 `value`/`onChange`/`onClick`; no pixels changed — confirmed by the interaction test still passing).
 
-## Step 8 — wiring the mock screens to real data
-- **Principal Home:** `src/screens/containers/PrincipalHomeContainer.tsx` fetches
-  `dashboard_principal` and maps it to the **pixel-exact** `PrincipalHomeScreen` props (loading +
-  error states). The fidelity path keeps using fixtures via the gallery, so no pixels change; the
-  demo seed is **proven** (Rust test) to produce the same numbers the fixtures encode.
-- **Collect fee / Teacher home / Attendance:** the backend commands exist and are tested
-  (`record_payment`, `list_fee_dues`, `search_students`, `get_attendance_sheet`,
-  `submit_attendance`), but their **container wiring is not done this session** — those routes still
-  render the fixture screens. This is the main remaining UI work (see "What's left").
+## Step 8 — wiring the mock screens to real data (COMPLETE)
+All wiring keeps the fixture/gallery path byte-identical (containers pass real data + optional
+callbacks; the mock screens' no-props render is unchanged → fidelity untouched, confirmed by the
+interaction tests still passing 5/5).
+- **Principal Home:** `containers/PrincipalHomeContainer.tsx` maps `dashboard_principal` → the
+  pixel-exact screen (loading + error states). The seed is proven to reproduce the fixture numbers.
+- **Collect fee:** `containers/CollectFeeContainer.tsx` lists students + their real dues into the
+  table, loads the selected student's statement, and records via **`record_payment`** (shows the
+  REAL receipt number). Print / Share open a "coming in a later phase" notice (Phase 7). The screen
+  gained non-visual optional props (`onRecord`, `onSelectStudent`, `onCommsNotice`, controlled
+  reference + dynamic receipt).
+- **Attendance:** `containers/AttendanceContainer.tsx` loads the sheet (`get_attendance_sheet`),
+  renders the real roster + marks, and submits/saves via `submit_attendance`/`save_attendance_draft`
+  (screen gained non-visual optional `marks`/`onSubmit`/`onSaveDraft`).
+- **Teacher home** is a static navigation launcher — no per-school data to inject this phase (its
+  dynamic attendance-due badge is a P8 refinement); it renders the fixture.
+
+## Step 9 tail + end-to-end flows (added this session)
+- `decide_request` now **applies** the change in one transaction + audits it: `attendance_correction`
+  updates the mark, `payment_reversal` appends a `reversal` row (append-only). `marks_correction` /
+  `student_details` / `access_change` are approved + audited but `apply_state='not_applied'` (their
+  editors land in P7 — honest, no fake apply). `create_request` rejects a duplicate on the same
+  target (`REQUEST_ALREADY_PENDING`).
+- **`src-tauri/tests/e2e_flows.rs` (4 tests, green)** drive the DONE-MEANS through the real command
+  layer + encrypted DB: (1) fresh setup → PIN → unlocked; (2) record payment → R-A2-0419, "collected
+  today" grows by ₹3,100, audit valid; (3) attendance A→P correction request → Principal approves →
+  **the mark changes** + audit valid + duplicate blocked + teacher forbidden to approve; (4) payment
+  reversal request → approve → reversal row appended. **A Tauri-window Playwright e2e cannot run on
+  macOS (tauri-driver = Linux/Windows only)**, so these are the portable proof; the browser-driven
+  Playwright flow specs for CI are a follow-up (needs a Linux/Windows Tauri build).
 
 ## Step 10 — demo seed (`src-tauri/src/seed.rs`, debug only) vs the mock
 Internally consistent world; a Rust test asserts every headline number:
@@ -173,8 +194,8 @@ mock shows V-A mid-marking while Principal Home shows V-A submitted at 91%); the
 **Principal Home** exact and seeds V-A submitted for the dashboard.
 
 ## Verification (real output)
-- `cargo test --workspace` → **295 pass** (vidya 50 · vidya-core 235 · no-floats 1 · doc 10; the
-  1,500-student benchmark stays `#[ignore]`). `cloud/licence` tests **2 pass** (separate workspace).
+- `cargo test --workspace` → **300 pass** (vidya lib 50 · e2e_flows 4 · vidya-core 235 · no-floats 1
+  · doc 10; the 1,500-student benchmark stays `#[ignore]`). `cloud/licence` tests **2 pass** (separate).
 - `cargo clippy --workspace --all-targets -- -D warnings` → **clean** (0). `cloud/licence` clippy clean.
 - `npx tsc --noEmit` → **0**. `npx vitest run` → **38 pass** (api-consistency 2 · store-routing 2 ·
   format 34). `npm run build` (tsc + vite) → OK, JS **247.85 kB / 69.62 kB gzip**, CSS 16.47 kB.
@@ -222,19 +243,19 @@ reqwest/rustls/ring/ed25519; a release measurement needs `build-config/release.j
 5. Added `list_staff` to the command surface (PIN picker).
 
 ## What's left in Phase 3 (for the next session)
-1. **Wire Collect fee, Teacher home, Attendance** to real data via containers (like PrincipalHome),
-   plus loading/empty/error states — keeping pixels (render the existing props-driven screens).
-2. **Run the four e2e flows against a running Tauri app** (setup with `cloud/licence --dev` up,
-   payment, attendance→correction→approval) — needs a Tauri Playwright harness.
-3. Small polish: show the real **school name** on the PIN screen (needs a `get_school` command or an
-   `app_state` field); surface **activation errors** inside the Welcome panel; auto-lock after 5 min
-   background; clear in-memory drafts/pending on switch_user in the UI; `decide_request` currently
-   marks the request decided/applied + audits but does **not yet apply the target change**
-   (marks/attendance/reversal) — implement per-type application (prompt Step 9).
-4. Re-measure release size once `release.json` exists (P9 gate).
+1. **Browser-driven Playwright flow specs** (setup with `cloud/licence --dev`, payment, attendance→
+   correction→approval) to run in **CI on Linux/Windows** — the logic is already proven by the Rust
+   `e2e_flows` here; this adds the UI-window pass where tauri-driver is supported.
+2. Small polish: show the real **school name** on the PIN screen (add a `get_school` command or an
+   `app_state` field); surface **activation errors** inside the Welcome panel (there's a banner now,
+   above the panel); auto-lock after 5 min background; clear in-memory drafts on `switch_user`;
+   apply `marks_correction`/`student_details`/`access_change` when their P7 editors land.
+3. Re-measure release size once `release.json` exists (P9 gate).
 
-## Questions for the owner
-1. Confirm the attendance-% decision (show true 91.3%) and the `code_not_found`/`invalid` copy.
-2. OK to keep `list_staff` as an added command (the PIN staff picker needs a staff source)?
-3. For the Tauri-driven fidelity/e2e run, do you want a headless Tauri test harness set up now, or
-   defer the running-app verification to when you can try the app yourself (per the README workflow)?
+## Questions for the owner — ANSWERED (2026-09-23)
+1. **Attendance %:** confirmed — show the true **91.3%** (mock's 91.4% is unreachable under the rule).
+   `code_not_found`/`invalid` copy: sensible defaults kept (still open to reword).
+2. **`list_staff`:** kept as an added command (the PIN staff picker needs a staff source).
+3. **Tauri e2e:** a Tauri-window run can't happen on macOS (tauri-driver = Linux/Windows only), so
+   the four DONE-MEANS flows are proven by **Rust integration e2e** (`e2e_flows.rs`, runnable
+   everywhere); the browser-window Playwright specs are deferred to CI (item 1 above).

@@ -9,16 +9,13 @@ import SetupWizard from '@/screens/shared/SetupWizard'
 import PinUnlockScreen from '@/screens/shared/PinUnlockScreen'
 import ApprovalsScreen from '@/screens/desktop/ApprovalsScreen'
 import PrincipalHomeContainer from '@/screens/containers/PrincipalHomeContainer'
-import CollectFeeScreen from '@/screens/desktop/CollectFeeScreen'
+import CollectFeeContainer from '@/screens/containers/CollectFeeContainer'
+import AttendanceContainer from '@/screens/containers/AttendanceContainer'
 import TeacherHomeScreen from '@/screens/phone/TeacherHomeScreen'
-import AttendanceScreen from '@/screens/phone/AttendanceScreen'
-import Placeholder from '@/components/Placeholder'
 import Gallery from '@/dev/Gallery'
 import Mocks from '@/dev/Mocks'
 import { welcomeFixture } from '@/dev/fixtures/welcome'
-import { collectFeeFixture } from '@/dev/fixtures/collectFee'
 import { teacherHomeFixture } from '@/dev/fixtures/teacherHome'
-import { attendanceFixture } from '@/dev/fixtures/attendance'
 
 // A simple full-screen status message (db_key_missing / needs_rejoin / moved).
 function StatusScreen({ messageKey }: { messageKey: string }) {
@@ -102,14 +99,17 @@ export default function App() {
       // Unlocked: route within the app by hash path. Wired containers use real
       // data; screens not yet wired fall back to fixtures (flagged in handoff).
       if (matchRoute('/principal/approvals', base)) return <ApprovalsScreen />
-      if (base === '/accountant/collect') return <CollectFeeScreen data={collectFeeFixture} />
+      if (base === '/accountant/collect') return <CollectFeeContainer />
       if (base === '/teacher/home') return <TeacherHomeScreen data={teacherHomeFixture} />
-      if (matchRoute('/teacher/attendance/:classId', base)) return <AttendanceScreen data={attendanceFixture} />
+      {
+        const m = matchRoute('/teacher/attendance/:classId', base)
+        if (m) return <AttendanceContainer classId={m.classId} />
+      }
       if (base === '/principal/home') return <PrincipalHomeContainer />
       // Default landing by role.
       if (route.role === 'principal') return <PrincipalHomeContainer />
-      if (route.role === 'accountant') return <CollectFeeScreen data={collectFeeFixture} />
-      if (route.role === 'teacher') return <TeacherHomeScreen data={teacherHomeFixture} />
-      return <Placeholder />
+      if (route.role === 'accountant') return <CollectFeeContainer />
+      // Teacher home is a static launcher (no per-school data to inject this phase).
+      return <TeacherHomeScreen data={teacherHomeFixture} />
   }
 }

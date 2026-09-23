@@ -94,6 +94,10 @@ const errors: Bundle = {
     'approvals.before': 'Before',
     'approvals.after': 'After',
     'approvals.empty': 'No requests here.',
+
+    // Collect fee (real-data wiring).
+    'fee.success.receiptDyn': 'Receipt {no}.',
+    'fee.comms.notice': 'Printing and WhatsApp share are coming in a later phase.',
   },
   hi: {},
 }

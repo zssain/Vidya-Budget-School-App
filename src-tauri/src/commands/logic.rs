@@ -839,6 +839,18 @@ const REQUEST_SELECT: &str = "SELECT r.id, r.type, r.target_table, r.target_id, 
      FROM request r JOIN staff s ON s.id = r.requested_by";
 
 pub fn create_request_logic(conn: &mut Connection, actor_s: &SessionStaff, input: &RequestInput) -> CmdResult<RequestDto> {
+    // One open request per target (§requests): reject a duplicate.
+    let pending: bool = conn
+        .query_row(
+            "SELECT 1 FROM request WHERE target_table=?1 AND target_id=?2 AND status='pending' LIMIT 1",
+            params![input.target_table, input.target_id],
+            |_| Ok(()),
+        )
+        .optional()?
+        .is_some();
+    if pending {
+        return Err(CoreError::RequestAlreadyPending.into());
+    }
     let now = now_iso();
     let id = new_id("req");
     conn.execute(
@@ -891,34 +903,106 @@ pub fn get_request_logic(conn: &mut Connection, id: &str) -> CmdResult<RequestDt
 pub fn decide_request_logic(
     conn: &mut Connection,
     actor_s: &SessionStaff,
-    _mode: DeviceMode,
+    device_mode: DeviceMode,
     id: &str,
     decision: &str,
     note: Option<&str>,
 ) -> CmdResult<RequestDto> {
     let actor = actor_from(conn, actor_s)?;
     require_allow(&actor, Action::ApproveRequest, &Target::of(TargetKind::Request))?;
-    let status: String = conn
-        .query_row("SELECT status FROM request WHERE id=?1", params![id], |r| r.get(0))
-        .optional()?
-        .ok_or_else(CmdError::not_found)?;
-    if status != "pending" {
+    let req = get_request_logic(conn, id)?;
+    if req.status != "pending" {
         return Err(CoreError::RequestStale.into());
     }
     let now = now_iso();
-    let (new_status, apply_state) = match decision {
-        "approve" => ("approved", "applied"),
-        "reject" => ("rejected", "not_applied"),
-        "return" => ("returned", "not_applied"),
-        _ => return Err(CmdError::validation("decision", "invalid")),
-    };
-    // NOTE: applying the actual change (marks/attendance/reversal) to the target
-    // record + audit is implemented per-type in Phase 3 Step 9; here the request
-    // is marked decided/applied and audited.
-    conn.execute(
-        "UPDATE request SET status=?1, apply_state=?2, decided_by=?3, decided_at=?4, note=?5, applied_at=?6, updated_at=?4 WHERE id=?7",
-        params![new_status, apply_state, actor_s.id, now, note, if apply_state == "applied" { Some(&now) } else { None }, id],
-    )?;
+
+    if decision == "reject" || decision == "return" {
+        let new_status = if decision == "reject" { "rejected" } else { "returned" };
+        conn.execute(
+            "UPDATE request SET status=?1, decided_by=?2, decided_at=?3, note=?4, updated_at=?3 WHERE id=?5",
+            params![new_status, actor_s.id, now, note, id],
+        )?;
+        return get_request_logic(conn, id);
+    }
+    if decision != "approve" {
+        return Err(CmdError::validation("decision", "invalid"));
+    }
+
+    // Approve: apply the change to the target record + audit + op, then mark the
+    // request applied — ALL in one transaction (rule §8.2). Attendance and
+    // payment-reversal are applied here (their data model exists in Phase 3);
+    // marks/student-details/access application lands with those editors in P7,
+    // so they are approved but left apply_state='not_applied' (honest).
+    let after_value = req
+        .after_json
+        .as_deref()
+        .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
+        .and_then(|v| v.get("value").and_then(|x| x.as_str()).map(str::to_string));
+
+    let applied: bool = matches!(req.kind.as_str(), "attendance_correction" | "payment_reversal");
+    let ctx = WriteCtx { mode: device_mode };
+    let req_id = id.to_string();
+    let kind = req.kind.clone();
+    let target_table = req.target_table.clone();
+    let target_id = req.target_id.clone();
+    let note_owned = note.map(str::to_string);
+    let actor_id = actor_s.id.clone();
+
+    with_write(conn, &ctx, move |tx| {
+        let apply_state = if applied { "applied" } else { "not_applied" };
+        let applied_at = if applied { Some(now.clone()) } else { None };
+
+        match kind.as_str() {
+            "attendance_correction" => {
+                // after.value is the new mark (P|A|L); target_id is the mark row.
+                if let Some(mark) = &after_value {
+                    tx.execute(
+                        "UPDATE attendance_mark SET mark=?1 WHERE id=?2",
+                        params![mark, target_id],
+                    )?;
+                }
+            }
+            "payment_reversal" => {
+                // Append a reversal row (append-only) referencing the payment.
+                tx.execute(
+                    "INSERT INTO reversal(id,payment_id,reason,request_id,approved_by,applied_at) VALUES (?1,?2,?3,?4,?5,?6)",
+                    params![new_id("rev"), target_id, req.reason, req_id, actor_id, now],
+                )?;
+            }
+            _ => {} // marks_correction / student_details / access_change → applied in P7
+        }
+
+        tx.execute(
+            "UPDATE request SET status='approved', apply_state=?1, decided_by=?2, decided_at=?3, note=?4, applied_at=?5, updated_at=?3 WHERE id=?6",
+            params![apply_state, actor_id, now, note_owned, applied_at, req_id],
+        )?;
+
+        let audit = AuditEntry {
+            at: now.clone(),
+            staff_id: Some(actor_id.clone()),
+            action: "approve_request".into(),
+            table: Some(target_table.clone()),
+            record_id: Some(target_id.clone()),
+            after_json: after_value.clone(),
+            reason: Some(kind.clone()),
+            ..Default::default()
+        };
+        let op = Op {
+            op_id: new_id("op"),
+            hlc: now.clone(),
+            device_id: String::new(),
+            staff_id: actor_id.clone(),
+            audience: "admin".into(),
+            table: target_table,
+            record_id: target_id,
+            kind: "action".into(),
+            payload: "{}".into(),
+            base_version: None,
+            server_epoch: 1,
+        };
+        Ok(Effect { value: (), audit, op })
+    })?;
+
     get_request_logic(conn, id)
 }
 

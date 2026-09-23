@@ -21,12 +21,21 @@ import { type AttendanceData, type Mark, initialMarks } from '@/dev/fixtures/att
 export default function AttendanceScreen({
   data,
   initial,
+  marks,
+  onSubmit,
+  onSaveDraft,
 }: {
   data: AttendanceData
   initial?: 'default' | 'markall' | 'submitted'
+  /** Real flow: existing marks for the sheet (parallel to data.names). */
+  marks?: Mark[]
+  /** Real flow: submit the completed sheet (parallel to data.names/studentIds). */
+  onSubmit?: (marks: Mark[]) => void
+  /** Real flow: save the draft. */
+  onSaveDraft?: (marks: Mark[]) => void
 }) {
-  // The base marks from the fixture rule (docs §8).
-  const base = initialMarks(data.names)
+  // Real marks when wired; otherwise the fixture rule (docs §8).
+  const base = marks ?? initialMarks(data.names)
 
   // State mirrors the mock: st (per-student marks), prev (snapshot before "mark
   // all", enables Undo), submitted (locks the screen), toast (draft-saved).
@@ -108,12 +117,14 @@ export default function AttendanceScreen({
     if (timer.current) clearTimeout(timer.current)
     setToast(true)
     timer.current = setTimeout(() => setToast(false), 2200)
+    if (onSaveDraft) onSaveDraft(st)
   }
   const submit = () => {
     if (!hasUnmarked) {
       setSubmitted(true)
       setPrev(null)
       setToast(false)
+      if (onSubmit) onSubmit(st)
     }
   }
 
