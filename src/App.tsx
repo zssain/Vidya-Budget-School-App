@@ -22,6 +22,11 @@ import FeesScreen from '@/screens/desktop/FeesScreen'
 import ReceiptsScreen from '@/screens/desktop/ReceiptsScreen'
 import DayBookScreen from '@/screens/desktop/DayBookScreen'
 import AttendanceRegisterScreen from '@/screens/desktop/AttendanceRegisterScreen'
+import MyRequestsScreen from '@/screens/desktop/MyRequestsScreen'
+import InboxScreen from '@/screens/desktop/InboxScreen'
+import AccountantHomeScreen from '@/screens/desktop/AccountantHomeScreen'
+import SessionScreen from '@/screens/desktop/SessionScreen'
+import GlobalSearch from '@/screens/desktop/GlobalSearch'
 import ReceiptDoc from '@/screens/print/ReceiptDoc'
 import DayBookDoc from '@/screens/print/DayBookDoc'
 import PrincipalHomeContainer from '@/screens/containers/PrincipalHomeContainer'
@@ -150,6 +155,12 @@ export default function App() {
 // their parent nav key. Unbuilt routes fall through to the role's home.
 function desktopRoute(base: string, role: Role): { active: string; node: ReactNode } {
   if (base === '/sync') return { active: 'sync', node: <SyncDevicesScreen /> }
+  if (base === '/search') return { active: '', node: <GlobalSearch role={role} /> }
+  if (base === '/inbox') return { active: '', node: <InboxScreen role={role} /> }
+  if (base === '/session') return { active: '', node: <SessionScreen /> }
+  if (base === '/principal/requests' || base === '/accountant/requests')
+    return { active: 'requests', node: <MyRequestsScreen /> }
+  if (base === '/accountant/home') return { active: 'home', node: <AccountantHomeScreen /> }
   if (base === '/principal/conflicts') return { active: '', node: <ConflictReviewScreen /> }
   if (matchRoute('/principal/approvals', base)) return { active: 'approvals', node: <ApprovalsScreen /> }
   if (base === '/principal/staff') return { active: 'staff', node: <StaffAccessScreen /> }
@@ -171,6 +182,6 @@ function desktopRoute(base: string, role: Role): { active: string; node: ReactNo
     return { active: 'daybook', node: <DayBookScreen /> }
   if (base === '/principal/home') return { active: 'home', node: <PrincipalHomeContainer /> }
   if (base === '/accountant/collect') return { active: 'collect', node: <CollectFeeContainer /> }
-  if (role === 'accountant') return { active: 'collect', node: <CollectFeeContainer /> }
+  if (role === 'accountant') return { active: 'home', node: <AccountantHomeScreen /> }
   return { active: 'home', node: <PrincipalHomeContainer /> }
 }

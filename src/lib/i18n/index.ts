@@ -18,6 +18,7 @@ import fees from './strings/fees'
 import receipts from './strings/receipts'
 import daybook from './strings/daybook'
 import attendanceReg from './strings/attendanceReg'
+import shared from './strings/shared'
 
 export type Lang = 'en' | 'hi'
 export interface Bundle {
@@ -25,7 +26,7 @@ export interface Bundle {
   hi: Record<string, string>
 }
 
-const bundles: Bundle[] = [common, welcome, principalHome, collectFee, teacherHome, attendance, errors, p04, shell, students, fees, receipts, daybook, attendanceReg]
+const bundles: Bundle[] = [common, welcome, principalHome, collectFee, teacherHome, attendance, errors, p04, shell, students, fees, receipts, daybook, attendanceReg, shared]
 const en: Record<string, string> = Object.assign({}, ...bundles.map((b) => b.en))
 const hi: Record<string, string> = Object.assign({}, ...bundles.map((b) => b.hi))
 const dict: Record<Lang, Record<string, string>> = { en, hi }

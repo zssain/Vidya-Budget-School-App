@@ -110,6 +110,18 @@ export default function AppShell({ role, active, children }: AppShellProps) {
       .catch(() => setBadge(0))
   }, [role])
 
+  // Global search palette on Ctrl/Cmd+K.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault()
+        navigate('/search')
+      }
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
+
   const sections: NavSection[] = navForRole(role)
   const user = store.app?.state.kind === 'unlocked' ? store.app.state.staff : null
   const schoolName = school?.name ?? t('app.name')
