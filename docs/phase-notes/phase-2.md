@@ -1,14 +1,36 @@
-# Phase 2 handoff (in progress) — business rules + schema landed; DB/security remain
+# Phase 2 handoff — COMPLETE
 
-Branch: `rebuild/p02` (from `rebuild/p01`). HEAD at handoff: `d4373a7`.
+Branch: `rebuild/p02` (from `rebuild/p01`).
 Tools: rustc/cargo 1.98.1, clippy 0.1.98, node v25.3.0.
 
-## Status summary
-**DONE this block (Steps 1–2 + the schema for Step 3):** all `vidya-core` business
-rules, fully tested and clippy-clean, plus the validated `0001_init.sql`.
-**REMAINING (Steps 3–7):** wiring the encrypted DB in Rust, the audit chain, the
-`with_write` helper, keys/PIN/recovery, spike removal + size re-measure, and the
-benchmark. These are scoped below so the next block can pick them up directly.
+## Status summary — all Steps 1–7 DONE
+- **Steps 1–2** — all `vidya-core` business rules (16 modules, 5.9k LOC), tested + clippy-clean.
+- **Step 3** — encrypted SQLite (SQLCipher) `db/mod.rs` + the `0001_init.sql` schema; tests
+  prove the DB is unreadable without the key and the append-only triggers RAISE.
+- **Steps 4–5** — hash-chained audit log (`verify_chain` names the first bad seq) + the
+  single-transaction `with_write` helper (Server/Client; rollback-on-error tested).
+- **Step 6** — DB key (keyring + TEMP file store, DB_KEY_MISSING), PIN (Argon2id + lockout),
+  recovery key (Crockford base32 + Argon2id backup key).
+- **Step 7** — `spike.rs` removed; sizes re-measured (below); 1,500-student benchmark under budget.
+
+### Gate
+`cargo test --workspace` → **264 pass** (vidya 18 + vidya-core 235 + no-floats 1 + 10 doc).
+`cargo clippy --workspace --all-targets -- -D warnings` → **clean**.
+
+### Sizes after spike removal (macOS arm64)
+| Artifact | Phase 1 (with spike) | Phase 2 (spike removed) |
+|---|---|---|
+| `Vidya_0.1.0_aarch64.dmg` (download) | 5.58 MB | **2.45 MB** |
+| `Vidya.app` (installed) | 9.86 MB | **4.24 MB** |
+| release binary | 9.20 MB | **4.18 MB** |
+The native crates linked only for the Phase-1 spike (rustls/reqwest/axum/rcgen/tokio-
+tungstenite/mdns-sd/qrcode/chacha/ed25519/…) are now dead-code-eliminated; Phase 2 links
+only rusqlite(SQLCipher) + argon2 + keyring + sha2 + tauri. They return in Phase 4+.
+
+### Benchmark (release, in-memory encrypted DB)
+Seed 1,500 students / 60 classes / 20 days attendance (30k marks) / 1,500 payments = **129 ms**.
+Dashboard aggregates (budget ≤ 150 ms each): active students 0.08 ms · collected-today 0.09 ms
+· attendance-today-by-mark 6.10 ms · attendance-by-class 0.26 ms · fee-collection-6-days 0.39 ms.
 
 ## Step 1 — vidya-core: fresh-start (no port)
 Owner decision in Phase 1 was **fresh start**, so nothing was ported from the old
@@ -56,7 +78,13 @@ LICENCE_INVALID, LICENCE_REVOKED, LICENCE_MOVED, LICENCE_LIMIT, PIN_WRONG, PIN_L
 SESSION_READ_ONLY, LEASE_EXPIRED, EPOCH_OLD, INTERNAL. (These keys need adding to
 `src/lib/i18n` when the UI surfaces errors — Phase 3.)
 
-## Step 3 — schema (SQL landed; Rust wiring remains)
+## Step 3 — encrypted database (DONE)
+Rust wiring lives in `src-tauri/src/db/mod.rs`: `open_encrypted` sets `PRAGMA key='x''<64
+hex>'''` FIRST, then WAL / foreign_keys ON / busy_timeout 5000; `run_migrations` applies each
+migration in its own transaction and records `schema_version`. Tests (all green): DB
+unreadable with a wrong/absent key; append-only triggers RAISE on UPDATE/DELETE of
+audit_log/payment/reversal; FTS finds a Devanagari name; migrations idempotent.
+
 `src-tauri/src/db/migrations/0001_init.sql` — the full §7 schema: every table, CHECK for
 every enum, `amount_paise > 0` on payment / `>= 0` on dues/heads, the partial unique index
 on `student.admission_no`, all requested indexes, the FTS5 `student_fts` (+ sync triggers,
@@ -67,7 +95,7 @@ WAL, foreign_keys ON, busy_timeout 5000; a migration runner writing `schema_vers
 transaction), the repository functions (parameterised only), and the tests (DB unreadable
 without key; UPDATE/DELETE on the append-only tables raise).
 
-## Steps 4–7 — REMAINING (scoped)
+## Steps 4–7 — DONE (implementation)
 - **Step 4 audit chain** `src-tauri/src/security/audit.rs`: `append(tx, entry)` with
   `hash = SHA-256(prev_hash ‖ canonical_json(entry))` (sorted keys, no whitespace);
   `verify_chain()` returns the first bad seq; head accessor. Test: tamper one row → names the seq.
