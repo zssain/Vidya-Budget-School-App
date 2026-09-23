@@ -29,6 +29,7 @@ import SessionScreen from '@/screens/desktop/SessionScreen'
 import GlobalSearch from '@/screens/desktop/GlobalSearch'
 import MarksScreen from '@/screens/desktop/MarksScreen'
 import GradeScaleScreen from '@/screens/desktop/GradeScaleScreen'
+import ReportsScreen from '@/screens/desktop/ReportsScreen'
 import ReportCardDoc from '@/screens/print/ReportCardDoc'
 import ReceiptDoc from '@/screens/print/ReceiptDoc'
 import DayBookDoc from '@/screens/print/DayBookDoc'
@@ -190,6 +191,7 @@ function desktopRoute(base: string, role: Role): { active: string; node: ReactNo
   if (base === '/principal/attendance') return { active: 'attendance', node: <AttendanceRegisterScreen /> }
   if (base === '/principal/marks') return { active: 'marks', node: <MarksScreen /> }
   if (base === '/principal/grade-scale') return { active: 'settings', node: <GradeScaleScreen /> }
+  if (base === '/principal/reports') return { active: 'reports', node: <ReportsScreen /> }
   if (base === '/principal/fees') return { active: 'fees', node: <FeesScreen /> }
   if (base === '/principal/receipts' || base === '/accountant/receipts')
     return { active: 'receipts', node: <ReceiptsScreen role={role} /> }

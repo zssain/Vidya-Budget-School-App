@@ -20,6 +20,7 @@ import daybook from './strings/daybook'
 import attendanceReg from './strings/attendanceReg'
 import shared from './strings/shared'
 import academics from './strings/academics'
+import reports from './strings/reports'
 
 export type Lang = 'en' | 'hi'
 export interface Bundle {
@@ -27,7 +28,7 @@ export interface Bundle {
   hi: Record<string, string>
 }
 
-const bundles: Bundle[] = [common, welcome, principalHome, collectFee, teacherHome, attendance, errors, p04, shell, students, fees, receipts, daybook, attendanceReg, shared, academics]
+const bundles: Bundle[] = [common, welcome, principalHome, collectFee, teacherHome, attendance, errors, p04, shell, students, fees, receipts, daybook, attendanceReg, shared, academics, reports]
 const en: Record<string, string> = Object.assign({}, ...bundles.map((b) => b.en))
 const hi: Record<string, string> = Object.assign({}, ...bundles.map((b) => b.hi))
 const dict: Record<Lang, Record<string, string>> = { en, hi }

@@ -141,6 +141,7 @@ export default function AppShell({ role, active, children }: AppShellProps) {
     >
       {/* Sidebar */}
       <aside
+        data-appshell-chrome
         style={{
           width: '256px',
           flexShrink: 0,
@@ -213,6 +214,7 @@ export default function AppShell({ role, active, children }: AppShellProps) {
       <div style={{ flexGrow: 1, display: 'flex', flexDirection: 'column', minWidth: 0 }}>
         {/* Header */}
         <header
+          data-appshell-chrome
           style={{
             height: '64px',
             flexShrink: 0,

@@ -2890,6 +2890,7 @@ fn exam_subjects(conn: &Connection, exam_id: &str) -> rusqlite::Result<Vec<ExamS
     Ok(rows)
 }
 
+#[allow(clippy::type_complexity)]
 pub fn list_exams_logic(conn: &mut Connection) -> CmdResult<Vec<ExamDto>> {
     let mut stmt = conn.prepare(
         "SELECT e.id, e.name, t.name, e.starts_on, e.ends_on FROM exam e \
@@ -3152,6 +3153,7 @@ pub struct ReportCardDto {
     pub attendance: AttendanceSummaryDto,
 }
 
+#[allow(clippy::type_complexity)]
 pub fn get_report_card_logic(conn: &mut Connection, actor_s: &SessionStaff, today: &str, student_id: &str, exam_id: &str) -> CmdResult<ReportCardDto> {
     let actor = actor_from(conn, actor_s)?;
     // View gate: Principal all; teacher only students in their classes.
@@ -3231,6 +3233,204 @@ pub fn get_report_card_logic(conn: &mut Connection, actor_s: &SessionStaff, toda
         incomplete,
         attendance: profile.attendance,
     })
+}
+
+// ============================================================= reports ========
+//
+// Read-only reports (docs/00 §12). The audit-log viewer is filterable, paginated
+// and shows the chain status; teachers see only their own entries. The other
+// reports reuse existing aggregates or add small read queries.
+
+#[derive(Debug, Serialize)]
+pub struct AuditRowDto {
+    pub seq: i64,
+    pub at: String,
+    pub staff_name: Option<String>,
+    pub action: String,
+    pub table: Option<String>,
+    pub record_id: Option<String>,
+    pub reason: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AuditPageDto {
+    pub rows: Vec<AuditRowDto>,
+    pub total: i64,
+    pub chain_ok: bool,
+    pub first_bad_seq: Option<i64>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AuditQuery {
+    pub staff_id: Option<String>,
+    pub table: Option<String>,
+    pub action: Option<String>,
+    pub date: Option<String>, // YYYY-MM-DD prefix
+    pub limit: i64,
+    pub offset: i64,
+}
+
+pub fn list_audit_logic(conn: &mut Connection, actor_s: &SessionStaff, q: &AuditQuery) -> CmdResult<AuditPageDto> {
+    use rusqlite::params_from_iter;
+    use rusqlite::types::Value;
+    let actor = actor_from(conn, actor_s)?;
+    let mut wheres: Vec<String> = Vec::new();
+    let mut args: Vec<Value> = Vec::new();
+    // Teachers only ever see their own entries (§12).
+    if actor.role == Role::Teacher {
+        wheres.push("a.staff_id = ?".into());
+        args.push(Value::Text(actor_s.id.clone()));
+    } else if let Some(s) = q.staff_id.as_deref().filter(|s| !s.is_empty()) {
+        wheres.push("a.staff_id = ?".into());
+        args.push(Value::Text(s.to_string()));
+    }
+    if let Some(tbl) = q.table.as_deref().filter(|s| !s.is_empty()) {
+        wheres.push("a.\"table\" = ?".into());
+        args.push(Value::Text(tbl.to_string()));
+    }
+    if let Some(ac) = q.action.as_deref().filter(|s| !s.is_empty()) {
+        wheres.push("a.action = ?".into());
+        args.push(Value::Text(ac.to_string()));
+    }
+    if let Some(d) = q.date.as_deref().filter(|s| !s.is_empty()) {
+        wheres.push("a.at LIKE ?".into());
+        args.push(Value::Text(format!("{d}%")));
+    }
+    let where_clause = if wheres.is_empty() { String::new() } else { format!("WHERE {}", wheres.join(" AND ")) };
+
+    let total: i64 = conn.query_row(&format!("SELECT COUNT(*) FROM audit_log a {where_clause}"), params_from_iter(args.iter()), |r| r.get(0))?;
+
+    let sql = format!(
+        "SELECT a.seq, a.at, st.name, a.action, a.\"table\", a.record_id, a.reason \
+         FROM audit_log a LEFT JOIN staff st ON st.id=a.staff_id {where_clause} ORDER BY a.seq DESC LIMIT ? OFFSET ?"
+    );
+    let mut page_args = args;
+    page_args.push(Value::Integer(q.limit.max(0)));
+    page_args.push(Value::Integer(q.offset.max(0)));
+    let mut stmt = conn.prepare(&sql)?;
+    let rows: Vec<AuditRowDto> = stmt
+        .query_map(params_from_iter(page_args.iter()), |r| {
+            Ok(AuditRowDto {
+                seq: r.get(0)?,
+                at: r.get(1)?,
+                staff_name: r.get(2)?,
+                action: r.get(3)?,
+                table: r.get(4)?,
+                record_id: r.get(5)?,
+                reason: r.get(6)?,
+            })
+        })?
+        .collect::<rusqlite::Result<_>>()?;
+    let first_bad = crate::security::audit::verify_chain(conn)?;
+    Ok(AuditPageDto { rows, total, chain_ok: first_bad.is_none(), first_bad_seq: first_bad })
+}
+
+#[derive(Debug, Serialize)]
+pub struct MonthCountDto {
+    pub month: String,
+    pub count: i64,
+}
+
+pub fn admissions_by_month_logic(conn: &mut Connection, actor_s: &SessionStaff) -> CmdResult<Vec<MonthCountDto>> {
+    let actor = actor_from(conn, actor_s)?;
+    require_allow(&actor, Action::ViewStudent, &Target::of(TargetKind::Student))?;
+    let mut stmt = conn.prepare(
+        "SELECT substr(created_at,1,7) AS m, COUNT(*) FROM student GROUP BY m ORDER BY m DESC LIMIT 24",
+    )?;
+    let rows = stmt.query_map([], |r| Ok(MonthCountDto { month: r.get(0)?, count: r.get(1)? }))?.collect::<rusqlite::Result<_>>()?;
+    Ok(rows)
+}
+
+#[derive(Debug, Serialize)]
+pub struct FeeCollectionDto {
+    pub from: String,
+    pub to: String,
+    pub cash_paise: i64,
+    pub upi_paise: i64,
+    pub cheque_paise: i64,
+    pub total_paise: i64,
+    pub by_day: Vec<MoneyDayDto>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct MoneyDayDto {
+    pub day: String,
+    pub total_paise: i64,
+}
+
+pub fn fee_collection_report_logic(conn: &mut Connection, actor_s: &SessionStaff, from: &str, to: &str) -> CmdResult<FeeCollectionDto> {
+    let actor = actor_from(conn, actor_s)?;
+    require_allow(&actor, Action::FeeReports, &Target::of(TargetKind::Fee))?;
+    let lo = format!("{from}T00:00:00Z");
+    let hi = format!("{to}T23:59:59Z");
+    let mode_sum = |conn: &Connection, mode: &str| -> rusqlite::Result<i64> {
+        conn.query_row(
+            "SELECT COALESCE(SUM(amount_paise),0) FROM payment WHERE sync_state='confirmed' AND mode=?1 AND collected_at BETWEEN ?2 AND ?3",
+            params![mode, lo, hi],
+            |r| r.get(0),
+        )
+    };
+    let cash = mode_sum(conn, "cash")?;
+    let upi = mode_sum(conn, "upi")?;
+    let cheque = mode_sum(conn, "cheque")?;
+    let mut stmt = conn.prepare(
+        "SELECT substr(collected_at,1,10) AS d, SUM(amount_paise) FROM payment \
+         WHERE sync_state='confirmed' AND collected_at BETWEEN ?1 AND ?2 GROUP BY d ORDER BY d",
+    )?;
+    let by_day = stmt
+        .query_map(params![lo, hi], |r| Ok(MoneyDayDto { day: r.get(0)?, total_paise: r.get(1)? }))?
+        .collect::<rusqlite::Result<_>>()?;
+    Ok(FeeCollectionDto { from: from.to_string(), to: to.to_string(), cash_paise: cash, upi_paise: upi, cheque_paise: cheque, total_paise: cash + upi + cheque, by_day })
+}
+
+#[derive(Debug, Serialize)]
+pub struct GradeCountDto {
+    pub grade: String,
+    pub count: i64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ExamResultRowDto {
+    pub class_display: Option<String>,
+    pub subject_name: String,
+    pub max_marks: i64,
+    pub graded: i64,
+    pub average_pct_tenths: i64,
+    pub distribution: Vec<GradeCountDto>,
+}
+
+pub fn exam_results_logic(conn: &mut Connection, actor_s: &SessionStaff, exam_id: &str) -> CmdResult<Vec<ExamResultRowDto>> {
+    let _actor = actor_from(conn, actor_s)?;
+    let scale = load_scale(conn);
+    let subjects = exam_subjects(conn, exam_id)?;
+    let mut out = Vec::new();
+    for es in subjects {
+        // Entered, non-absent marks for this subject.
+        let mut stmt = conn.prepare(
+            "SELECT me.marks FROM mark_entry me JOIN marks_sheet ms ON ms.id=me.sheet_id \
+             WHERE ms.exam_subject_id=?1 AND me.marks IS NOT NULL AND me.absent=0",
+        )?;
+        let marks: Vec<i64> = stmt.query_map(params![es.id], |r| r.get::<_, i64>(0))?.collect::<rusqlite::Result<_>>()?;
+        let graded = marks.len() as i64;
+        let mut dist: std::collections::BTreeMap<String, i64> = std::collections::BTreeMap::new();
+        let mut sum_pct: i64 = 0;
+        for m in &marks {
+            let pct = grades::subject_percent(*m as u32, es.max_marks as u32);
+            sum_pct += pct as i64;
+            let g = grades::grade_for(pct, &scale).map(|b| b.grade.clone()).unwrap_or_else(|| "-".into());
+            *dist.entry(g).or_insert(0) += 1;
+        }
+        let avg = if graded > 0 { sum_pct / graded } else { 0 };
+        out.push(ExamResultRowDto {
+            class_display: es.class_display,
+            subject_name: es.subject_name,
+            max_marks: es.max_marks,
+            graded,
+            average_pct_tenths: avg,
+            distribution: dist.into_iter().map(|(grade, count)| GradeCountDto { grade, count }).collect(),
+        });
+    }
+    Ok(out)
 }
 
 /// Student ids of a class (for a class report-card batch print).
@@ -3642,6 +3842,28 @@ mod tests {
         if let Some(ns) = null_stu {
             assert!(get_report_card_logic(&mut c, &principal(), "2026-09-24", &ns, "exam-hy").unwrap().incomplete);
         }
+    }
+
+    #[test]
+    fn reports_audit_scoping_and_exam_results() {
+        let mut c = seeded();
+        // Accountant records a payment (audited under stf-suresh).
+        record_payment_logic(&mut c, &accountant(), None, DeviceMode::Server, &PaymentInput { student_id: "stu-kavya-singh".into(), amount_paise: 100_000, mode: "cash".into(), reference: None }).unwrap();
+        // Teacher Anita saves a VI-B Maths draft (audited under stf-anita).
+        let first = get_marks_sheet_logic(&mut c, &teacher_anita(), "es-6b-maths").unwrap().rows[0].student_id.clone();
+        save_marks_draft_logic(&mut c, &teacher_anita(), DeviceMode::Server, "es-6b-maths", &[MarkEntryInput { student_id: first, marks: Some(70), absent: false }]).unwrap();
+
+        let q = |limit, offset| AuditQuery { staff_id: None, table: None, action: None, date: None, limit, offset };
+        let all = list_audit_logic(&mut c, &principal(), &q(100, 0)).unwrap();
+        assert!(all.chain_ok, "audit chain verifies");
+        assert!(all.total >= 2);
+        // A teacher sees ONLY their own audit entries (fewer than the Principal).
+        let mine = list_audit_logic(&mut c, &teacher_anita(), &q(100, 0)).unwrap();
+        assert!(mine.total >= 1 && mine.total < all.total);
+
+        let res = exam_results_logic(&mut c, &principal(), "exam-hy").unwrap();
+        assert_eq!(res.len(), 1, "one exam subject (VI-B Maths)");
+        assert!(res[0].graded >= 1 && res[0].average_pct_tenths > 0);
     }
 
     #[test]

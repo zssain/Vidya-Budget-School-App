@@ -38,6 +38,9 @@ export const PRINCIPAL_NAV: NavSection[] = [
       { key: 'students', labelKey: 'nav.students', icon: 'students', path: '/principal/students' },
       { key: 'attendance', labelKey: 'nav.attendance', icon: 'attendance', path: '/principal/attendance' },
       { key: 'marks', labelKey: 'nav.marks', icon: 'marks', path: '/principal/marks' },
+      // Reports is not in Main.dc.html's sidebar; added under Academics as the
+      // smallest way to reach the P07 reports (flagged for the owner in phase-7.md).
+      { key: 'reports', labelKey: 'nav.reports', icon: 'reportCard', path: '/principal/reports' },
     ],
   },
   {

@@ -395,6 +395,59 @@ export interface ReportCardDto {
   attendance: AttendanceSummaryDto
 }
 
+export interface AuditRowDto {
+  seq: number
+  at: string
+  staff_name: string | null
+  action: string
+  table: string | null
+  record_id: string | null
+  reason: string | null
+}
+export interface AuditPageDto {
+  rows: AuditRowDto[]
+  total: number
+  chain_ok: boolean
+  first_bad_seq: number | null
+}
+export interface AuditQuery {
+  staff_id?: string | null
+  table?: string | null
+  action?: string | null
+  date?: string | null
+  limit: number
+  offset: number
+}
+export interface MonthCountDto {
+  month: string
+  count: number
+}
+export interface MoneyDayDto {
+  day: string
+  total_paise: number
+}
+export interface FeeCollectionDto {
+  from: string
+  to: string
+  cash_paise: number
+  upi_paise: number
+  cheque_paise: number
+  total_paise: number
+  by_day: MoneyDayDto[]
+}
+export interface GradeCountDto {
+  grade: string
+  count: number
+}
+export interface ExamResultRowDto {
+  class_display: string | null
+  subject_name: string
+  max_marks: number
+  graded: number
+  average_pct_tenths: number
+  distribution: GradeCountDto[]
+}
+
 export interface RequestDto {
   id: string
   kind: string
@@ -586,6 +639,11 @@ export const submit_marks = (examSubjectId: string, entries: MarkEntryInput[]) =
 export const get_report_card = (studentId: string, examId: string) =>
   invoke<ReportCardDto>('get_report_card', { studentId, examId })
 export const class_student_ids = (classId: string) => invoke<string[]>('class_student_ids', { classId })
+export const list_audit = (query: AuditQuery) => invoke<AuditPageDto>('list_audit', { query })
+export const admissions_by_month = () => invoke<MonthCountDto[]>('admissions_by_month')
+export const fee_collection_report = (from: string, to: string) =>
+  invoke<FeeCollectionDto>('fee_collection_report', { from, to })
+export const exam_results = (examId: string) => invoke<ExamResultRowDto[]>('exam_results', { examId })
 export const list_fee_dues = (studentId: string) =>
   invoke<FeeDuesDto>('list_fee_dues', { studentId })
 export const fees_overview = () => invoke<FeeOverviewRow[]>('fees_overview')

@@ -79,6 +79,10 @@ pub const COMMANDS: &[&str] = &[
     "submit_marks",
     "get_report_card",
     "class_student_ids",
+    "list_audit",
+    "admissions_by_month",
+    "fee_collection_report",
+    "exam_results",
     "list_fee_dues",
     "record_payment",
     "list_payments",
@@ -455,6 +459,30 @@ pub fn submit_marks(state: State<RtCtx>, exam_subject_id: String, entries: Vec<M
 pub fn get_report_card(state: State<RtCtx>, student_id: String, exam_id: String) -> CmdResult<ReportCardDto> {
     let actor = state.require_session()?;
     state.with_db(|conn| get_report_card_logic(conn, &actor, &today(), &student_id, &exam_id))
+}
+
+#[tauri::command]
+pub fn list_audit(state: State<RtCtx>, query: AuditQuery) -> CmdResult<AuditPageDto> {
+    let actor = state.require_session()?;
+    state.with_db(|conn| list_audit_logic(conn, &actor, &query))
+}
+
+#[tauri::command]
+pub fn admissions_by_month(state: State<RtCtx>) -> CmdResult<Vec<MonthCountDto>> {
+    let actor = state.require_session()?;
+    state.with_db(|conn| admissions_by_month_logic(conn, &actor))
+}
+
+#[tauri::command]
+pub fn fee_collection_report(state: State<RtCtx>, from: String, to: String) -> CmdResult<FeeCollectionDto> {
+    let actor = state.require_session()?;
+    state.with_db(|conn| fee_collection_report_logic(conn, &actor, &from, &to))
+}
+
+#[tauri::command]
+pub fn exam_results(state: State<RtCtx>, exam_id: String) -> CmdResult<Vec<ExamResultRowDto>> {
+    let actor = state.require_session()?;
+    state.with_db(|conn| exam_results_logic(conn, &actor, &exam_id))
 }
 
 #[tauri::command]

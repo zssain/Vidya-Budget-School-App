@@ -51,7 +51,12 @@ export default function MarksScreen() {
         eyebrow={t('marks.eyebrow')}
         title={t('marks.title')}
         sub={t('marks.sub')}
-        actions={<button type="button" style={primaryBtn()} onClick={() => setNewExam(true)}>{t('marks.newExam')}</button>}
+        actions={
+          <>
+            <button type="button" style={secondaryBtn()} onClick={() => navigate('/principal/grade-scale')}>{t('grade.title').replace('.', '')}</button>
+            <button type="button" style={primaryBtn()} onClick={() => setNewExam(true)}>{t('marks.newExam')}</button>
+          </>
+        }
       />
 
       {exams.length === 0 ? (

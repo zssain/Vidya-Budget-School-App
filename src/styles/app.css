@@ -77,3 +77,13 @@ body {
   font-weight: 500 !important;
   font-style: normal !important;
 }
+
+/* Printing (docs/00 §PRINTING): a report screen prints its content only — the
+   AppShell sidebar/header and in-screen controls marked [data-appshell-chrome]
+   are hidden. Dedicated print routes (receipt / day book / report card) already
+   render without the shell. */
+@media print {
+  [data-appshell-chrome] {
+    display: none !important;
+  }
+}
