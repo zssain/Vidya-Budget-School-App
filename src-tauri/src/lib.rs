@@ -5,12 +5,17 @@
 //! Tauri commands or UI wiring yet (Phase 3). The Phase-1 size spike is gone.
 
 pub mod config;
+pub mod dash;
 pub mod db;
+pub mod error;
 pub mod kv;
 pub mod licence;
 pub mod security;
 pub mod state;
 pub mod write;
+
+#[cfg(debug_assertions)]
+pub mod seed;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
