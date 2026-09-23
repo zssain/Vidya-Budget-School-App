@@ -1,6 +1,6 @@
 {
   "licence_api": "http://127.0.0.1:8787",
-  "licence_public_key": "",
+  "licence_public_key": "yLQ8lt26cM/ZdKnfaYGS/VgV6DT6CrAyLHS1br28XJs=",
   "relay_url": "ws://127.0.0.1:8788",
   "google_client_id_desktop": "",
   "google_client_id_android": ""
