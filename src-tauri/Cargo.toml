@@ -21,6 +21,9 @@ tauri-plugin-dialog = "2"
 tauri-plugin-opener = "2"
 tauri-plugin-deep-link = "2"
 
+# --- Business rules (pure Rust, no IO) ---
+vidya-core = { path = "../crates/vidya-core" }
+
 # --- Serialization / errors ---
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

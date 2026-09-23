@@ -6,7 +6,10 @@
 
 pub mod config;
 pub mod db;
+pub mod kv;
+pub mod licence;
 pub mod security;
+pub mod state;
 pub mod write;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]

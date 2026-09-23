@@ -6,7 +6,10 @@ use std::path::Path;
 
 /// Ordered migrations. Each is applied in its own transaction; a failure leaves
 /// the previous schema_version intact (prompts/P02 Step 3.2).
-pub const MIGRATIONS: &[(i64, &str)] = &[(1, include_str!("migrations/0001_init.sql"))];
+pub const MIGRATIONS: &[(i64, &str)] = &[
+    (1, include_str!("migrations/0001_init.sql")),
+    (2, include_str!("migrations/0002_p03.sql")),
+];
 
 /// Current UTC time as an RFC-3339 string (src-tauri may read the clock).
 pub fn now_iso() -> String {
@@ -87,14 +90,15 @@ mod tests {
 
     #[test]
     fn migrations_apply_and_are_idempotent() {
+        let latest = MIGRATIONS.last().map(|(v, _)| *v).unwrap();
         let mut conn = open_in_memory(KEY).unwrap();
-        assert_eq!(run_migrations(&mut conn).unwrap(), 1);
-        // second run does nothing (already at 1)
-        assert_eq!(run_migrations(&mut conn).unwrap(), 1);
+        assert_eq!(run_migrations(&mut conn).unwrap(), latest);
+        // second run does nothing (already at the latest version)
+        assert_eq!(run_migrations(&mut conn).unwrap(), latest);
         let n: i64 = conn
             .query_row("SELECT count(*) FROM schema_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(n, 1);
+        assert_eq!(n, MIGRATIONS.len() as i64);
     }
 
     #[test]
