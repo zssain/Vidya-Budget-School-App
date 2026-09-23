@@ -33,3 +33,6 @@ keystore.properties
 /playwright/.cache/
 
 # Note: src-tauri/gen/schemas/ is intentionally NOT ignored (kept in git).
+
+# Fidelity baselines are regenerated locally until ≤0.1% tuning lands (P9)
+/tests/e2e/__screens__/

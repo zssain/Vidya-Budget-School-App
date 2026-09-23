@@ -15,9 +15,14 @@ gaps carried forward (fidelity ≤0.1%, Android tooling).**
 1. **Repo strategy → Fresh start.** Old edition-2 code (incl. `crates/vidya-core`) is
    NOT ported; it stays in history on `edition2-backend`. New branch `rebuild/p01`.
    `crates/vidya-core` is a fresh empty lib with one passing test (rules land in Phase 2).
-2. **Android tooling → desktop now, Android later.** JDK 17 + NDK + android Rust targets
-   are absent; per Step 1 this is a STOP. All Android steps (size-spike APKs, debug APK
-   on device) are deferred until the owner installs JDK 17 + NDK. Everything else was done.
+2. **Android tooling → "install it now".** Initially absent (STOP); the owner then chose to
+   install. Installed non-interactively via Homebrew: **openjdk 17.0.20.1**, Android
+   **cmdline-tools**, **NDK r26d (26.3.11579264)**, platform-34, build-tools 34, and the
+   `aarch64/armv7-linux-android` Rust targets. `tauri android init` succeeded and the Gradle
+   app module is configured (minSdk 24, ABIs arm64-v8a + armeabi-v7a, R8 `minifyEnabled` +
+   `shrinkResources`, legacy jniLibs packaging). **The APK build then failed** cross-compiling
+   the vendored OpenSSL — see Known issues #2. So APK size numbers are still pending a fix to
+   that cross-compile, but the toolchain and project are now in place.
 
 ## Repo path taken
 Fresh start on `rebuild/p01`. First commit removed the edition-2 source and added the
@@ -104,8 +109,8 @@ opens Teacher Home. App icons from the brand kit in `src-tauri/icons/`.
 | macOS (arm64) | **`Vidya_0.1.0_aarch64.dmg`** | **5,577,982 (5.58 MB)** | — | download artifact — **7× under the 40 MB limit** |
 | macOS (arm64) | **`Vidya.app`** | — | **9,863,646 (9.86 MB)** | installed — **5× under the 50 MB limit**; no bundled Frameworks (system WKWebView) |
 | Windows | NSIS setup | — | — | **deferred** (build on Windows) |
-| Android arm64-v8a / armeabi-v7a | APK | — | — | **deferred — no JDK/NDK** |
-| Barcode-scanner delta (APK) | — | — | — | **deferred with Android** |
+| Android arm64-v8a / armeabi-v7a | APK | — | — | **build attempted; blocked** on vendored-OpenSSL cross-compile (Known issues #2) |
+| Barcode-scanner delta (APK) | — | — | — | pending the Android build |
 
 `scripts/size-report.mjs` → OK (both artifacts within budget). Every §13 native dependency
 was linked in for this measurement (spike.rs), so these are worst-case sizes; they will only
@@ -157,13 +162,31 @@ the owner in §Questions.
 - Company/legal placeholders kept verbatim from the mock ("[Your company]").
 
 ## Known issues / gaps
-1. **Fidelity ≤0.1% not met** (font-render + sub-pixel geometry). Biggest single lever would
-   be for the app and the mock to render the *same* font bytes. See Questions.
-2. **Android** entirely deferred (no JDK 17 / NDK). Size budget therefore proven for desktop
-   only so far (well under limit at 8.8 MB binary).
-3. `collect-fee-success` fidelity comparison needs the mock `support.js` "Record payment"
-   click to advance to the success panel; investigate support.js handler timing.
+1. **Fidelity ≤0.1% not met — and it is NOT (mainly) fonts.** I tried the "same fonts in the
+   mock renderer" fix (dev server serves the app's bundled woff2 to the mock, under the same
+   family names, with the Google links stripped). It did **not** close the gap — the
+   non-driven screens stayed ~0.04–0.09 (a couple got worse), so the residual difference is
+   **sub-pixel geometry / text rasterisation**, not the Google-vs-Fontsource font source. That
+   experiment also added renderer instability (a MutationObserver storm timed out the driven
+   states), so it was **reverted**; `support.js` is back to the clean committed version. Closing
+   ≤0.1% needs a dedicated pass (measure the exact offset per screen; likely a 1px box/baseline
+   difference) — recommend Phase 9, or a focused follow-up. The app is visually faithful today.
+2. **Android APK build blocked on vendored OpenSSL.** `cargo build --target aarch64-linux-android`
+   (driven by `tauri android build`) fails in `openssl-sys`' vendored OpenSSL:
+   `make: *** [install_dev] Error 127`, preceded by `util/mkinstallvars.pl` emitting an empty
+   `LIBDIR`. This is the `rusqlite` `bundled-sqlcipher-vendored-openssl` feature (§13) not
+   cross-compiling to Android with NDK r26d. It is an Android **toolchain/build** issue, not a
+   Vidya code bug (desktop builds this exact feature fine). Options to try in Phase 2 (which
+   owns the DB): (a) a prebuilt OpenSSL for Android + `OPENSSL_DIR`/`AARCH64_LINUX_ANDROID_OPENSSL_DIR`;
+   (b) a different NDK (r25/r27); (c) pin `libsqlite3-sys`/`openssl-src`; (d) SQLCipher with a
+   non-vendored OpenSSL on Android only. Expected APK size is comfortably under budget (desktop
+   is 5.58 MB), so this is a build-plumbing fix, not a size risk.
+3. `collect-fee-success` fidelity comparison also needs the mock `support.js` "Record payment"
+   click to advance to the success panel (it stayed on the editing form) — support.js handler
+   timing.
 4. Standalone component library + component gallery (§7) is minimal (see Deviations).
+5. `Vidya.app`/APK debug run on a device was NOT verified — no emulator/device is connected here
+   (and the APK didn't build). Report separately from code (Standing Rule 9).
 5. Tauri warns the identifier `in.vidyabudget.app` ends with `.app`, which collides with the
    macOS bundle extension. It built and bundled fine, but consider `in.vidyabudget.vidya`
    (or similar) if it causes trouble on macOS. Kept as specified in the prompt (Step 2.3).
