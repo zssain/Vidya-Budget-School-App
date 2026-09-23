@@ -87,6 +87,8 @@ CREATE TABLE staff (
   mobile       TEXT,
   google_email TEXT,
   pin_hash     TEXT,
+  pin_fail_count   INTEGER NOT NULL DEFAULT 0,
+  pin_locked_until TEXT,
   state        TEXT NOT NULL DEFAULT 'invited'
     CHECK (state IN ('invited','active','suspended','removed')),
   version INTEGER NOT NULL DEFAULT 1, hlc TEXT, created_at TEXT NOT NULL,
