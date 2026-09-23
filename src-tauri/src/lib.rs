@@ -13,6 +13,7 @@ pub mod kv;
 pub mod licence;
 pub mod security;
 pub mod state;
+pub mod sync;
 pub mod write;
 
 #[cfg(debug_assertions)]
