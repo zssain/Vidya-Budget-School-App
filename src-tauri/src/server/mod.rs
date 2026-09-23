@@ -3,5 +3,6 @@
 pub mod cert;
 pub mod invite;
 pub mod net;
+pub mod sealed;
 pub mod service;
 pub mod start;

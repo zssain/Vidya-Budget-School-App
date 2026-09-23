@@ -75,6 +75,46 @@ pub struct DeviceAuth {
     pub staff_id: String,
 }
 
+/// Resolve a device id to its (session_key_b64, auth) if the device is live
+/// (not revoked) and has a stored session key. Used by the sealed relay path,
+/// where possession of the session key — not a bearer token — authenticates the
+/// device (so no token ever crosses the relay). Returns `None` otherwise (→ 401).
+pub fn session_auth_for_device(conn: &Connection, device_id: &str) -> rusqlite::Result<Option<(String, DeviceAuth)>> {
+    let row = conn
+        .query_row(
+            "SELECT staff_id, session_key, revoked_at FROM device WHERE id=?1",
+            params![device_id],
+            |r| Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?, r.get::<_, Option<String>>(2)?)),
+        )
+        .optional()?;
+    match row {
+        Some((staff_id, Some(session_key), None)) if !session_key.is_empty() => {
+            Ok(Some((session_key, DeviceAuth { device_id: device_id.to_string(), staff_id })))
+        }
+        _ => Ok(None),
+    }
+}
+
+/// Replay defence (P05 Step 2): accept `counter` only if it is strictly greater
+/// than the device's stored high-water mark, then advance the mark. Returns `true`
+/// when the counter was accepted (and advanced), `false` on a replay/stale counter.
+pub fn accept_counter(conn: &Connection, device_id: &str, counter: i64) -> rusqlite::Result<bool> {
+    let last: i64 = conn
+        .query_row("SELECT last_counter FROM device WHERE id=?1", params![device_id], |r| r.get(0))
+        .optional()?
+        .unwrap_or(0);
+    if counter <= last {
+        return Ok(false);
+    }
+    conn.execute("UPDATE device SET last_counter=?1 WHERE id=?2", params![counter, device_id])?;
+    Ok(true)
+}
+
+/// The server's current epoch (defaults to 1 if the school row is somehow absent).
+pub fn current_epoch(conn: &Connection) -> rusqlite::Result<i64> {
+    Ok(school_info(conn)?.map(|s| s.server_epoch).unwrap_or(1))
+}
+
 /// Resolve a bearer token to a live (non-revoked) device, or `None` (→ 401).
 pub fn authenticate(conn: &Connection, token: &str) -> rusqlite::Result<Option<DeviceAuth>> {
     let hash = sha256_hex(token.as_bytes());

@@ -183,6 +183,29 @@ async fn heartbeat(State(st): State<Arc<ServerState>>, headers: HeaderMap, Json(
     }
 }
 
+/// The sealed relay endpoint (P05 Step 2). Devices reach it over the relay; the
+/// body is an opaque `SealedEnvelope` (no token, no plaintext). Auth + rate-limit
+/// are inside `dispatch` (session-key possession), so this handler does not use the
+/// bearer path. A successful (or fenced) dispatch is HTTP 200 with a sealed body;
+/// a crypto/auth failure is a plain status the relay forwards.
+async fn sealed(State(st): State<Arc<ServerState>>, Json(env): Json<SealedEnvelope>) -> Response {
+    let out = {
+        let mut conn = st.db.lock().unwrap();
+        crate::server::sealed::dispatch(&mut conn, &env, now())
+    };
+    match out {
+        Ok(resp) => {
+            // A sealed request may have applied ops → refresh local screens (Step 11).
+            if let Some(app) = &st.app {
+                use tauri::Emitter;
+                let _ = app.emit(EVENT_SYNC_CHANGED, ());
+            }
+            (StatusCode::OK, Json(resp)).into_response()
+        }
+        Err(e) => err(StatusCode::from_u16(e.http_status()).unwrap_or(StatusCode::BAD_REQUEST), e.code()),
+    }
+}
+
 /// The `/v1` router.
 pub fn router(state: Arc<ServerState>) -> Router {
     Router::new()
@@ -192,6 +215,7 @@ pub fn router(state: Arc<ServerState>) -> Router {
         .route("/v1/sync/pull", get(pull))
         .route("/v1/sync/snapshot", post(snapshot))
         .route("/v1/device/heartbeat", post(heartbeat))
+        .route("/v1/sealed", post(sealed))
         .layer(DefaultBodyLimit::max(MAX_BODY))
         .with_state(state)
 }

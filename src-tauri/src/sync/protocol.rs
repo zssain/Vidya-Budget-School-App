@@ -184,6 +184,40 @@ pub struct HeartbeatResp {
     pub server_epoch: i64,
 }
 
+// ------------------------------------------------------------- /sealed ------
+
+/// The opaque envelope carried over the relay (P05 Step 2). The relay sees only
+/// these routing fields + the sealed blob; it can neither read nor alter the inner
+/// request or response (rule §6). `sealed_b64` = base64(`nonce(12) ‖ ChaCha20-
+/// Poly1305(dir_key, inner JSON)`), AAD = method + path + device_id + server_epoch.
+///
+/// * On a REQUEST, `server_epoch` is the epoch the device currently trusts.
+/// * On a RESPONSE, `server_epoch` is the server's real epoch (drives fencing).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SealedEnvelope {
+    pub device_id: String,
+    pub method: String,
+    pub path: String,
+    pub server_epoch: i64,
+    pub sealed_b64: String,
+}
+
+/// The sealed inner request. `counter` is the device's strictly-monotonic request
+/// counter (replay defence): the server rejects `counter <= last seen`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SealedRequest {
+    pub counter: i64,
+    pub body: serde_json::Value,
+}
+
+/// The sealed inner response. `status` mirrors the HTTP status of the inner call
+/// (200 ok; 409 EPOCH_OLD; …) so the device reacts without the relay seeing it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SealedResponse {
+    pub status: u16,
+    pub body: serde_json::Value,
+}
+
 /// The deep-link / QR join payload (`vidya://join?d=<base64url JSON>`), ≤ 2 KB.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct JoinPayload {
@@ -256,5 +290,11 @@ mod tests {
             school_id: "s".into(), school_name: "Saraswati".into(), lan_addrs: vec!["192.168.1.5".into()],
             port: DEFAULT_PORT, cert_sha256: "ab12".into(), relay_url: None, code: "VIDYA123".into(),
         });
+        roundtrip(&SealedEnvelope {
+            device_id: "dev-a2".into(), method: "POST".into(), path: "/v1/sync/push".into(),
+            server_epoch: 1, sealed_b64: "AAAA".into(),
+        });
+        roundtrip(&SealedRequest { counter: 7, body: serde_json::json!({ "ops": [] }) });
+        roundtrip(&SealedResponse { status: 200, body: serde_json::json!({ "results": [] }) });
     }
 }
