@@ -23,6 +23,12 @@ size-report.json
 provider-keys/
 keystore.properties
 
+# Real release build config (only build-config/release.json.example is committed)
+src-tauri/build-config/release.json
+
+# Dev licence service keypair (generated on first run — prompts/P03 Step 2)
+cloud/licence/.dev-keys/
+
 # Test fixtures
 .test-phone-*
 

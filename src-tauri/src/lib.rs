@@ -4,6 +4,7 @@
 //! single-transaction write helper, and the key/PIN/recovery primitives. No
 //! Tauri commands or UI wiring yet (Phase 3). The Phase-1 size spike is gone.
 
+pub mod config;
 pub mod db;
 pub mod security;
 pub mod write;

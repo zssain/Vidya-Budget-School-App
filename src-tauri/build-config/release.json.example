@@ -1,0 +1,7 @@
+{
+  "licence_api": "https://REPLACE-with-your-licence-api-base-url",
+  "licence_public_key": "REPLACE-with-base64-ed25519-public-key",
+  "relay_url": "wss://REPLACE-with-your-relay-host",
+  "google_client_id_desktop": "REPLACE-with-desktop-oauth-client-id",
+  "google_client_id_android": "REPLACE-with-android-oauth-client-id"
+}
