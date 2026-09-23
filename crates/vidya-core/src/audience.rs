@@ -88,14 +88,29 @@ pub fn audience_for(table: &str, class_id: Option<&str>) -> CoreResult<Audience>
                 rule: "required_for_class_audience".into(),
             }),
         },
+        // ---- student roster: [OWNER default, P06] = finance ----------------
+        // student/enrollment are written by accountants (admissions, transfers,
+        // detail edits) and the Principal — both hold `finance`; a teacher only
+        // *reads* the roster (via requests / the server snapshot). `finance` is
+        // the one audience every pusher of these tables holds, so it is the
+        // pusher-consistent default. Consequence: during a server outage a teacher
+        // won't see a *new* admission via Drive until the server returns (it
+        // reconciles on import). The alternative (`class:<id>`) would let teachers
+        // see roster changes but leave accountants unable to seal — worse.
+        "student" | "enrollment" => Ok(Audience::Finance),
         // ---- principal-only administrative data ----------------------------
         "school" | "academic_session" | "term" | "subject" | "class" | "class_subject"
         | "staff" | "device" | "invite" | "conflict" | "review_flag" | "notification"
         | "licence" | "grade_scale" | "grade_band" => Ok(Audience::Admin),
-        // ---- deliberately undecided (owner policy) -------------------------
-        "student" | "enrollment" | "request" => Err(CoreError::Validation {
+        // ---- request: audience follows the requester's own domain ----------
+        // A request is sealed by whoever raises it, so its audience is the
+        // requester's own (a teacher's correction under `class:<own>`, an
+        // accountant's under `finance`) — record/actor-dependent, not table-only,
+        // so it cannot be decided from the table alone. The write path passes it
+        // explicitly; the Principal's *approve* op is an `admin` action.
+        "request" => Err(CoreError::Validation {
             field: "table".into(),
-            rule: "audience_owner_decision".into(),
+            rule: "audience_from_requester".into(),
         }),
         // ---- unknown table --------------------------------------------------
         _ => Err(CoreError::Validation {
@@ -163,11 +178,18 @@ mod tests {
     }
 
     #[test]
-    fn cross_cutting_tables_are_an_owner_decision() {
-        for t in ["student", "enrollment", "request"] {
-            let e = audience_for(t, Some("cls-1")).unwrap_err();
-            assert_eq!(e.code(), "VALIDATION", "{t}");
+    fn student_roster_maps_to_finance() {
+        // [OWNER default, P06]: pusher-consistent — accountants + Principal hold finance.
+        for t in ["student", "enrollment"] {
+            assert_eq!(audience_for(t, None).unwrap(), Audience::Finance, "{t}");
         }
+    }
+
+    #[test]
+    fn request_audience_is_requester_scoped_not_table_only() {
+        // request is sealed by whoever raised it → decided at the write site, not here.
+        let e = audience_for("request", Some("cls-1")).unwrap_err();
+        assert_eq!(e.code(), "VALIDATION");
     }
 
     #[test]
