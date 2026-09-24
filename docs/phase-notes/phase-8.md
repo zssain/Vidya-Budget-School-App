@@ -1,4 +1,8 @@
-# Phase 8 handoff — backups, restore, session rollover (core rules + backend)
+# Phase 8 handoff — backups, restore, session rollover (core rules + backend) + full Hindi (Part F)
+
+> **Update (second session):** Part F (full Hindi) is now complete — see the
+> **Part F** section at the end. The rest of this document covers the first
+> session (Parts B/C/D backend + rules).
 
 Branch: `rebuild/p08` (from `rebuild/p07`). Start HEAD: `b64df2b` (P07 close-out).
 `git status` at start: clean. Tools: rustc/cargo/clippy 1.98.1, node v25.3.0, npm 11.7.0.
@@ -159,3 +163,85 @@ Registered in `crates/vidya-core/src/lib.rs`.
    self-contained and fully verifiable without the blocked environment; **Part A**
    (phone screens) and **Part E** (settings) are the largest UI surfaces. Which
    first?
+
+---
+
+# Part F — Full Hindi (second session)
+
+Owner delegated the call ("you choose the best option"); Part F was the
+blocker-free, fully-verifiable next slice, so it was done next.
+
+## What was built
+
+- **Every i18n string module translated to natural Hindi.** All 17 modules in
+  `src/lib/i18n/strings/` now carry a real `hi` value for every key — **716 keys,
+  0 `TODO-HI` left anywhere in `src/`**. Translations use everyday school Hindi
+  with a consistent glossary (उपस्थिति/अंक/फ़ीस/रसीद/प्रधानाचार्य/शिक्षक/लेखाकार/
+  विद्यार्थी/कक्षा…), preserving every `{placeholder}`, ₹, receipt numbers
+  (`R-A2-0419`), admission numbers (`2026/0142`), class displays (`VII-B`),
+  session labels (`2026–27`), and the product name **Vidya**. The auto-generated
+  `Object.fromEntries(… TODO-HI …)` `hi` blocks were replaced with explicit maps.
+- **`scripts/check-i18n.mjs`** (new gate): loads each module (strips TS types →
+  data-URL import, so it evaluates the real maps, both file patterns), and fails
+  on any en/hi key mismatch, any `TODO-HI`, any empty value, or a key defined in
+  two modules. Result: **OK — 17 modules, 716 keys, en/hi in sync, no TODO-HI.**
+- **Hindi font swap** (`docs/01-MOCK-SPEC.md §3): the `:root[lang='hi'] .v-serif`
+  rule (Newsreader → Noto Sans Devanagari 500, `font-style: normal`) and the
+  `--font-serif` var already existed in `src/styles/app.css` — confirmed present
+  and correct.
+- **Fixed 164px badge → `min-width: 164px`** (`PrincipalHomeScreen` `pillStyle`,
+  the approval badges) so Hindi never truncates. **Proven baseline-neutral:**
+  principal-home renders **byte-identically** (104225 diff px either way) with
+  `width` vs `minWidth`, because every English badge label is ≤164px.
+
+## Gates (real output, this branch)
+
+- `node scripts/check-i18n.mjs` → **OK (17 modules, 716 keys, no TODO-HI)**.
+- `grep -rn "TODO-HI" src/` → **nothing** (comments updated too).
+- `npx tsc --noEmit` → clean · `npx vitest run` → **38 pass** ·
+  `node scripts/check-hex.mjs` → OK (unchanged).
+- Rust workspace untouched this session (still 483 pass / clippy clean from the
+  first session).
+
+## Fidelity screenshots — environment limitation (honest)
+
+`npx playwright test tests/e2e/fidelity.spec.ts` → **12 failed**, but as
+**pixel diffs of ~3–7%** (threshold 0.1%) on **every** screen — **including
+`welcome-setup`, which this session did not touch at all** (0.03 ratio). The
+committed `*-darwin.png` baselines were generated on a different rendering
+environment and do not reproduce on this sandbox's font hinting / antialiasing —
+the same pixel-verification limitation P07 recorded. **My changes are not the
+cause:** an untouched screen fails identically, and principal-home's diff is
+byte-identical with the old `width` and the new `minWidth`. Re-baselining, if
+wanted, must be done on the reference machine (or in CI), never here. No baseline
+was modified.
+
+## Phrases flagged for owner review (Hindi choices that are debatable)
+
+- **Transliterations kept as-is** (common in Indian schools, but confirm):
+  "Day book" → `डे बुक` (alt: `रोकड़ बही`), "Sync" → `सिंक`, "Draft" → `ड्राफ़्ट`,
+  "Backup" → `बैकअप`, "Restore" → `रिस्टोर` (alt: `पुनर्स्थापित करें`),
+  "Report card" → `रिपोर्ट कार्ड`, "Grade/scale/point" → `ग्रेड/स्केल/पॉइंट`.
+- "Advance credit" → `अग्रिम जमा`; "Reversal" → `भुगतान वापसी`.
+- `acc.title` "Good day." → `नमस्ते।` (a natural greeting, not a literal
+  "शुभ दिन").
+- Demo/fixture proper nouns transliterated: "Saraswati Public School" →
+  `सरस्वती पब्लिक स्कूल`, "Priya Sharma" → `प्रिया शर्मा` (real deployments show
+  the school's own stored name, not this key).
+- Fixed mock date strings translated (e.g. `बुधवार, 23 सितंबर`); live dates come
+  from `format.ts`, not these keys.
+
+## Part F remainders (small, documented — not done this session)
+
+- **`.v-serif` class not yet attached to the inline headings.** Components apply
+  the serif via inline `fontFamily: "'Newsreader', Georgia, serif"`, so the
+  existing `:root[lang='hi'] .v-serif` swap does not reach them yet. Under Hindi
+  those Devanagari headings currently fall back through the stack rather than to
+  Noto 500. Fix = add `className="v-serif"` (or `var(--font-serif)`) to the serif
+  headings across ~30 screen files — **mechanical and English-baseline-neutral**
+  (the rule only applies under `[lang='hi']`). Left as a focused follow-up.
+- **Report-language** (receipts/report cards/reports in the chosen *report*
+  language, independent of UI language) needs the Settings → Report language
+  control (Part E, deferred) + the print docs reading it. Not wired this session.
+- Hindi logo lockups (`design/brand-kit/svg/vidya-horizontal-hindi-on-*.svg`)
+  swap when language = Hindi — belongs with the shell/welcome UI wiring.

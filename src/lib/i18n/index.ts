@@ -1,7 +1,7 @@
 // Hand-written i18n (no i18next). t(key, vars) with {name} interpolation.
 // Strings live in per-screen modules under ./strings so no user-visible string
 // is hard-coded in a component/screen. `en` holds every visible mock string
-// word-for-word; `hi` mirrors the keys with "TODO-HI: <english>" (Phase 8
+// word-for-word; `hi` holds the natural-Hindi translation (Phase 8, Part F —
 // fills real Hindi).
 import { useSyncExternalStore } from 'react'
 import common from './strings/common'

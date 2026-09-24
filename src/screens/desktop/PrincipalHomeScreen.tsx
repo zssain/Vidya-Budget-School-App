@@ -30,13 +30,15 @@ function cellStyle(i: number): CSSProperties {
   }
 }
 
-// pill(bg, fg): fixed 164×26 approval badge.
+// pill(bg, fg): 164×26 approval badge. min-width (not width) so Hindi never
+// truncates (P08 Part F); English content ≤164px still renders at exactly 164px,
+// so the fidelity baseline is unchanged.
 function pillStyle(bg: string, fg: string): CSSProperties {
   return {
     display: 'inline-flex',
     alignItems: 'center',
     justifyContent: 'center',
-    width: '164px',
+    minWidth: '164px',
     height: '26px',
     borderRadius: '4px',
     fontSize: '12px',

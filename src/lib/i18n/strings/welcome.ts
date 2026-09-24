@@ -2,8 +2,8 @@ import type { Bundle } from '../index'
 
 // Every visible string on the Welcome screen, verbatim from
 // design/screens/Welcome.dc.html (docs/01-MOCK-SPEC.md §8). `en` is word-for-word
-// the mock; `hi` mirrors each key with "TODO-HI: <english>" (Phase 8 fills real
-// Hindi). The three radio-option title/sub strings live under welcome.opt.*.
+// the mock; `hi` is the natural-Hindi translation (Phase 8, Part F). The three
+// radio-option title/sub strings live under welcome.opt.*.
 const en: Record<string, string> = {
   // Left panel — header
   'welcome.help': 'Help',
@@ -57,9 +57,48 @@ const en: Record<string, string> = {
   'welcome.right.foot.approvals': 'Approvals.',
 }
 
-const hi: Record<string, string> = Object.fromEntries(
-  Object.entries(en).map(([k, v]) => [k, `TODO-HI: ${v}`]),
-)
+const hi: Record<string, string> = {
+  'welcome.help': 'सहायता',
+  'welcome.eyebrow': 'आपका स्कूल Vidya पर',
+  'welcome.encrypted': 'आपके डिवाइसों पर एन्क्रिप्टेड',
+  'welcome.h1': 'नमस्ते।',
+  'welcome.intro':
+    'आप कैसे शुरू करना चाहेंगे? एक्टिवेशन कोड की ज़रूरत सिर्फ़ तभी होती है जब आप नया स्कूल सेट कर रहे हों।',
+  'welcome.radiogroup.label': 'कैसे शुरू करें',
+  'welcome.opt.setup.title': 'मेरा स्कूल सेट करें',
+  'welcome.opt.setup.sub': 'प्रधानाचार्य के लिए · आपकी खरीद के एक्टिवेशन कोड का उपयोग करता है',
+  'welcome.opt.join.title': 'मेरे स्कूल में शामिल हों',
+  'welcome.opt.join.sub': 'शिक्षकों और लेखाकारों के लिए · आपके आमंत्रण का उपयोग करता है',
+  'welcome.opt.recover.title': 'मौजूदा स्कूल पुनर्प्राप्त करें',
+  'welcome.opt.recover.sub': 'बैकअप से Vidya को नए कंप्यूटर पर ले जाएँ',
+  'welcome.field.codeLabel': 'एक्टिवेशन कोड',
+  'welcome.field.codePlaceholder': 'VIDYA-XXXX-XXXX-XXXX',
+  'welcome.field.codeHint': 'यह आपकी खरीद ईमेल में और आपके खाता पृष्ठ पर है।',
+  'welcome.field.invLabel': 'आमंत्रण लिंक या कोड',
+  'welcome.field.invPlaceholder': 'प्रधानाचार्य द्वारा भेजा गया लिंक पेस्ट करें',
+  'welcome.field.invHint': 'फ़ोन पर आप आमंत्रण QR कोड भी स्कैन कर सकते हैं।',
+  'welcome.recover.title': 'मालिक का सत्यापन आवश्यक',
+  'welcome.recover.body':
+    'कुछ भी पुनर्स्थापित करने से पहले हम स्कूल के लाइसेंस की पुष्टि करेंगे और आपका बैकअप जाँचेंगे।',
+  'welcome.cta.setup': 'एक्टिवेट करें और जारी रखें',
+  'welcome.cta.join': 'स्कूल में शामिल हों',
+  'welcome.cta.recover': 'पुनर्प्राप्ति शुरू करें',
+  'welcome.signin.prompt': 'इस डिवाइस पर पहले से सेट है? ',
+  'welcome.signin.link': 'साइन इन करें',
+  'welcome.footer.copyright': '© 2026 [Your company]',
+  'welcome.footer.privacy': 'गोपनीयता',
+  'welcome.footer.terms': 'शर्तें',
+  'welcome.right.eyebrow': 'भारतीय स्कूलों के लिए स्कूल प्रबंधन',
+  'welcome.right.h2': 'हर कक्षा। हर रुपया।',
+  'welcome.right.h2Italic': 'एक स्पष्ट रिकॉर्ड।',
+  'welcome.right.body':
+    'उपस्थिति, अंक और फ़ीस पहले फ़ोन पर सहेजे जाते हैं, फिर आपके स्कूल के अपने कंप्यूटर द्वारा पुष्ट किए जाते हैं।',
+  'welcome.right.doorCaption': 'हर कक्षा तक एक द्वार।',
+  'welcome.right.foot.attendance': 'उपस्थिति।',
+  'welcome.right.foot.marks': 'अंक।',
+  'welcome.right.foot.fees': 'फ़ीस।',
+  'welcome.right.foot.approvals': 'स्वीकृतियाँ।',
+}
 
 const welcome: Bundle = { en, hi }
 export default welcome

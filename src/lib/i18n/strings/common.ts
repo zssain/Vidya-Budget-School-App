@@ -10,8 +10,8 @@ const common: Bundle = {
   },
   hi: {
     'app.name': 'Vidya',
-    'placeholder.title': 'TODO-HI: Coming in a later phase',
-    'nav.help': 'TODO-HI: Help',
+    'placeholder.title': 'आगे किसी चरण में आएगा',
+    'nav.help': 'सहायता',
   },
 }
 export default common

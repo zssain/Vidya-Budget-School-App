@@ -102,9 +102,100 @@ const errors: Bundle = {
   hi: {},
 }
 
-// Mirror every English key into Hindi as "TODO-HI: <en>" (Phase 8 fills real Hindi).
-errors.hi = Object.fromEntries(
-  Object.entries(errors.en).map(([k, v]) => [k, `TODO-HI: ${v}`])
-)
+errors.hi = {
+  // vidya-core error codes → user copy.
+  'error.LOCKED': 'जारी रखने के लिए कृपया साइन इन करें।',
+  'error.FORBIDDEN': 'आपके पास ऐसा करने की अनुमति नहीं है।',
+  'error.NOT_FOUND': 'नहीं मिला।',
+  'error.VALIDATION': 'कृपया इसे जाँचें और फिर कोशिश करें।',
+  'error.AMOUNT_EXCEEDS_DUE': 'राशि कुल बकाया से अधिक है।',
+  'error.NO_DUES': 'इस विद्यार्थी का कोई बकाया नहीं है।',
+  'error.SHEET_LOCKED': 'यह शीट जमा हो चुकी है। सुधार का अनुरोध करें।',
+  'error.INCOMPLETE_SHEET': '{remaining} विद्यार्थी अभी चिह्नित नहीं',
+  'error.REQUEST_ALREADY_PENDING': 'एक अनुरोध पहले से लंबित है।',
+  'error.REQUEST_STALE': 'रिकॉर्ड बदल गया — कृपया फिर से देखें।',
+  'error.DUPLICATE_ADMISSION_NO': 'वह प्रवेश संख्या पहले से उपयोग में है।',
+  'error.LICENCE_INVALID': 'इस लाइसेंस की पुष्टि नहीं हो सकी। सहायता से संपर्क करें।',
+  'error.LICENCE_REVOKED': 'यह लाइसेंस रद्द कर दिया गया है। सहायता से संपर्क करें।',
+  'error.LICENCE_MOVED': 'यह स्कूल दूसरे कंप्यूटर पर चला गया है।',
+  'error.LICENCE_LIMIT': 'आपकी लाइसेंस सीमा पूरी हो गई है ({what})।',
+  'error.PIN_WRONG': 'गलत PIN। {remaining} कोशिशें बाकी।',
+  'error.PIN_LOCKED': 'बहुत ज़्यादा कोशिशें। {until} के बाद फिर कोशिश करें।',
+  'error.SESSION_READ_ONLY': 'यह सत्र केवल-पढ़ने के लिए है।',
+  'error.LEASE_EXPIRED': 'जारी रखने के लिए अपने स्कूल से जुड़ें।',
+  'error.EPOCH_OLD': 'यह कंप्यूटर अब स्कूल सर्वर नहीं है।',
+  'error.INTERNAL': 'कुछ गड़बड़ हो गई। कृपया फिर कोशिश करें।',
+  'error.DB_KEY_MISSING': 'इस डिवाइस की कुंजी गायब है। जारी रखने के लिए पुनर्प्राप्त करें।',
+
+  // Licence activation copy.
+  'licence.needs_internet': 'एक्टिवेशन के लिए एक बार इंटरनेट चाहिए — कृपया फिर कोशिश करें।',
+  'licence.code_already_used': 'यह कोड किसी अन्य स्कूल द्वारा पहले ही उपयोग किया जा चुका है। सहायता से संपर्क करें।',
+  'licence.code_not_found': 'वह एक्टिवेशन कोड नहीं मिला। कृपया जाँचें और फिर कोशिश करें।',
+  'licence.invalid': 'इस लाइसेंस की पुष्टि नहीं हो सकी। सहायता से संपर्क करें।',
+  'licence.banner_revoked': 'यह लाइसेंस रद्द कर दिया गया है। सहायता से संपर्क करें।',
+  'licence.banner_moved': 'यह स्कूल दूसरे कंप्यूटर पर चला गया है। यह केवल-पढ़ने के लिए है।',
+
+  // Setup wizard.
+  'setup.title': 'अपना स्कूल सेट करें',
+  'setup.step.school': 'स्कूल',
+  'setup.step.session': 'सत्र और टर्म',
+  'setup.step.classes': 'कक्षाएँ',
+  'setup.step.you': 'आप',
+  'setup.step.recovery': 'रिकवरी कुंजी',
+  'setup.step.ready': 'तैयार',
+  'setup.continue': 'जारी रखें',
+  'setup.back': 'वापस',
+  'setup.school.name': 'स्कूल का नाम',
+  'setup.school.address': 'पता',
+  'setup.school.board': 'बोर्ड',
+  'setup.school.udise': 'UDISE कोड (वैकल्पिक)',
+  'setup.school.phone': 'फ़ोन',
+  'setup.session.label': 'सत्र',
+  'setup.session.term1': 'टर्म 1',
+  'setup.session.term2': 'टर्म 2',
+  'setup.classes.add': 'सेक्शन जोड़ें',
+  'setup.you.name': 'आपका नाम',
+  'setup.you.mobile': 'मोबाइल',
+  'setup.you.pin': 'PIN (4–6 अंक)',
+  'setup.you.pin_again': 'PIN फिर से दर्ज करें',
+  'setup.recovery.intro':
+    'यह कुंजी बैकअप पुनर्स्थापित करती है और Vidya को नए PC पर ले जाती है। Vidya इसे आपके लिए पुनर्प्राप्त नहीं कर सकता। इसे सुरक्षित रखें।',
+  'setup.recovery.print': 'प्रिंट करें',
+  'setup.recovery.copy': 'कॉपी करें',
+  'setup.recovery.retype': 'यह पुष्टि करने के लिए कि आपने इसे सहेजा है, समूह 3 और 5 टाइप करें',
+  'setup.recovery.group3': 'समूह 3',
+  'setup.recovery.group5': 'समूह 5',
+  'setup.ready.licence': 'लाइसेंस सक्रिय',
+  'setup.ready.school': 'स्कूल बन गया',
+  'setup.ready.recovery': 'रिकवरी कुंजी सहेजी गई',
+  'setup.ready.staff': 'स्टाफ़ आमंत्रित करें (बाद में)',
+  'setup.ready.drive': 'Google Drive जोड़ें (बाद में)',
+  'setup.ready.finish': 'Vidya खोलें',
+
+  // PIN / unlock.
+  'pin.unlock': 'अनलॉक करें',
+  'pin.enter': 'अपना PIN दर्ज करें',
+  'pin.choose_user': 'आप कौन हैं?',
+  'pin.switch_user': 'उपयोगकर्ता बदलें',
+
+  // Approvals.
+  'approvals.title': 'स्वीकृतियाँ',
+  'approvals.tab.all': 'सभी',
+  'approvals.tab.marks': 'अंक',
+  'approvals.tab.payment': 'भुगतान वापसी',
+  'approvals.tab.attendance': 'उपस्थिति',
+  'approvals.tab.details': 'विद्यार्थी विवरण',
+  'approvals.tab.access': 'पहुँच',
+  'approvals.approve': 'स्वीकृत करें',
+  'approvals.return': 'वापस भेजें',
+  'approvals.reject': 'अस्वीकृत करें',
+  'approvals.before': 'पहले',
+  'approvals.after': 'बाद में',
+  'approvals.empty': 'यहाँ कोई अनुरोध नहीं।',
+
+  // Collect fee (real-data wiring).
+  'fee.success.receiptDyn': 'रसीद {no}.',
+  'fee.comms.notice': 'प्रिंटिंग और WhatsApp साझा करना आगे किसी चरण में आएगा।',
+}
 
 export default errors

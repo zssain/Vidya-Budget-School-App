@@ -63,6 +63,63 @@ const p04: Bundle = {
   hi: {},
 }
 
-p04.hi = Object.fromEntries(Object.entries(p04.en).map(([k, v]) => [k, `TODO-HI: ${v}`]))
+p04.hi = {
+  // Staff & access.
+  'sa.title': 'स्टाफ़ और पहुँच',
+  'sa.add': 'स्टाफ़ जोड़ें',
+  'sa.name': 'नाम',
+  'sa.role': 'भूमिका',
+  'sa.mobile': 'मोबाइल',
+  'sa.email': 'Google ईमेल (वैकल्पिक)',
+  'sa.suspend': 'निलंबित करें',
+  'sa.remove': 'हटाएँ',
+  'sa.resend': 'आमंत्रण फिर भेजें',
+  'sa.revokeInvite': 'आमंत्रण रद्द करें',
+  'sa.invite': 'आमंत्रित करें',
+  'sa.assignments': 'नियुक्तियाँ',
+  'sa.access': 'प्रभावी पहुँच',
+  'sa.inviteCode': 'आमंत्रण कोड',
+  'sa.inviteLink': 'आमंत्रण लिंक',
+  'sa.fingerprint': 'फ़िंगरप्रिंट',
+  'sa.expires': 'समाप्ति',
+  'sa.state.invited': 'आमंत्रित',
+  'sa.state.active': 'सक्रिय',
+  'sa.state.suspended': 'निलंबित',
+  'sa.cancel': 'रद्द करें',
+  'sa.save': 'जोड़ें और आमंत्रण बनाएँ',
+
+  // Conflict review.
+  'cr.title': 'टकराव समीक्षा',
+  'cr.keepA': 'मौजूदा रखें',
+  'cr.keepB': 'आने वाला रखें',
+  'cr.edit': 'संपादित करें',
+  'cr.field': 'फ़ील्ड',
+  'cr.current': 'मौजूदा मान',
+  'cr.incoming': 'आने वाला मान',
+  'cr.empty': 'समीक्षा के लिए कोई टकराव नहीं।',
+  'cr.flags': 'जाँच आवश्यक',
+  'cr.markChecked': 'जाँचा हुआ चिह्नित करें',
+  'cr.flagsEmpty': 'जाँचने के लिए कुछ नहीं।',
+  'cr.resolve': 'हल करें',
+
+  // Sync & devices.
+  'sd.title': 'सिंक और डिवाइस',
+  'sd.server': 'यह कंप्यूटर (स्कूल सर्वर)',
+  'sd.status': 'स्थिति',
+  'sd.addresses': 'पते',
+  'sd.port': 'पोर्ट',
+  'sd.fingerprint': 'फ़िंगरप्रिंट',
+  'sd.devices': 'डिवाइस',
+  'sd.revoke': 'रद्द करें',
+  'sd.owner': 'मालिक',
+  'sd.platform': 'प्लेटफ़ॉर्म',
+  'sd.series': 'सीरीज़',
+  'sd.lastSeen': 'अंतिम बार देखा',
+  'sd.pending': 'भेजने के लिए बाकी',
+  'sd.waiting': 'सर्वर की प्रतीक्षा में',
+  'sd.syncNow': 'अभी सिंक करें',
+  'sd.online': 'ऑनलाइन',
+  'sd.revoked': 'रद्द किया गया',
+}
 
 export default p04

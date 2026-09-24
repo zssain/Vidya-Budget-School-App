@@ -1,7 +1,7 @@
 import type { Bundle } from '../index'
 
 // Collect fee screen strings (docs/01-MOCK-SPEC.md §8, design/screens/FeeCollection.dc.html).
-// en = verbatim mock text; hi mirrors each key with "TODO-HI: <english>".
+// en = verbatim mock text; hi = the natural-Hindi translation (Phase 8, Part F).
 // Dynamic strings compose with {var} interpolation (see the screen's t(...) calls):
 //   fee.over    = "That is more than the ₹{due} due. Please check the amount."
 //   fee.record  = "Record ₹{amount} payment"
@@ -77,9 +77,75 @@ const en: Record<string, string> = {
   'fee.another': 'Collect another fee',
 }
 
-const hi: Record<string, string> = Object.fromEntries(
-  Object.entries(en).map(([k, v]) => [k, `TODO-HI: ${v}`]),
-)
+const hi: Record<string, string> = {
+  // Sidebar
+  'fee.school': 'सरस्वती पब्लिक स्कूल',
+  'fee.nav.home': 'होम',
+  'fee.nav.collect': 'फ़ीस लें',
+  'fee.nav.students': 'विद्यार्थी और प्रवेश',
+  'fee.nav.receipts': 'रसीदें',
+  'fee.nav.daybook': 'डे बुक',
+  'fee.nav.requests': 'मेरे अनुरोध',
+  'fee.user.name': 'सुरेश पटेल',
+  'fee.user.role': 'लेखाकार',
+
+  // Page header
+  'fee.eyebrow': 'फ़ीस · टर्म 2',
+  'fee.h1': 'फ़ीस लें।',
+  'fee.h1sub': 'पहले विद्यार्थी खोजें।',
+  'fee.search.aria': 'विद्यार्थी खोजें',
+
+  // Student table
+  'fee.table.student': 'विद्यार्थी',
+  'fee.table.class': 'कक्षा',
+  'fee.table.due': 'बकाया',
+  'fee.table.status': 'स्थिति',
+  'fee.table.adm': 'प्रवेश {adm}',
+
+  // Sheet header
+  'fee.sheet.aria': 'कव्या सिंह की फ़ीस लें',
+  'fee.sheet.recordPayment': 'भुगतान दर्ज करें',
+  'fee.close': 'बंद करें',
+
+  // Statement
+  'fee.totalDueNow': 'अभी कुल बकाया',
+
+  // Amount
+  'fee.amountReceived': 'प्राप्त राशि',
+  'fee.over': 'यह ₹{due} बकाया से अधिक है। कृपया राशि जाँचें।',
+  'fee.chip.fullDue': 'पूरा बकाया · ₹3,100',
+  'fee.chip.thousand': '₹1,000',
+  'fee.chip.fiveHundred': '₹500',
+
+  // Payment mode
+  'fee.mode': 'भुगतान का तरीका',
+  'fee.mode.aria': 'भुगतान का तरीका',
+  'fee.mode.cash': 'नकद',
+  'fee.mode.upi': 'UPI',
+  'fee.mode.cheque': 'चेक',
+
+  // Reference field
+  'fee.ref.upi.label': 'UPI लेनदेन ID',
+  'fee.ref.upi.hint': 'उदा. 426518903214',
+  'fee.ref.cheque.label': 'चेक नंबर और बैंक',
+  'fee.ref.cheque.hint': 'उदा. 004512 · SBI',
+
+  // Footer
+  'fee.balanceAfter': 'भुगतान के बाद शेष',
+  'fee.balanceSub': '₹{due} बकाया − ₹{pay} यह भुगतान',
+  'fee.record': '₹{amount} का भुगतान दर्ज करें',
+  'fee.enterValid': 'मान्य राशि दर्ज करें',
+  'fee.receiptNote': 'भुगतान दर्ज करने पर रसीद नंबर मिलता है।',
+
+  // Success panel
+  'fee.success.title': 'भुगतान दर्ज हो गया।',
+  'fee.success.receipt': 'रसीद R-A2-0419.',
+  'fee.success.line': '₹{pay} {mode} से · कव्या सिंह · ₹{bal} अभी बकाया',
+  'fee.confirmed': 'स्कूल सर्वर द्वारा पुष्ट',
+  'fee.print': 'रसीद प्रिंट करें',
+  'fee.whatsapp': 'WhatsApp पर साझा करें',
+  'fee.another': 'एक और फ़ीस लें',
+}
 
 const collectFee: Bundle = { en, hi }
 export default collectFee
