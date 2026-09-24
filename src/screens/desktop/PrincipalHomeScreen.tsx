@@ -663,7 +663,7 @@ export default function PrincipalHomeScreen({ data, chrome = true }: { data: Pri
                     background: 'var(--accent)',
                   }}
                 />
-                {t('home.eyebrow')}
+                {data.eyebrow}
               </span>
               <div style={{ display: 'flex', flexDirection: 'column' }}>
                 <h1
@@ -677,7 +677,7 @@ export default function PrincipalHomeScreen({ data, chrome = true }: { data: Pri
                     letterSpacing: '-0.025em',
                   }}
                 >
-                  {t('home.h1')}
+                  {data.greeting}
                 </h1>
                 <span
                   className="v-serif"
@@ -690,7 +690,7 @@ export default function PrincipalHomeScreen({ data, chrome = true }: { data: Pri
                     color: 'var(--accent)',
                   }}
                 >
-                  {t('home.h1sub')}
+                  {data.subtitle}
                 </span>
               </div>
             </div>
@@ -942,56 +942,45 @@ export default function PrincipalHomeScreen({ data, chrome = true }: { data: Pri
                 </h2>
               </div>
               <div style={{ display: 'flex', flexDirection: 'column', flexGrow: 1 }}>
-                <div
-                  style={{
-                    display: 'flex',
-                    gap: '12px',
-                    padding: '14px 24px',
-                    borderTop: '1px solid #E8EDEC',
-                  }}
-                >
-                  <span
+                {data.needs.length === 0 ? (
+                  <div
                     style={{
-                      width: '8px',
-                      height: '8px',
-                      marginTop: '6px',
-                      borderRadius: '4px',
-                      background: '#C5AB7A',
-                      flexShrink: 0,
+                      padding: '14px 24px',
+                      borderTop: '1px solid #E8EDEC',
+                      fontSize: '13px',
+                      color: '#56657A',
                     }}
-                  />
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
-                    <span style={{ fontWeight: 500 }}>{t('home.needs.attendance.title')}</span>
-                    <span style={{ fontSize: '12px', color: '#56657A' }}>
-                      {t('home.needs.attendance.sub')}
-                    </span>
+                  >
+                    {t('home.needs.empty')}
                   </div>
-                </div>
-                <div
-                  style={{
-                    display: 'flex',
-                    gap: '12px',
-                    padding: '14px 24px',
-                    borderTop: '1px solid #E8EDEC',
-                  }}
-                >
-                  <span
-                    style={{
-                      width: '8px',
-                      height: '8px',
-                      marginTop: '6px',
-                      borderRadius: '4px',
-                      background: '#C0392B',
-                      flexShrink: 0,
-                    }}
-                  />
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
-                    <span style={{ fontWeight: 500 }}>{t('home.needs.conflict.title')}</span>
-                    <span style={{ fontSize: '12px', color: '#56657A' }}>
-                      {t('home.needs.conflict.sub')}
-                    </span>
-                  </div>
-                </div>
+                ) : (
+                  data.needs.map((n, i) => (
+                    <div
+                      key={i}
+                      style={{
+                        display: 'flex',
+                        gap: '12px',
+                        padding: '14px 24px',
+                        borderTop: '1px solid #E8EDEC',
+                      }}
+                    >
+                      <span
+                        style={{
+                          width: '8px',
+                          height: '8px',
+                          marginTop: '6px',
+                          borderRadius: '4px',
+                          background: n.tone === 'danger' ? '#C0392B' : '#C5AB7A',
+                          flexShrink: 0,
+                        }}
+                      />
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
+                        <span style={{ fontWeight: 500 }}>{n.title}</span>
+                        <span style={{ fontSize: '12px', color: '#56657A' }}>{n.sub}</span>
+                      </div>
+                    </div>
+                  ))
+                )}
               </div>
               <div
                 style={{
@@ -1014,7 +1003,7 @@ export default function PrincipalHomeScreen({ data, chrome = true }: { data: Pri
                   {t('home.lastBackup')}
                 </span>
                 <span style={{ fontSize: '13px', color: '#13233F' }}>
-                  {t('home.lastBackupValue')}
+                  {data.lastBackup ?? t('home.noBackup')}
                 </span>
               </div>
             </section>

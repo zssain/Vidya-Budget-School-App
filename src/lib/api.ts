@@ -499,6 +499,15 @@ export interface PrincipalDashboard {
   classes: ClassPct[]
   fee_days: FeeDay[]
   fee_total_paise: number
+  term_label: string | null
+  open_conflicts: number
+  last_backup: LastBackupInfo | null
+}
+
+export interface LastBackupInfo {
+  at: string
+  status: string
+  destination: string | null
 }
 
 export interface AccountantDashboard {

@@ -41,9 +41,26 @@ export interface HomeDay {
   value: number
 }
 
+/** One "Needs attention" item. `tone` picks the dot colour (warn=gold, danger=red). */
+export interface HomeNeed {
+  tone: 'warn' | 'danger'
+  title: string
+  sub: string
+}
+
 export interface PrincipalHomeData {
+  /** Eyebrow date + term, e.g. 'Wednesday, 23 September · Term 1'. */
+  eyebrow: string
+  /** Serif h1 greeting, e.g. 'Good morning, Priya.'. */
+  greeting: string
+  /** Italic sub-line, e.g. 'Four approvals are waiting.'. */
+  subtitle: string
   stats: HomeStat[]
   approvals: HomeApproval[]
+  /** "Needs attention" items (empty = an all-clear line). */
+  needs: HomeNeed[]
+  /** "Last backup" line, or null when no backup has run. */
+  lastBackup: string | null
   classes: HomeClass[]
   days: HomeDay[]
   /** Fee-collection total (mock: '₹2,51,200'). */
@@ -51,6 +68,14 @@ export interface PrincipalHomeData {
 }
 
 export const principalHomeFixture: PrincipalHomeData = {
+  eyebrow: 'Wednesday, 23 September · Term 1',
+  greeting: 'Good morning, Priya.',
+  subtitle: 'Four approvals are waiting.',
+  needs: [
+    { tone: 'warn', title: 'VII-B attendance not submitted', sub: 'Class teacher R. Nair · usually done by 10:30' },
+    { tone: 'danger', title: 'One edit conflict to review', sub: 'Riya Verma · address changed on two phones' },
+  ],
+  lastBackup: 'Verified today at 6:02 AM · this PC and school Drive',
   stats: [
     { value: '91.4%', label: 'attendance today', note: '612 of 670 marked · VII-B pending' },
     {

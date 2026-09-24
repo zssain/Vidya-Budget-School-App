@@ -3,7 +3,7 @@
 //! percentages) with the tested `format.ts`, so the mock pixels come from one
 //! formatter. `today` is passed in (RFC-3339 midnight handling / testability).
 
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
 use std::collections::BTreeMap;
 
@@ -61,6 +61,50 @@ pub struct PrincipalDashboard {
     pub classes: Vec<ClassPct>,
     pub fee_days: Vec<FeeDay>,
     pub fee_total_paise: i64,
+    // Narrative context (drives the greeting/date/needs/backup — real, not fixture).
+    /// Current term name by `today` (None outside any term range).
+    pub term_label: Option<String>,
+    /// Open edit conflicts awaiting the Principal's review.
+    pub open_conflicts: i64,
+    /// The most recent completed backup run, or None if none has run.
+    pub last_backup: Option<LastBackupInfo>,
+}
+
+/// The latest completed backup, for the "Last backup" line (honest status §3.13).
+#[derive(Debug, Clone, Serialize)]
+pub struct LastBackupInfo {
+    /// RFC-3339 finished_at; the frontend renders it relatively.
+    pub at: String,
+    pub status: String,
+    pub destination: Option<String>,
+}
+
+/// Current term name for `today` (YYYY-MM-DD) in the current session, if any.
+pub fn current_term(conn: &Connection, today: &str) -> rusqlite::Result<Option<String>> {
+    conn.query_row(
+        "SELECT t.name FROM term t JOIN academic_session s ON s.id = t.session_id \
+         WHERE s.is_current = 1 AND date(?1) BETWEEN date(t.starts_on) AND date(t.ends_on) \
+         ORDER BY t.starts_on LIMIT 1",
+        params![today],
+        |r| r.get::<_, String>(0),
+    )
+    .optional()
+}
+
+/// Count of open edit conflicts (Principal Home "Needs attention").
+pub fn open_conflicts(conn: &Connection) -> rusqlite::Result<i64> {
+    count(conn, "SELECT COUNT(*) FROM conflict WHERE status='open'", &[])
+}
+
+/// The most recent completed backup run.
+pub fn last_backup(conn: &Connection) -> rusqlite::Result<Option<LastBackupInfo>> {
+    conn.query_row(
+        "SELECT finished_at, status, destination FROM backup_run \
+         WHERE finished_at IS NOT NULL ORDER BY finished_at DESC LIMIT 1",
+        [],
+        |r| Ok(LastBackupInfo { at: r.get(0)?, status: r.get(1)?, destination: r.get(2)? }),
+    )
+    .optional()
 }
 
 fn count(conn: &Connection, sql: &str, p: &[&dyn rusqlite::ToSql]) -> rusqlite::Result<i64> {
@@ -329,5 +373,8 @@ pub fn principal_dashboard(conn: &Connection, today: &str) -> rusqlite::Result<P
         classes: att.classes,
         fee_days,
         fee_total_paise,
+        term_label: current_term(conn, today)?,
+        open_conflicts: open_conflicts(conn)?,
+        last_backup: last_backup(conn)?,
     })
 }
