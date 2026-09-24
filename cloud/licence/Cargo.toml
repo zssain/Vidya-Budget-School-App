@@ -1,6 +1,10 @@
-# Vidya dev licence service (prompts/P03 Step 2). A SEPARATE binary — NOT a member
-# of the app workspace, so it never ships inside the desktop/Android apps. Phase 10
-# turns this into the production service.
+# Vidya licence service (prompts/P10; started as the P03 dev service). A SEPARATE
+# binary — NOT a member of the app workspace, so it never ships inside the
+# desktop/Android apps. It runs the company side: purchase flow (manual UPI QR),
+# licence register + activation API, and the company admin panel.
+#
+# TLS terminates at a reverse proxy in front of this service (same shape as
+# cloud/relay — see the Dockerfile / README), so no in-process TLS crate is used.
 [package]
 name = "vidya-licence"
 version = "0.1.0"
@@ -10,20 +14,50 @@ publish = false
 # Standalone workspace so `cargo` here never touches the app workspace.
 [workspace]
 
+[lib]
+name = "vidya_licence"
+path = "src/lib.rs"
+
 [[bin]]
 name = "vidya-licence"
 path = "src/main.rs"
 
 [dependencies]
-axum = "0.7"
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal"] }
+# HTTP + async runtime (Step 3 dep list).
+axum = { version = "0.7", default-features = false, features = ["http1", "json", "query", "tokio", "form"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "time", "sync", "signal"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# Persistent store (Step 2). `bundled` compiles SQLite in — the licence DB is
+# operational data, not school data, so plain SQLite; backups are encrypted at the
+# ops layer (Step 7). No SQLCipher here.
+rusqlite = { version = "0.32", features = ["bundled"] }
+# Licence signing (production ed25519 key from env; dev key from .dev-keys/).
 ed25519-dalek = "2"
 rand = "0.8"
-base64 = "0.22"
-time = { version = "0.3", features = ["formatting"] }
-# P05: the relay secret is HMAC-SHA256(shared_key, school_id) — the same recipe
-# cloud/relay recomputes to verify a tunnel, so the relay stays stateless.
+# Admin password hashing (Argon2id) + activation-code check.
+argon2 = "0.5"
+# relay_secret = HMAC-SHA256(shared_key, school_id); recovery-proof HMAC; code hash.
 hmac = "0.12"
 sha2 = "0.10"
+base64 = "0.22"
+# Ids for licences, orders, customers, sessions, csrf tokens.
+uuid = { version = "1", features = ["v7"] }
+time = { version = "0.3", features = ["formatting", "parsing", "macros"] }
+# Encrypt activation codes at rest so the Account page can re-display them
+# (owner decision, P10). Same AEAD the app uses (§13); the ONE dep beyond the
+# Step-3 list — flagged for owner sign-off in docs/phase-notes/phase-10.md.
+chacha20poly1305 = "0.10"
+# Structured logs without secrets (Step 7).
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", default-features = false, features = ["fmt", "std"] }
+
+# Test-only: drive the real router (oneshot) + build orders/verify signatures.
+# Never compiled into the service binary.
+[dev-dependencies]
+rusqlite = { version = "0.32", features = ["bundled"] }
+ed25519-dalek = "2"
+base64 = "0.22"
+time = { version = "0.3", features = ["formatting"] }
+serde_json = "1"
+tower = { version = "0.5", features = ["util"] }

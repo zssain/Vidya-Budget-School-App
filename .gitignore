@@ -16,6 +16,9 @@ size-report.json
 # Environment and secrets
 .env
 .env.*
+# ...but keep the committed, secret-free example templates
+!.env.example
+!**/.env.example
 *.p12
 *.pem
 *.p8

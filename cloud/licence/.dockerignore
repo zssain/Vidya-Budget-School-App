@@ -1,0 +1,10 @@
+# Keep the Docker build context small + never ship dev secrets or local state.
+target/
+.dev-keys/
+*.db
+*.db-wal
+*.db-shm
+fly.toml
+README.md
+.env
+.env.*

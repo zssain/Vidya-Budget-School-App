@@ -1,511 +1,234 @@
-//! Vidya dev licence service (prompts/P03 Step 2, docs/00-SYSTEM-CONTEXT.md §10).
+//! Vidya licence service — binary entry point (prompts/P10, docs §10).
 //!
-//! A small, SEPARATE Rust binary — not a member of the app workspace, so it never
-//! ships inside the apps. In this phase it runs in `--dev` mode only. Phase 10
-//! turns it into the production service (purchase webhook, admin panel, …).
+//! A SEPARATE binary — not a member of the app workspace, so it never ships inside
+//! the desktop/Android apps. It runs the company side: the public website + manual
+//! UPI purchase flow, the production licence API (activate/check/transfer), and the
+//! company admin panel. TLS terminates at a reverse proxy in front of it.
 //!
-//! Usage (run from `cloud/licence/`):
-//!   cargo run -- gen-code        # mint + store a VIDYA-XXXX-XXXX-XXXX code, print it
-//!   cargo run -- --dev           # start the dev service on 127.0.0.1:8787
-//!   cargo run -- print-key       # print the dev ed25519 public key (base64)
-//!
-//! On first run a dev ed25519 keypair is generated into `.dev-keys/` (gitignored)
-//! and its public key is printed — paste it into `src-tauri/build-config/dev.json`
-//! as `licence_public_key`.
-//!
-//! The code store is a small JSON file in `.dev-keys/` so the `gen-code` CLI and
-//! the running server (separate processes) share state. (§10 calls it an
-//! "in-memory code store"; a dev file-backed store is the practical equivalent
-//! that lets the CLI seed codes the server can activate.)
+//! CLI:
+//!   cargo run -- --dev            start locally (dev keys under .dev-keys/, http)
+//!   cargo run -- serve            production (all secrets from env; see README)
+//!   cargo run -- gen-code         dev: issue a licence + print an activation code
+//!   cargo run -- print-key        print the signing public key (base64)
+//!   cargo run -- migrate          create/upgrade the DB at $LICENCE_DB, then exit
+//!   cargo run -- admin-add EMAIL  create/reset an admin ($LICENCE_ADMIN_PASSWORD)
 
-use axum::{extract::State, response::IntoResponse, routing::post, Json, Router};
-use base64::engine::general_purpose::STANDARD;
-use base64::Engine;
-use ed25519_dalek::{Signer, SigningKey};
-use hmac::{Hmac, Mac};
-use rand::RngCore;
-use serde::{Deserialize, Serialize};
-use sha2::Sha256;
-use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::net::SocketAddr;
+use std::time::Instant;
 
-// Crockford base32 alphabet (excludes I, L, O, U) — docs §9 / P03 Step 2.
-const CROCKFORD: &[u8; 32] = b"0123456789ABCDEFGHJKMNPQRSTVWXYZ";
-const DEFAULT_PORT: u16 = 8787;
+use axum::extract::Request;
+use axum::middleware::Next;
+use axum::response::Response;
 
-/// Dev default for the relay shared key (P05). In production BOTH `cloud/licence`
-/// and `cloud/relay` are given the same `RELAY_SHARED_KEY` via env; this default
-/// only exists so `--dev` works out of the box. The relay recomputes the same
-/// `relay_secret` to verify a tunnel, so the value must match on both services.
-const DEV_RELAY_SHARED_KEY: &str = "vidya-dev-relay-shared-key-change-me";
-
-/// The relay secret for a school: `base64(HMAC-SHA256(shared_key, school_id))`.
-/// `cloud/relay` recomputes this exact value to authenticate a tunnel (stateless
-/// relay). Keep this recipe byte-identical in both services.
-fn relay_secret(shared_key: &[u8], school_id: &str) -> String {
-    let mut mac = <Hmac<Sha256> as Mac>::new_from_slice(shared_key).expect("HMAC accepts any key length");
-    mac.update(school_id.as_bytes());
-    STANDARD.encode(mac.finalize().into_bytes())
-}
-
-// ------------------------------------------------------------------ store ---
-
-/// The signed licence JSON (docs §10). Field set is fixed by the contract; the
-/// app verifies the signature over these exact bytes, then parses them.
-#[derive(Debug, Clone, Serialize)]
-struct LicenceJson {
-    licence_id: String,
-    school_id: String,
-    plan: String,
-    max_students: Option<u32>,
-    max_devices: Option<u32>,
-    issued_at: String,
-    server_machine_id: String,
-}
-
-/// One code's activation record (persisted so activation is idempotent).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct Activation {
-    machine_id: String,
-    licence_id: String,
-    school_id: String,
-    school_name: String,
-    issued_at: String,
-    status: String, // active | revoked | moved
-    /// The exact base64 licence + signature returned at first activation, so a
-    /// retry from the same machine gets byte-identical results (idempotent).
-    licence_b64: String,
-    signature_b64: String,
-    /// The relay secret returned at activation (P05 §10). `#[serde(default)]` keeps
-    /// stores written before P05 loadable (empty → recomputed lazily on retry).
-    #[serde(default)]
-    relay_secret: String,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-struct CodeEntry {
-    #[serde(default)]
-    activation: Option<Activation>,
-}
-
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
-struct Store {
-    #[serde(default)]
-    codes: BTreeMap<String, CodeEntry>,
-}
-
-#[derive(Clone)]
-struct AppState {
-    signing: Arc<SigningKey>,
-    store_path: PathBuf,
-    lock: Arc<Mutex<()>>,
-    /// Shared key for deriving each school's relay secret (P05). Same value on
-    /// `cloud/relay` (env `RELAY_SHARED_KEY`).
-    relay_shared_key: Arc<Vec<u8>>,
-}
-
-impl AppState {
-    fn read_store(&self) -> Store {
-        match std::fs::read_to_string(&self.store_path) {
-            Ok(s) => serde_json::from_str(&s).unwrap_or_default(),
-            Err(_) => Store::default(),
-        }
-    }
-    fn write_store(&self, store: &Store) {
-        let json = serde_json::to_string_pretty(store).expect("serialize store");
-        let _ = std::fs::write(&self.store_path, json);
-    }
-}
-
-// ------------------------------------------------------------------- keys ---
-
-fn keys_dir() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join(".dev-keys")
-}
-
-/// Load the dev signing key, generating (and persisting) one on first run.
-fn ensure_keys() -> SigningKey {
-    let dir = keys_dir();
-    std::fs::create_dir_all(&dir).expect("create .dev-keys");
-    let key_path = dir.join("ed25519.key");
-    if let Ok(seed_b64) = std::fs::read_to_string(&key_path) {
-        if let Ok(seed) = STANDARD.decode(seed_b64.trim()) {
-            if let Ok(seed32) = <[u8; 32]>::try_from(seed.as_slice()) {
-                return SigningKey::from_bytes(&seed32);
-            }
-        }
-    }
-    // First run: generate a random 32-byte seed → deterministic keypair.
-    let mut seed = [0u8; 32];
-    rand::rngs::OsRng.fill_bytes(&mut seed);
-    let signing = SigningKey::from_bytes(&seed);
-    std::fs::write(&key_path, STANDARD.encode(seed)).expect("write dev key");
-    std::fs::write(
-        dir.join("ed25519.pub"),
-        STANDARD.encode(signing.verifying_key().to_bytes()),
-    )
-    .expect("write dev pub");
-    signing
-}
-
-fn public_key_b64(signing: &SigningKey) -> String {
-    STANDARD.encode(signing.verifying_key().to_bytes())
-}
-
-/// The signing key for THIS run: `LICENCE_SIGNING_KEY` (base64 32-byte seed) in
-/// production, otherwise the dev key persisted under `.dev-keys/`.
-fn load_signing_key() -> SigningKey {
-    if let Ok(b64) = std::env::var("LICENCE_SIGNING_KEY") {
-        let seed = STANDARD.decode(b64.trim()).expect("LICENCE_SIGNING_KEY must be base64");
-        let seed32 = <[u8; 32]>::try_from(seed.as_slice())
-            .expect("LICENCE_SIGNING_KEY must decode to exactly 32 bytes");
-        return SigningKey::from_bytes(&seed32);
-    }
-    ensure_keys()
-}
-
-/// Where the code/licence store lives: `LICENCE_DATA_DIR` (a persistent Fly
-/// volume) in production, otherwise `.dev-keys/`.
-fn data_dir() -> PathBuf {
-    std::env::var("LICENCE_DATA_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| keys_dir())
-}
-
-/// Generate a fresh PRODUCTION ed25519 keypair: print the PUBLIC key (for
-/// build-config/release.json + the `LICENCE_PUBLIC_KEY` repo Variable) and write
-/// the PRIVATE seed to a local, gitignored file the owner uploads as the
-/// `LICENCE_SIGNING_KEY` Fly secret. Never reuses the dev key; never commits either.
-fn gen_prod_key() {
-    let mut seed = [0u8; 32];
-    rand::rngs::OsRng.fill_bytes(&mut seed);
-    let signing = SigningKey::from_bytes(&seed);
-    let out = Path::new("vidya-licence-signing.key");
-    std::fs::write(out, STANDARD.encode(seed)).expect("write private key file");
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        let _ = std::fs::set_permissions(out, std::fs::Permissions::from_mode(0o600));
-    }
-    println!("Production licence keypair generated.\n");
-    println!("PUBLIC key  → build-config/release.json \"licence_public_key\"");
-    println!("            → GitHub repo Variable LICENCE_PUBLIC_KEY:\n");
-    println!("    {}\n", public_key_b64(&signing));
-    println!("PRIVATE key → written to {} (gitignored).", out.display());
-    println!("            Upload to the licence server as a Fly secret, then DELETE it:\n");
-    println!("    fly secrets set LICENCE_SIGNING_KEY=\"$(cat {})\"\n", out.display());
-    println!("WARNING: keep the private key in two safe places and NEVER commit it.");
-    println!("If it leaks, every issued licence must be re-signed with a new key.");
-}
-
-// -------------------------------------------------------------- utilities ---
-
-fn hex(bytes: &[u8]) -> String {
-    let mut s = String::with_capacity(bytes.len() * 2);
-    for b in bytes {
-        s.push_str(&format!("{b:02x}"));
-    }
-    s
-}
-
-fn random_id(prefix: &str) -> String {
-    let mut b = [0u8; 16];
-    rand::rngs::OsRng.fill_bytes(&mut b);
-    format!("{prefix}_{}", hex(&b))
-}
-
-/// Generate a `VIDYA-XXXX-XXXX-XXXX` code from Crockford base32 characters.
-fn generate_code() -> String {
-    let mut bytes = [0u8; 12];
-    rand::rngs::OsRng.fill_bytes(&mut bytes);
-    let groups: Vec<String> = (0..3)
-        .map(|g| {
-            (0..4)
-                .map(|c| CROCKFORD[(bytes[g * 4 + c] % 32) as usize] as char)
-                .collect::<String>()
-        })
-        .collect();
-    format!("VIDYA-{}-{}-{}", groups[0], groups[1], groups[2])
-}
-
-fn now_iso() -> String {
-    time::OffsetDateTime::now_utc()
-        .format(&time::format_description::well_known::Rfc3339)
-        .unwrap_or_default()
-}
-
-fn sign_licence(signing: &SigningKey, lic: &LicenceJson) -> (String, String) {
-    let raw = serde_json::to_vec(lic).expect("serialize licence");
-    let sig = signing.sign(&raw);
-    (STANDARD.encode(&raw), STANDARD.encode(sig.to_bytes()))
-}
-
-// ------------------------------------------------------------- API models ---
-
-#[derive(Debug, Deserialize)]
-struct ActivateReq {
-    code: String,
-    school_name: String,
-    machine_id: String,
-    #[serde(default)]
-    #[allow(dead_code)]
-    app_version: String,
-}
-
-#[derive(Debug, Serialize)]
-struct ActivateResp {
-    licence: String,
-    signature: String,
-    /// P05 §10: the school server presents this to open its relay tunnel.
-    relay_secret: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct CheckReq {
-    licence_id: String,
-    #[serde(default)]
-    #[allow(dead_code)]
-    machine_id: String,
-}
-
-#[derive(Debug, Serialize)]
-struct CheckResp {
-    status: String,
-}
-
-fn err(status: axum::http::StatusCode, code: &str) -> axum::response::Response {
-    (status, Json(serde_json::json!({ "error": code }))).into_response()
-}
-
-// --------------------------------------------------------------- handlers ---
-
-/// `POST /v1/activate` — idempotent for the same machine_id; 409 for another.
-async fn activate(State(state): State<AppState>, Json(req): Json<ActivateReq>) -> axum::response::Response {
-    use axum::http::StatusCode;
-    let _guard = state.lock.lock().unwrap();
-    let mut store = state.read_store();
-
-    let entry = match store.codes.get(&req.code) {
-        Some(e) => e.clone(),
-        None => return err(StatusCode::NOT_FOUND, "CODE_NOT_FOUND"),
-    };
-
-    if let Some(act) = entry.activation {
-        // Same machine → return the exact same licence (idempotent).
-        if act.machine_id == req.machine_id {
-            // Recompute the relay secret if the stored one predates P05 (empty).
-            let secret = if act.relay_secret.is_empty() {
-                relay_secret(&state.relay_shared_key, &act.school_id)
-            } else {
-                act.relay_secret
-            };
-            return (
-                StatusCode::OK,
-                Json(ActivateResp { licence: act.licence_b64, signature: act.signature_b64, relay_secret: secret }),
-            )
-                .into_response();
-        }
-        // Used by another machine/school.
-        return err(StatusCode::CONFLICT, "CODE_ALREADY_USED");
-    }
-
-    // First activation: mint + sign a perpetual, unlimited licence (dev default).
-    let issued_at = now_iso();
-    let lic = LicenceJson {
-        licence_id: random_id("lic"),
-        school_id: random_id("sch"),
-        plan: "perpetual".to_string(),
-        max_students: None,
-        max_devices: None,
-        issued_at: issued_at.clone(),
-        server_machine_id: req.machine_id.clone(),
-    };
-    let (licence_b64, signature_b64) = sign_licence(&state.signing, &lic);
-    let secret = relay_secret(&state.relay_shared_key, &lic.school_id);
-
-    store.codes.insert(
-        req.code.clone(),
-        CodeEntry {
-            activation: Some(Activation {
-                machine_id: req.machine_id,
-                licence_id: lic.licence_id,
-                school_id: lic.school_id,
-                school_name: req.school_name,
-                issued_at,
-                status: "active".to_string(),
-                licence_b64: licence_b64.clone(),
-                signature_b64: signature_b64.clone(),
-                relay_secret: secret.clone(),
-            }),
-        },
-    );
-    state.write_store(&store);
-
-    (StatusCode::OK, Json(ActivateResp { licence: licence_b64, signature: signature_b64, relay_secret: secret })).into_response()
-}
-
-/// `POST /v1/check` — report the licence status (active|revoked|moved).
-async fn check(State(state): State<AppState>, Json(req): Json<CheckReq>) -> axum::response::Response {
-    use axum::http::StatusCode;
-    let _guard = state.lock.lock().unwrap();
-    let store = state.read_store();
-    for entry in store.codes.values() {
-        if let Some(act) = &entry.activation {
-            if act.licence_id == req.licence_id {
-                return (StatusCode::OK, Json(CheckResp { status: act.status.clone() })).into_response();
-            }
-        }
-    }
-    err(StatusCode::NOT_FOUND, "CODE_NOT_FOUND")
-}
-
-/// `POST /v1/transfer` — not implemented until Phase 8 (licence transfer/restore).
-async fn transfer() -> axum::response::Response {
-    err(axum::http::StatusCode::NOT_IMPLEMENTED, "NOT_IMPLEMENTED")
-}
-
-fn router(state: AppState) -> Router {
-    Router::new()
-        .route("/healthz", axum::routing::get(|| async { "ok" }))
-        .route("/v1/activate", post(activate))
-        .route("/v1/check", post(check))
-        .route("/v1/transfer", post(transfer))
-        .with_state(state)
-}
-
-// -------------------------------------------------------------------- main --
+use vidya_licence::config::{Config, Mode};
+use vidya_licence::state::AppState;
+use vidya_licence::{admin, app_router, db, domain, keys};
 
 #[tokio::main]
 async fn main() {
     let arg = std::env::args().nth(1).unwrap_or_default();
-
-    // gen-prod-key never touches the dev key / .dev-keys — handle it first.
-    if arg == "gen-prod-key" {
-        gen_prod_key();
-        return;
-    }
-
-    let signing = load_signing_key();
-
     match arg.as_str() {
-        "gen-code" => {
-            let dir = data_dir();
-            std::fs::create_dir_all(&dir).ok();
-            let store_path = dir.join("store.json");
-            let mut store: Store = std::fs::read_to_string(&store_path)
-                .ok()
-                .and_then(|s| serde_json::from_str(&s).ok())
-                .unwrap_or_default();
-            let code = generate_code();
-            store.codes.insert(code.clone(), CodeEntry::default());
-            std::fs::write(&store_path, serde_json::to_string_pretty(&store).unwrap())
-                .expect("write store");
-            println!("{code}");
-        }
-        "print-key" => {
-            println!("{}", public_key_b64(&signing));
-        }
-        "--dev" | "serve" => {
-            let port: u16 = std::env::var("LICENCE_PORT")
-                .ok()
-                .and_then(|p| p.parse().ok())
-                .unwrap_or(DEFAULT_PORT);
-            // Dev binds loopback; a container (Fly) sets LICENCE_BIND=0.0.0.0.
-            let bind = std::env::var("LICENCE_BIND").unwrap_or_else(|_| "127.0.0.1".to_string());
-            let prod = std::env::var("LICENCE_SIGNING_KEY").is_ok();
-            let relay_shared_key = std::env::var("RELAY_SHARED_KEY")
-                .unwrap_or_else(|_| DEV_RELAY_SHARED_KEY.to_string())
-                .into_bytes();
-            std::fs::create_dir_all(data_dir()).ok();
-            let state = AppState {
-                signing: Arc::new(signing),
-                store_path: data_dir().join("store.json"),
-                lock: Arc::new(Mutex::new(())),
-                relay_shared_key: Arc::new(relay_shared_key),
-            };
-            println!(
-                "Vidya licence service ({})",
-                if prod { "production" } else { "dev mode" }
-            );
-            println!("  listening on http://{bind}:{port}");
-            println!("  licence_public_key:");
-            println!("    {}", public_key_b64(&state.signing));
-            let listener = tokio::net::TcpListener::bind((bind.as_str(), port))
-                .await
-                .expect("bind licence service");
-            axum::serve(listener, router(state)).await.expect("serve licence service");
-        }
+        "--dev" | "dev" => run_server(Mode::Dev).await,
+        "serve" => run_server(Mode::Serve).await,
+        "gen-code" => gen_code(),
+        "gen-prod-key" => gen_prod_key(),
+        "gen-enc-key" => println!("{}", keys::generate_enc_key_b64()),
+        "print-key" => print_key(),
+        "migrate" => migrate_cli(),
+        "admin-add" => admin_add_cli(),
         _ => {
             eprintln!(
-                "usage:\n  cargo run -- gen-code       mint + store a VIDYA-XXXX-XXXX-XXXX code\n  \
-                 cargo run -- --dev          start the dev service on 127.0.0.1:{DEFAULT_PORT}\n  \
-                 cargo run -- print-key      print the current ed25519 public key (base64)\n  \
-                 cargo run -- gen-prod-key   generate a PRODUCTION keypair (public to stdout,\n                              private to ./vidya-licence-signing.key for a Fly secret)\n\n\
-                 production env: LICENCE_SIGNING_KEY (base64 seed), LICENCE_DATA_DIR (volume),\n                 RELAY_SHARED_KEY, LICENCE_PORT"
+                "usage:\n  cargo run -- --dev            start locally (dev keys, http)\n  \
+                 cargo run -- serve            production (secrets from env)\n  \
+                 cargo run -- gen-code         dev: issue a licence + print an activation code\n  \
+                 cargo run -- gen-prod-key     print a NEW production signing keypair (private + public)\n  \
+                 cargo run -- gen-enc-key      print a NEW base64 code-encryption key\n  \
+                 cargo run -- print-key        print the signing public key (base64)\n  \
+                 cargo run -- migrate          create/upgrade the DB at $LICENCE_DB\n  \
+                 cargo run -- admin-add EMAIL  create/reset an admin ($LICENCE_ADMIN_PASSWORD)"
             );
             std::process::exit(2);
         }
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+// --- server ----------------------------------------------------------------
 
-    #[test]
-    fn code_shape_is_valid_crockford() {
-        let code = generate_code();
-        assert!(code.starts_with("VIDYA-"));
-        let groups: Vec<&str> = code.split('-').collect();
-        assert_eq!(groups.len(), 4); // VIDYA + 3 groups
-        for g in &groups[1..] {
-            assert_eq!(g.len(), 4);
-            assert!(g.bytes().all(|b| CROCKFORD.contains(&b)), "only Crockford chars");
+async fn run_server(mode: Mode) {
+    tracing_subscriber::fmt().with_max_level(tracing::Level::INFO).init();
+
+    let cfg = match Config::from_env(mode) {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("configuration error: {e}");
+            std::process::exit(2);
         }
-        // Never contains the excluded letters.
-        for bad in ['I', 'L', 'O', 'U'] {
-            assert!(!code[6..].contains(bad), "must exclude {bad}");
+    };
+    let signing = match keys::load_signing_key(mode) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("signing key error: {e}");
+            std::process::exit(2);
         }
+    };
+
+    let conn = db::open(&cfg.db_path).expect("open licence DB");
+    if let (Some(email), Some(pw)) = (cfg.admin_email.clone(), cfg.admin_password.clone()) {
+        let email = email.to_ascii_lowercase();
+        admin::ensure_bootstrap_admin(&conn, &email, &pw).expect("bootstrap admin");
     }
 
-    #[test]
-    fn relay_secret_is_stable_hmac_of_school_id() {
-        // Deterministic for a fixed (shared_key, school_id); different school → different secret.
-        // This exact recipe must be reproduced by cloud/relay to authenticate a tunnel.
-        let key = b"shared-key";
-        let a = relay_secret(key, "sch_abc");
-        assert_eq!(a, relay_secret(key, "sch_abc"), "stable for the same inputs");
-        assert_ne!(a, relay_secret(key, "sch_xyz"), "bound to school_id");
-        assert_ne!(a, relay_secret(b"other-key", "sch_abc"), "bound to the shared key");
-        // base64 of a 32-byte HMAC-SHA256 tag.
-        assert_eq!(STANDARD.decode(a).unwrap().len(), 32);
+    if mode == Mode::Dev {
+        println!("Vidya licence service (dev mode)");
+        println!("  website   http://{}/", cfg.bind);
+        println!(
+            "  admin     http://{}/admin  (login: {} / {})",
+            cfg.bind,
+            cfg.admin_email.as_deref().unwrap_or("-"),
+            cfg.admin_password.as_deref().unwrap_or("-")
+        );
+        println!("  DB        {}", cfg.db_path.display());
+        println!("  licence_public_key (paste into src-tauri/build-config/dev.json):");
+        println!("    {}", keys::public_key_b64(&signing));
+        println!("  issue a code with:  cargo run -- gen-code");
+    } else {
+        tracing::info!(bind = %cfg.bind, "vidya-licence serving");
     }
 
-    #[test]
-    fn signed_licence_verifies_with_public_key() {
-        use ed25519_dalek::{Signature, Verifier, VerifyingKey};
-        let mut seed = [0u8; 32];
-        rand::rngs::OsRng.fill_bytes(&mut seed);
-        let signing = SigningKey::from_bytes(&seed);
-        let lic = LicenceJson {
-            licence_id: "lic_1".into(),
-            school_id: "sch_1".into(),
-            plan: "perpetual".into(),
-            max_students: None,
-            max_devices: None,
-            issued_at: "2026-09-23T00:00:00Z".into(),
-            server_machine_id: "m1".into(),
-        };
-        let (lic_b64, sig_b64) = sign_licence(&signing, &lic);
-        let raw = STANDARD.decode(lic_b64).unwrap();
-        let sig = Signature::from_slice(&STANDARD.decode(sig_b64).unwrap()).unwrap();
-        let vk = VerifyingKey::from_bytes(&signing.verifying_key().to_bytes()).unwrap();
-        assert!(vk.verify(&raw, &sig).is_ok());
-        // The signed bytes parse back to the same field values the app expects.
-        let v: serde_json::Value = serde_json::from_slice(&raw).unwrap();
-        assert_eq!(v["plan"], "perpetual");
-        assert_eq!(v["max_students"], serde_json::Value::Null);
-        assert_eq!(v["server_machine_id"], "m1");
+    let bind = cfg.bind.clone();
+    let state = AppState::new(conn, signing, cfg);
+    let app = app_router(state).layer(axum::middleware::from_fn(log_requests));
+
+    let listener = tokio::net::TcpListener::bind(&bind).await.expect("bind licence service");
+    axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>())
+        .with_graceful_shutdown(shutdown_signal())
+        .await
+        .expect("serve licence service");
+}
+
+/// Structured access log — method, path, status, latency. No bodies, no query
+/// strings, no cookies (Step 7: logs never carry secrets; codes only ever travel
+/// in POST bodies, never in a path).
+async fn log_requests(req: Request, next: Next) -> Response {
+    let method = req.method().clone();
+    let path = req.uri().path().to_string();
+    let start = Instant::now();
+    let resp = next.run(req).await;
+    tracing::info!(
+        method = %method,
+        path = %path,
+        status = resp.status().as_u16(),
+        ms = start.elapsed().as_millis() as u64,
+        "req"
+    );
+    resp
+}
+
+async fn shutdown_signal() {
+    let _ = tokio::signal::ctrl_c().await;
+    tracing::info!("shutting down");
+}
+
+// --- dev / ops CLI ---------------------------------------------------------
+
+fn dev_config() -> Config {
+    Config::from_env(Mode::Dev).expect("dev config")
+}
+
+/// Dev helper: create a paid order and issue a licence, then print the code so the
+/// app's local activation (P03/P05) keeps working end-to-end.
+fn gen_code() {
+    let cfg = dev_config();
+    let mut conn = db::open(&cfg.db_path).expect("open dev DB");
+    let now = db::now_iso();
+    let customer_id = db::new_id();
+    let order_ref = format!("VIDYA-ORD-DEV{}", &db::new_id()[..6]);
+    conn.execute(
+        "INSERT INTO customer (id, email, name, phone, school_name, created_at) VALUES (?1,?2,?3,?4,?5,?6)",
+        rusqlite::params![customer_id, "dev@vidya.local", "Dev School", "9000000000", "Dev School", now],
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO purchase_order (id, customer_id, provider, provider_order_id, amount_paise, currency, plan, status, created_at, updated_at)
+         VALUES (?1,?2,'upi_manual',?3,0,'INR','perpetual','created',?4,?4)",
+        rusqlite::params![db::new_id(), customer_id, order_ref, now],
+    )
+    .unwrap();
+    match domain::verify_payment_and_issue(&mut conn, &cfg, "dev-cli", &order_ref, 0, None, "dev gen-code") {
+        Ok(Ok(issue)) => {
+            println!("{}", issue.code);
+            eprintln!("(licence_id {} · order {})", issue.licence_id, order_ref);
+        }
+        other => {
+            eprintln!("gen-code failed: {other:?}");
+            std::process::exit(1);
+        }
+    }
+}
+
+/// Generate the production signing keypair for deployment (docs/DEPLOY-FLY.md §4).
+fn gen_prod_key() {
+    let (priv_b64, pub_b64) = keys::generate_seed_b64();
+    println!("LICENCE_SIGNING_KEY (PRIVATE — set as a secret, e.g. `fly secrets set`, NEVER commit):");
+    println!("  {priv_b64}");
+    println!();
+    println!("licence_public_key (paste into src-tauri/build-config/release.json):");
+    println!("  {pub_b64}");
+}
+
+fn print_key() {
+    let mode = if std::env::var("LICENCE_SIGNING_KEY").is_ok() { Mode::Serve } else { Mode::Dev };
+    match keys::load_signing_key(mode) {
+        Ok(s) => println!("{}", keys::public_key_b64(&s)),
+        Err(e) => {
+            eprintln!("{e}");
+            std::process::exit(2);
+        }
+    }
+}
+
+fn db_path_from_env() -> std::path::PathBuf {
+    std::env::var("LICENCE_DB")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(".dev-keys/licence-dev.db"))
+}
+
+fn migrate_cli() {
+    let path = db_path_from_env();
+    db::open(&path).expect("open + migrate DB");
+    println!("migrated: {}", path.display());
+}
+
+fn admin_add_cli() {
+    let email = match std::env::args().nth(2) {
+        Some(e) => e.to_ascii_lowercase(),
+        None => {
+            eprintln!("usage: admin-add EMAIL  (password from $LICENCE_ADMIN_PASSWORD)");
+            std::process::exit(2);
+        }
+    };
+    let password = std::env::var("LICENCE_ADMIN_PASSWORD").unwrap_or_default();
+    if password.trim().is_empty() {
+        eprintln!("set LICENCE_ADMIN_PASSWORD to the new password");
+        std::process::exit(2);
+    }
+    let conn = db::open(&db_path_from_env()).expect("open DB");
+    let now = db::now_iso();
+    let hash = admin::hash_password(&password);
+    let updated = conn
+        .execute(
+            "UPDATE admin_user SET password_hash = ?2, disabled = 0, failed_count = 0, locked_until = NULL WHERE email = ?1",
+            rusqlite::params![email, hash],
+        )
+        .expect("update admin");
+    if updated == 0 {
+        conn.execute(
+            "INSERT INTO admin_user (id, email, password_hash, role, disabled, created_at) VALUES (?1,?2,?3,'owner',0,?4)",
+            rusqlite::params![db::new_id(), email, hash, now],
+        )
+        .expect("insert admin");
+        println!("created admin {email}");
+    } else {
+        println!("reset password for {email}");
     }
 }

@@ -229,10 +229,13 @@ an environment variable in `[env]` of `fly.toml`, for example:
   LICENCE_DATA_DIR = "/data"
 ```
 
-> Check `cloud/licence/`'s own README / `src` for the exact variable or flag it
-> uses to locate its store, and point it at `/data`. The important rule: **the
-> licence store must live under `/data` (the volume), never on the machine's
-> ephemeral disk.**
+> **Confirmed (P10).** The `vidya-licence` binary reads **`LICENCE_DATA_DIR`** and
+> keeps its SQLite store at **`$LICENCE_DATA_DIR/vidya-licence.db`** (so with the
+> mount above, `/data/vidya-licence.db`). It no longer uses a JSON `store.json`;
+> the store is SQLite. `.dev-keys/` is dev-only and never used in production. The
+> important rule stands: **the store must live under `/data` (the volume), never on
+> the machine's ephemeral disk.** (You can override the exact file with
+> `LICENCE_DB=/data/vidya-licence.db` if you prefer.)
 
 ### 3c. Back up the volume
 
@@ -326,11 +329,30 @@ licence app. Set it from `cloud/licence/`:
 fly secrets set LICENCE_SIGNING_KEY="PASTE_PRODUCTION_ED25519_PRIVATE_KEY_HERE"
 ```
 
-> Use the exact secret name the `vidya-licence` binary expects (check its README /
-> source; `LICENCE_SIGNING_KEY` is a placeholder). If the key is multi-line PEM,
-> the safest way is to read it from a file:
-> `fly secrets set LICENCE_SIGNING_KEY="$(cat prod-ed25519.pem)"` — then delete the
-> local file. Do **not** set this on the relay app.
+> **Confirmed (P10).** The secret name is exactly **`LICENCE_SIGNING_KEY`**, and its
+> value is a **base64 32-byte ed25519 seed** (not PEM). Generate the keypair with
+> `cd cloud/licence && cargo run -- gen-prod-key` — it prints the private seed (set
+> as this secret) and the matching public key (put into the app's release
+> build-config as `LICENCE_PUBLIC_KEY`). Do **not** set this on the relay app.
+
+### 4e. Set the remaining LICENCE app secrets
+
+The licence app needs three more secrets (set from `cloud/licence/`):
+
+```sh
+# Encrypts activation codes at rest so the Account page can re-display them.
+# Generate with:  cd cloud/licence && cargo run -- gen-enc-key
+fly secrets set LICENCE_CODE_ENC_KEY="PASTE_BASE64_32_BYTES"
+
+# The first admin account (created on first start). Use a strong password.
+fly secrets set LICENCE_ADMIN_EMAIL="you@example.com"
+fly secrets set LICENCE_ADMIN_PASSWORD="A_STRONG_PASSWORD"
+```
+
+Optional business text (else `[placeholder]` shows on the site): `COMPANY_NAME`,
+`SUPPORT_EMAIL`, `SUPPORT_PHONE`, `UPI_ID`, `PRICE_TEXT`, `TERMS_URL`, plus a QR
+image path `UPI_QR_PATH` and the downloads feed `RELEASES_JSON` (both point under
+`/data`). See `cloud/licence/.env.example` for the full list.
 
 Verify which secrets are set (this shows names and digests only, never values):
 
@@ -383,10 +405,16 @@ curl https://vidya-relay.fly.dev/healthz
 
 (Replace `vidya-relay` with the actual relay app name.) You should get `ok`.
 
-The licence app has no `/healthz` in the spec; test it responds at all, e.g. its
-base URL over `https://vidya-licence.fly.dev/` — a `404` or `405` still proves the
-machine is up and TLS works. `fly checks list` and `fly logs` are the real signal
-that it started cleanly.
+The licence app **does** expose `/healthz` (P10) — the same as the relay — so the
+`[[http_service.checks]]` block in `cloud/licence/fly.toml` pointing at `/healthz`
+is correct. Test it directly:
+
+```sh
+curl https://vidya-licence.fly.dev/healthz     # → ok
+curl https://vidya-licence.fly.dev/            # → the website home page
+```
+
+`fly checks list` and `fly logs` are the real signal that it started cleanly.
 
 ---
 
@@ -556,6 +584,7 @@ diagnostic commands. `fly config validate` (run in an app folder) catches
 - **`fly volumes extend` exact flag** (§8) — confirm with `--help`; the command
   exists but flag names occasionally change.
 - **Exact prices** — deliberately not stated; read https://fly.io/pricing/ (§7).
-- **Licence-service env var names** (`LICENCE_DATA_DIR`, `LICENCE_SIGNING_KEY`)
-  are placeholders — use the exact names the `vidya-licence` binary expects
-  (check `cloud/licence/`).
+- **Licence-service env var names** — now **confirmed** against the `vidya-licence`
+  binary (P10): `LICENCE_DATA_DIR`, `LICENCE_SIGNING_KEY`, `LICENCE_CODE_ENC_KEY`,
+  `RELAY_SHARED_KEY`, `LICENCE_ADMIN_EMAIL`, `LICENCE_ADMIN_PASSWORD` (+ the
+  optional business text). Full list with descriptions: `cloud/licence/.env.example`.

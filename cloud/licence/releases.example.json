@@ -1,0 +1,58 @@
+{
+  "_comment": "Sample releases.json for the Downloads page (prompts/P10 Step 6). The release workflow (Phase 9) produces the real file from the published (non-draft) GitHub Release: version, per-platform file name, download + installed bytes (decimal, §2), SHA-256 (from SHA256SUMS.txt), requirements, and signed_by (null = unsigned). Point the service at it with RELEASES_JSON=/path/releases.json. Draft releases are NEVER listed. See docs/phase-notes/phase-10.md for the schema.",
+  "generated_at": "2026-09-24T00:00:00Z",
+  "releases": [
+    {
+      "version": "1.0.0",
+      "released_on": "2026-09-24",
+      "draft": false,
+      "notes_url": "https://github.com/zssain/Vidya-Budget-School-App/releases/tag/v1.0.0",
+      "platforms": [
+        {
+          "os": "windows",
+          "label": "Windows 10/11 (64-bit)",
+          "file": "Vidya_1.0.0_x64-setup.exe",
+          "url": "https://github.com/zssain/Vidya-Budget-School-App/releases/download/v1.0.0/Vidya_1.0.0_x64-setup-UNSIGNED.exe",
+          "download_bytes": 6100000,
+          "installed_bytes": 12000000,
+          "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "requirements": "Windows 10 or 11, 64-bit",
+          "signed_by": null
+        },
+        {
+          "os": "macos",
+          "label": "macOS 12+ (Intel & Apple Silicon)",
+          "file": "Vidya_1.0.0_universal.dmg",
+          "url": "https://github.com/zssain/Vidya-Budget-School-App/releases/download/v1.0.0/Vidya_1.0.0_universal-UNSIGNED.dmg",
+          "download_bytes": 5850000,
+          "installed_bytes": 9860000,
+          "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "requirements": "macOS 12 (Monterey) or later",
+          "signed_by": null
+        },
+        {
+          "os": "android",
+          "label": "Android 7+ (arm64-v8a)",
+          "file": "Vidya_1.0.0_arm64-v8a.apk",
+          "url": "https://github.com/zssain/Vidya-Budget-School-App/releases/download/v1.0.0/Vidya_1.0.0_arm64-v8a-UNSIGNED-TEST.apk",
+          "download_bytes": 7200000,
+          "installed_bytes": 9000000,
+          "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "requirements": "Android 7.0 (API 24) or later, arm64-v8a",
+          "signed_by": null
+        },
+        {
+          "os": "android",
+          "label": "Android 7+ (armeabi-v7a)",
+          "file": "Vidya_1.0.0_armeabi-v7a.apk",
+          "url": "https://github.com/zssain/Vidya-Budget-School-App/releases/download/v1.0.0/Vidya_1.0.0_armeabi-v7a-UNSIGNED-TEST.apk",
+          "download_bytes": 6800000,
+          "installed_bytes": 8600000,
+          "sha256": "0000000000000000000000000000000000000000000000000000000000000000",
+          "requirements": "Android 7.0 (API 24) or later, armeabi-v7a (older 32-bit phones)",
+          "signed_by": null
+        }
+      ]
+    }
+  ]
+}

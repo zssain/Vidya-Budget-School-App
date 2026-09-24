@@ -17,6 +17,10 @@ FROM rust:1-bookworm AS build
 WORKDIR /build
 COPY Cargo.toml Cargo.lock ./
 COPY src ./src
+# migrations/ and assets/ are embedded at compile time (include_str!), so the
+# build stage needs them present next to src/.
+COPY migrations ./migrations
+COPY assets ./assets
 RUN cargo build --release --locked --bin vidya-licence
 
 FROM gcr.io/distroless/cc-debian12
