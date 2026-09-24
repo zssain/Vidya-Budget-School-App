@@ -526,3 +526,88 @@ fn base64_of(b: &[u8]) -> String {
     use base64::Engine;
     STANDARD.encode(b)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::db;
+    use crate::seed::seed_demo_school;
+    use crate::sync::protocol::OpStatus;
+    use time::OffsetDateTime;
+    use vidya_core::hlc::Hlc;
+
+    const KEY: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+
+    fn seeded() -> Connection {
+        let mut c = db::open_in_memory(KEY).unwrap();
+        db::run_migrations(&mut c).unwrap();
+        let now = OffsetDateTime::parse("2026-09-23T09:00:00Z", &time::format_description::well_known::Rfc3339).unwrap();
+        seed_demo_school(&mut c, now).unwrap();
+        c
+    }
+
+    /// A draft (pending) sheet + one of its class's students — a fresh
+    /// (sheet_id, student_id) pair so an inserted mark never collides.
+    fn draft_sheet_and_student(conn: &Connection) -> (String, String) {
+        let (sheet_id, class_id): (String, String) = conn
+            .query_row("SELECT id, class_id FROM attendance_sheet WHERE status='draft' LIMIT 1", [], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap();
+        let student_id: String = conn
+            .query_row("SELECT student_id FROM enrollment WHERE class_id=?1 AND to_date IS NULL LIMIT 1", params![class_id], |r| r.get(0))
+            .unwrap();
+        (sheet_id, student_id)
+    }
+
+    /// An attendance_mark op authored by the Principal (passes permission + the
+    /// core module), carrying `mark`, at HLC wall-time `wall_ms`.
+    fn mark_op(sheet_id: &str, student_id: &str, mark: &str, wall_ms: u64) -> Op {
+        Op {
+            op_id: format!("op-{wall_ms}-{mark}"),
+            hlc: Hlc::new(wall_ms, 0, "dev-a1").to_string_form(),
+            device_id: "dev-a1".into(),
+            staff_id: "stf-priya".into(),
+            audience: "class:cls-7b".into(),
+            table: "attendance_mark".into(),
+            record_id: format!("mk-test-{wall_ms}-{mark}"),
+            kind: "insert".into(),
+            payload: serde_json::json!({ "sheet_id": sheet_id, "student_id": student_id, "mark": mark }),
+            base_version: None,
+            server_epoch: 1,
+        }
+    }
+
+    // The 2026-09-25 cutover ≈ 1.7904e12 ms; these straddle it.
+    const AFTER_CUTOVER_MS: u64 = 1_800_000_000_000;
+    const BEFORE_CUTOVER_MS: u64 = 1_600_000_000_000;
+
+    #[test]
+    fn leave_op_after_cutover_is_rejected() {
+        let mut c = seeded();
+        let (sheet, student) = draft_sheet_and_student(&c);
+        let res = apply_op(&mut c, &mark_op(&sheet, &student, "L", AFTER_CUTOVER_MS)).unwrap();
+        assert_eq!(res.status, OpStatus::Rejected);
+        assert_eq!(res.reason_code.as_deref(), Some(codes::LEAVE_MARK_REMOVED));
+        // Rejected → nothing written.
+        let n: i64 = c.query_row("SELECT COUNT(*) FROM attendance_mark WHERE sheet_id=?1 AND student_id=?2", params![sheet, student], |r| r.get(0)).unwrap();
+        assert_eq!(n, 0);
+    }
+
+    #[test]
+    fn leave_op_before_cutover_applies_as_legacy() {
+        let mut c = seeded();
+        let (sheet, student) = draft_sheet_and_student(&c);
+        let res = apply_op(&mut c, &mark_op(&sheet, &student, "L", BEFORE_CUTOVER_MS)).unwrap();
+        assert_eq!(res.status, OpStatus::Confirmed, "pre-cutover L applies as legacy");
+        let mark: String = c.query_row("SELECT mark FROM attendance_mark WHERE sheet_id=?1 AND student_id=?2", params![sheet, student], |r| r.get(0)).unwrap();
+        assert_eq!(mark, "L");
+    }
+
+    #[test]
+    fn present_op_after_cutover_applies() {
+        // Only Leave is removed; a P mark after the cutover applies normally.
+        let mut c = seeded();
+        let (sheet, student) = draft_sheet_and_student(&c);
+        let res = apply_op(&mut c, &mark_op(&sheet, &student, "P", AFTER_CUTOVER_MS)).unwrap();
+        assert_eq!(res.status, OpStatus::Confirmed);
+    }
+}

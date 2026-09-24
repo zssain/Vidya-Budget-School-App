@@ -36,6 +36,10 @@ test.describe('Attendance', () => {
     await expect(page.getByText('4 students not marked yet')).toBeVisible()
     await expect(submit).toBeDisabled()
 
+    // v2 (Phase 11): Present/Absent only — no Leave button, count or hint (§7a).
+    await expect(page.getByRole('button', { name: 'Aadhya Sharma on leave' })).toHaveCount(0)
+    await expect(page.getByText('34 students · tap P or A')).toBeVisible()
+
     await page.getByRole('button', { name: 'Mark all present' }).click()
     await expect(submit).toBeEnabled()
 
