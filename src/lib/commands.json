@@ -71,6 +71,8 @@
     "dashboard_accountant",
     "dashboard_teacher",
     "set_accent",
+    "list_modules",
+    "set_module",
     "verify_audit_chain",
     "backup_status",
     "backup_now",

@@ -95,6 +95,8 @@ pub const COMMANDS: &[&str] = &[
     "dashboard_accountant",
     "dashboard_teacher",
     "set_accent",
+    "list_modules",
+    "set_module",
     "verify_audit_chain",
     "backup_status",
     "backup_now",
@@ -406,6 +408,20 @@ pub fn correct_attendance(state: State<RtCtx>, class_id: String, date: String, s
     let actor = state.require_session()?;
     let mode = state.device_mode;
     state.with_db(|conn| correct_attendance_mark_logic(conn, &actor, mode, &class_id, &date, &student_id, &mark, &reason))
+}
+
+// ---------------------------------------------------------------- modules -----
+
+#[tauri::command]
+pub fn list_modules(state: State<RtCtx>) -> CmdResult<Vec<ModuleDto>> {
+    let actor = state.require_session()?;
+    state.with_db(|conn| list_modules_logic(conn, &actor))
+}
+
+#[tauri::command]
+pub fn set_module(state: State<RtCtx>, key: String, enabled: bool) -> CmdResult<()> {
+    let actor = state.require_session()?;
+    state.with_db(|conn| set_module_logic(conn, &actor, &key, enabled))
 }
 
 // ------------------------------------------------------------- academics ------

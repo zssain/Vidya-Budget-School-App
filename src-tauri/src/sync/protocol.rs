@@ -37,6 +37,9 @@ pub mod codes {
     /// v2 Present/Absent cutover (00-SYSTEM-CONTEXT §7a). The device is running an
     /// old Vidya; the user is told to update. Pre-cutover L ops apply as legacy.
     pub const LEAVE_MARK_REMOVED: &str = "LEAVE_MARK_REMOVED";
+    /// An op whose action belongs to a module the school has switched off
+    /// (00-SYSTEM-CONTEXT §14). The server never applies it while the module is off.
+    pub const MODULE_OFF: &str = "MODULE_OFF";
 }
 
 /// True iff `s` is a plain SQL identifier: 1–64 chars, ASCII letter/underscore

@@ -12,6 +12,7 @@ pub mod db;
 pub mod error;
 pub mod kv;
 pub mod licence;
+pub mod modules;
 pub mod reliability;
 pub mod security;
 pub mod server;
@@ -220,6 +221,7 @@ fn invoke_handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'stat
         get_report_card, class_student_ids, list_audit, admissions_by_month, fee_collection_report, exam_results, list_fee_dues,
         record_payment, list_payments, create_request, cancel_request, list_requests, get_request,
         decide_request, dashboard_principal, dashboard_accountant, dashboard_teacher, set_accent,
+        list_modules, set_module,
         verify_audit_chain, backup_status, backup_now,
         list_staff_access, add_staff, suspend_staff, remove_staff, create_invite, revoke_invite,
         set_class_teacher, assign_subject_teacher, effective_access, list_devices, revoke_device,
@@ -244,6 +246,7 @@ fn invoke_handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'stat
         get_report_card, class_student_ids, list_audit, admissions_by_month, fee_collection_report, exam_results, list_fee_dues,
         record_payment, list_payments, create_request, cancel_request, list_requests, get_request,
         decide_request, dashboard_principal, dashboard_accountant, dashboard_teacher, set_accent,
+        list_modules, set_module,
         verify_audit_chain, backup_status, backup_now,
         list_staff_access, add_staff, suspend_staff, remove_staff, create_invite, revoke_invite,
         set_class_teacher, assign_subject_teacher, effective_access, list_devices, revoke_device,

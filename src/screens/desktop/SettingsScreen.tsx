@@ -4,9 +4,9 @@
 // Licence (app_state), About (build version). Sections whose own editors live
 // elsewhere link to them rather than duplicating.
 
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import * as api from '@/lib/api'
-import type { AuditChainDto, CmdError, SchoolDto } from '@/lib/api'
+import type { AuditChainDto, CmdError, ModuleRow, SchoolDto } from '@/lib/api'
 import { getLang, setLang, t, useLang } from '@/lib/i18n'
 import { navigate } from '@/lib/router'
 import { ACCENT_OPTIONS, loadAccent, setAccent } from '@/lib/theme'
@@ -48,11 +48,29 @@ export default function SettingsScreen() {
   const [school, setSchool] = useState<SchoolDto | null>(null)
   const [accent, setAccentState] = useState<string>(loadAccent())
   const [chain, setChain] = useState<AuditChainDto | null>(null)
+  const [modules, setModules] = useState<ModuleRow[]>([])
+  const [confirmMod, setConfirmMod] = useState<{ key: string; next: boolean } | null>(null)
+
+  const loadModules = useCallback(() => {
+    api.list_modules().then(setModules).catch(() => setModules([]))
+  }, [])
 
   useEffect(() => {
     api.get_school().then(setSchool).catch(() => {})
     api.verify_audit_chain().then(setChain).catch(() => {})
-  }, [])
+    loadModules()
+  }, [loadModules])
+
+  const applyModule = async () => {
+    if (!confirmMod) return
+    try {
+      await api.set_module(confirmMod.key, confirmMod.next)
+    } catch (e) {
+      void (e as CmdError)
+    }
+    setConfirmMod(null)
+    loadModules()
+  }
 
   const chooseAccent = (hex: string) => {
     setAccent(hex)
@@ -116,6 +134,46 @@ export default function SettingsScreen() {
           <div style={{ fontSize: 12, color: 'var(--muted)' }}>{t('settings.language.hint')}</div>
         </div>
 
+        {/* Modules (Languages & modules — prototype settings state 3) */}
+        <div style={{ ...CARD, gridColumn: '1 / -1' }}>
+          <h3 style={H3}>{t('settings.modules.title')}</h3>
+          <p style={{ fontSize: 13, color: 'var(--muted)', margin: '0 0 6px' }}>{t('settings.modules.hint')}</p>
+          {/* Core — always on, not switchable. */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: 16, padding: '13px 0', borderTop: '1px solid var(--track)' }}>
+            <div style={{ flexGrow: 1 }}>
+              <span style={{ fontSize: 14, fontWeight: 500 }}>{t('settings.modules.core')}</span>
+              <div style={{ fontSize: 12, color: 'var(--muted)' }}>{t('settings.modules.coreTag')}</div>
+            </div>
+            <span style={{ fontSize: 13, color: 'var(--muted)' }}>{t('settings.modules.on')}</span>
+          </div>
+          {(['accounts', 'classroom', 'hr', 'circulars', 'wa_auto', 'store'] as const).map((key) => {
+            const row = modules.find((m) => m.key === key)
+            if (!row) return null
+            const optional = key === 'wa_auto' || key === 'store'
+            return (
+              <div key={key} style={{ display: 'flex', alignItems: 'center', gap: 16, padding: '13px 0', borderTop: '1px solid var(--track)' }}>
+                <div style={{ flexGrow: 1 }}>
+                  <span style={{ fontSize: 14, fontWeight: 500 }}>{t(`settings.modules.${key}`)}</span>
+                  <div style={{ fontSize: 12, color: 'var(--muted)' }}>{t(`settings.modules.${key}Sub`)}</div>
+                </div>
+                {optional ? (
+                  <span style={{ fontSize: 11, fontWeight: 500, color: 'var(--pill-partpaid-fg)', background: 'var(--pill-partpaid-bg)', borderRadius: 4, padding: '2px 8px' }}>{t('settings.modules.optional')}</span>
+                ) : null}
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={row.enabled}
+                  aria-label={t(`settings.modules.${key}`)}
+                  onClick={() => setConfirmMod({ key, next: !row.enabled })}
+                  style={{ minWidth: 52, height: 32, borderRadius: 16, cursor: 'pointer', fontSize: 13, fontWeight: 500, border: `1px solid ${row.enabled ? 'var(--accent)' : 'var(--line-strong)'}`, background: row.enabled ? 'var(--accent)' : 'var(--white)', color: row.enabled ? 'var(--white)' : 'var(--muted)' }}
+                >
+                  {row.enabled ? t('settings.modules.on') : t('settings.modules.off')}
+                </button>
+              </div>
+            )
+          })}
+        </div>
+
         {/* Academics */}
         <div style={CARD}>
           <h3 style={H3}>{t('settings.academics.title')}</h3>
@@ -162,6 +220,23 @@ export default function SettingsScreen() {
           <p style={{ fontSize: 12, color: 'var(--muted)', margin: '2px 0 0' }}>{t('settings.about.copyright')}</p>
         </div>
       </div>
+
+      {confirmMod ? (
+        <div onClick={() => setConfirmMod(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(11,26,51,0.45)', display: 'grid', placeItems: 'center', zIndex: 40 }}>
+          <div onClick={(e) => e.stopPropagation()} style={{ width: 420, background: 'var(--surface)', borderRadius: 20, boxShadow: '0 30px 60px rgba(11,26,51,0.3)', padding: '22px 24px', display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <div style={{ fontFamily: SERIF, fontSize: 22 }}>
+              {t(confirmMod.next ? 'settings.modules.confirmOnTitle' : 'settings.modules.confirmOffTitle', { module: t(`settings.modules.${confirmMod.key}`) })}
+            </div>
+            <p style={{ fontSize: 13, color: 'var(--muted)', margin: 0 }}>
+              {t(confirmMod.next ? 'settings.modules.confirmOnBody' : 'settings.modules.confirmOffBody')}
+            </p>
+            <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', marginTop: 4 }}>
+              <button type="button" onClick={() => setConfirmMod(null)} style={{ height: 40, padding: '0 16px', borderRadius: 6, border: '1px solid var(--line-strong)', background: 'var(--surface)', color: 'var(--ink)', fontSize: 13, cursor: 'pointer' }}>{t('settings.modules.cancel')}</button>
+              <button type="button" onClick={applyModule} style={{ height: 40, padding: '0 18px', borderRadius: 6, border: '1px solid var(--accent)', background: 'var(--accent)', color: 'var(--white)', fontSize: 13, fontWeight: 500, cursor: 'pointer' }}>{t('settings.modules.confirm')}</button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   )
 }

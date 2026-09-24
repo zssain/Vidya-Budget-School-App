@@ -3474,6 +3474,60 @@ pub fn class_student_ids_logic(conn: &mut Connection, class_id: &str) -> CmdResu
     Ok(rows)
 }
 
+// ------------------------------------------------------------- modules --------
+
+/// One switchable module for the Settings → Languages & modules screen. `locked`
+/// is currently unused (Core is not listed) but kept for the UI's shape.
+#[derive(Debug, Serialize)]
+pub struct ModuleDto {
+    pub key: String,
+    pub enabled: bool,
+}
+
+/// List the toggle-able modules and their on/off state (Principal only, §14).
+pub fn list_modules_logic(conn: &mut Connection, actor_s: &SessionStaff) -> CmdResult<Vec<ModuleDto>> {
+    let actor = actor_from(conn, actor_s)?;
+    require_allow(&actor, Action::Settings, &Target { kind: TargetKind::School, ..Default::default() })?;
+    let mut out = Vec::with_capacity(vidya_core::modules::TOGGLEABLE_KEYS.len());
+    for key in vidya_core::modules::TOGGLEABLE_KEYS {
+        let enabled: i64 = conn
+            .query_row("SELECT enabled FROM module_setting WHERE key=?1", params![key], |r| r.get(0))
+            .optional()?
+            .unwrap_or(0);
+        out.push(ModuleDto { key: (*key).to_string(), enabled: enabled != 0 });
+    }
+    Ok(out)
+}
+
+/// Turn a module on or off (Principal only, §14). Audited; never deletes data —
+/// turning a module off only hides its screens, rejects its ops and stops syncing
+/// its tables; turning it on again shows everything.
+pub fn set_module_logic(conn: &mut Connection, actor_s: &SessionStaff, key: &str, enabled: bool) -> CmdResult<()> {
+    let actor = actor_from(conn, actor_s)?;
+    require_allow(&actor, Action::Settings, &Target { kind: TargetKind::School, ..Default::default() })?;
+    if !vidya_core::modules::TOGGLEABLE_KEYS.contains(&key) {
+        return Err(CmdError::validation("module", "unknown"));
+    }
+    let now = now_iso();
+    let tx = conn.transaction()?;
+    tx.execute(
+        "INSERT INTO module_setting(key,enabled,changed_by,changed_at) VALUES (?1,?2,?3,?4) \
+         ON CONFLICT(key) DO UPDATE SET enabled=excluded.enabled, changed_by=excluded.changed_by, changed_at=excluded.changed_at",
+        params![key, enabled as i64, actor_s.id, now],
+    )?;
+    crate::security::audit::append(&tx, &AuditEntry {
+        at: now.clone(),
+        staff_id: Some(actor_s.id.clone()),
+        action: "set_module".into(),
+        table: Some("module_setting".into()),
+        record_id: Some(key.to_string()),
+        after_json: Some(serde_json::json!({ "key": key, "enabled": enabled }).to_string()),
+        ..Default::default()
+    })?;
+    tx.commit()?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

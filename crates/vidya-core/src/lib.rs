@@ -21,6 +21,7 @@ pub mod hlc;
 pub mod lease;
 pub mod licence;
 pub mod marks;
+pub mod modules;
 pub mod permissions;
 pub mod receipts;
 pub mod requests;

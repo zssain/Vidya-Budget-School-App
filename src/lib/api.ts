@@ -488,6 +488,12 @@ export interface PendingClass {
   teacher: string | null
 }
 
+/** One switchable module (Settings → Languages & modules). `key` is the module_setting key. */
+export interface ModuleRow {
+  key: string
+  enabled: boolean
+}
+
 export interface PrincipalDashboard {
   attendance_pct_tenths: number
   attendance_marked: number
@@ -701,6 +707,8 @@ export const dashboard_principal = () => invoke<PrincipalDashboard>('dashboard_p
 export const dashboard_accountant = () => invoke<AccountantDashboard>('dashboard_accountant')
 export const dashboard_teacher = () => invoke<TeacherDashboard>('dashboard_teacher')
 export const set_accent = (hex: string) => invoke<void>('set_accent', { hex })
+export const list_modules = () => invoke<ModuleRow[]>('list_modules')
+export const set_module = (key: string, enabled: boolean) => invoke<void>('set_module', { key, enabled })
 export const verify_audit_chain = () => invoke<AuditChainDto>('verify_audit_chain')
 export const backup_status = () => invoke<BackupStatusDto>('backup_status')
 export const backup_now = (recoveryKey?: string) =>

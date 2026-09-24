@@ -46,6 +46,8 @@ pub enum CoreError {
     LeaseExpired,
     #[error("server epoch is old")]
     EpochOld,
+    #[error("module off: {module}")]
+    ModuleOff { module: String },
     #[error("internal error: {id}")]
     Internal { id: String },
 }
@@ -74,6 +76,7 @@ impl CoreError {
             CoreError::SessionReadOnly => "SESSION_READ_ONLY",
             CoreError::LeaseExpired => "LEASE_EXPIRED",
             CoreError::EpochOld => "EPOCH_OLD",
+            CoreError::ModuleOff { .. } => "MODULE_OFF",
             CoreError::Internal { .. } => "INTERNAL",
         }
     }

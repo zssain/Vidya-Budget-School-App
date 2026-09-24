@@ -68,6 +68,9 @@ async fn try_run_server(app: tauri::AppHandle, db_path: &Path, key_hex: &str, st
         .map_err(|e| e.to_string())?;
     let epoch: i64 = conn.query_row("SELECT server_epoch FROM school LIMIT 1", [], |r| r.get(0)).unwrap_or(1);
     let relay_secret: Option<String> = crate::kv::get(&conn, crate::state::KV_RELAY_SECRET).ok().flatten();
+    // Instant sync (§14): the relay tunnel opens only when the paid, off-by-default
+    // module is on. When off (default), the school is reached over LAN and Drive only.
+    let instant_sync_on = crate::modules::is_enabled(&conn, "instant_sync").unwrap_or(false);
     let lan = local_ipv4().into_iter().collect::<Vec<_>>();
 
     // Publish the LAN facts so invites carry the right address/port/fingerprint.
@@ -87,7 +90,7 @@ async fn try_run_server(app: tauri::AppHandle, db_path: &Path, key_hex: &str, st
     // Keep ONE outbound tunnel to the relay so devices can reach us over the
     // internet (P05 Step 1). Skipped until the school has a relay secret (issued at
     // activation). The tunnel shares the server's DB + stops on the same signal.
-    if let Some(secret) = relay_secret.filter(|s| !s.is_empty()) {
+    if let Some(secret) = relay_secret.filter(|s| instant_sync_on && !s.is_empty()) {
         let relay_url = crate::config::get().relay_url.clone();
         if !relay_url.is_empty() {
             let ts = state.clone();

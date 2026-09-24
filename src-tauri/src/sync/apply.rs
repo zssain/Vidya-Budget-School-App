@@ -201,8 +201,13 @@ pub fn apply_op(conn: &mut Connection, op: &Op) -> rusqlite::Result<OpResult> {
         return finalize(conn, op, res);
     }
 
-    // 4) Permission (vidya-core decides).
+    // 4) Module switch (§14) then permission (vidya-core decides). A disabled
+    //    module's op is rejected server-side before the permission check.
     if let Some(action) = action_for(&op.table, &op.kind) {
+        let enabled = crate::modules::enabled_set(conn)?;
+        if vidya_core::modules::require_module(&enabled, action).is_err() {
+            return finalize(conn, op, rejected(&op.op_id, codes::MODULE_OFF));
+        }
         let mut target = target_for(&op.table, &op.payload);
         if target.class_id.is_none() {
             target.class_id = resolve_class_id(conn, &op.table, &op.record_id, &op.payload)?;

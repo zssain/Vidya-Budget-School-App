@@ -48,6 +48,20 @@ pub fn can_see_table(role: Role, table: &str) -> bool {
     }
 }
 
+/// The module a synced table belongs to (`None` = Core / always synced). A
+/// disabled module's tables are excluded from a device's scope (§14). Every
+/// synced table built through Phase 11 is Core; P14–P17 add their module tables
+/// here (e.g. `"voucher" | "ledger_entry" => Some("accounts")`).
+pub fn module_of_table(_table: &str) -> Option<&'static str> {
+    None
+}
+
+/// Is `table` synced given the modules that are ON? Core tables always are; a
+/// module table only when its module is enabled.
+fn table_in_scope(enabled: &BTreeSet<String>, table: &str) -> bool {
+    module_of_table(table).map_or(true, |key| enabled.contains(key))
+}
+
 fn ids_of(conn: &Connection, sql: &str, args: &[&dyn rusqlite::ToSql]) -> rusqlite::Result<Vec<String>> {
     let mut stmt = conn.prepare(sql)?;
     let rows = stmt.query_map(args, |r| r.get::<_, String>(0))?;
@@ -58,6 +72,10 @@ fn ids_of(conn: &Connection, sql: &str, args: &[&dyn rusqlite::ToSql]) -> rusqli
 /// row? Used by `/sync/pull` to scope incremental changes (docs §8.8).
 pub fn visible_row(conn: &Connection, actor: &Actor, table: &str, id: &str) -> rusqlite::Result<Option<Change>> {
     if !can_see_table(actor.role, table) {
+        return Ok(None);
+    }
+    // A disabled module's tables never reach a device (§14).
+    if !table_in_scope(&crate::modules::enabled_set(conn)?, table) {
         return Ok(None);
     }
     let row = match read_row_json(conn, table, id)? {
@@ -142,7 +160,12 @@ pub fn visible_row(conn: &Connection, actor: &Actor, table: &str, id: &str) -> r
 /// Build the full set of rows a device with this actor may see (snapshot).
 pub fn snapshot(conn: &Connection, actor: &Actor) -> rusqlite::Result<Vec<Change>> {
     let mut out: Vec<Change> = Vec::new();
+    // Modules that are ON — a disabled module's tables are left out of the scope (§14).
+    let enabled = crate::modules::enabled_set(conn)?;
     let mut push = |conn: &Connection, table: &str, id: &str, filter: Option<&dyn Fn(&mut serde_json::Value)>| -> rusqlite::Result<()> {
+        if !table_in_scope(&enabled, table) {
+            return Ok(());
+        }
         if let Some(mut row) = read_row_json(conn, table, id)? {
             if let Some(f) = filter {
                 f(&mut row);

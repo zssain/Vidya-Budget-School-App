@@ -27,10 +27,13 @@ fn check_release_config() {
         .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
     let json: serde_json::Value = serde_json::from_str(&raw)
         .unwrap_or_else(|e| panic!("build-config/release.json is not valid JSON: {e}"));
+    // `relay_url` is OPTIONAL from v2: the relay is the off-by-default "Instant
+    // sync" module (00-SYSTEM-CONTEXT §14), so a release without it is valid —
+    // the school is reached over LAN and Google Drive. Every other value is
+    // required.
     for key in [
         "licence_api",
         "licence_public_key",
-        "relay_url",
         "google_client_id_desktop",
         "google_client_id_android",
     ] {
