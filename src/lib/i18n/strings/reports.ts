@@ -49,7 +49,7 @@ const reports: Bundle = {
     'reports.exam.graded': 'Graded',
     'reports.exam.dist': 'Grade distribution',
     // attendance
-    'reports.att.note': 'Open the attendance register’s month view for a class. Below 75% is highlighted [OWNER default].',
+    'reports.att.note': 'Open the attendance register’s month view for a class. It shows each student’s attendance percentage.',
     'reports.att.open': 'Open attendance register',
   },
   hi: {
@@ -92,7 +92,7 @@ const reports: Bundle = {
     'reports.exam.avg': 'औसत',
     'reports.exam.graded': 'ग्रेड दिए गए',
     'reports.exam.dist': 'ग्रेड वितरण',
-    'reports.att.note': 'किसी कक्षा के लिए उपस्थिति रजिस्टर का महीना दृश्य खोलें। 75% से कम को उजागर किया जाता है [OWNER default]।',
+    'reports.att.note': 'किसी कक्षा के लिए उपस्थिति रजिस्टर का महीना दृश्य खोलें। यह हर विद्यार्थी का उपस्थिति प्रतिशत दिखाता है।',
     'reports.att.open': 'उपस्थिति रजिस्टर खोलें',
   },
 }

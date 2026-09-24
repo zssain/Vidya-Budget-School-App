@@ -55,8 +55,10 @@ function buildNeeds(d: PrincipalDashboard): HomeNeed[] {
   for (const cls of d.attendance_pending) {
     needs.push({
       tone: 'warn',
-      title: t('home.needs.unsubmitted', { class: cls }),
-      sub: t('home.needs.unsubmittedSub'),
+      title: t('home.needs.unsubmitted', { class: cls.class }),
+      sub: cls.teacher
+        ? t('home.needs.unsubmittedSubTeacher', { name: cls.teacher })
+        : t('home.needs.unsubmittedSub'),
     })
   }
   if (d.open_conflicts > 0) {
@@ -89,7 +91,7 @@ function mapDashboard(d: PrincipalDashboard, staffName: string): PrincipalHomeDa
     age: formatRelative(new Date(a.created_at)),
   }))
   const pct = `${(d.attendance_pct_tenths / 10).toFixed(1)}%`
-  const pending = d.attendance_pending.join(', ')
+  const pending = d.attendance_pending.map((p) => p.class).join(', ')
   return {
     eyebrow: d.term_label ? `${formatDateLong(now)} · ${d.term_label}` : formatDateLong(now),
     greeting: t(`home.greeting.${greeting(now)}`, { name: firstName(staffName) }),

@@ -72,7 +72,7 @@ export const principalHomeFixture: PrincipalHomeData = {
   greeting: 'Good morning, Priya.',
   subtitle: 'Four approvals are waiting.',
   needs: [
-    { tone: 'warn', title: 'VII-B attendance not submitted', sub: 'Class teacher R. Nair · usually done by 10:30' },
+    { tone: 'warn', title: 'VII-B attendance not submitted', sub: 'Class teacher R. Nair · not submitted yet today' },
     { tone: 'danger', title: 'One edit conflict to review', sub: 'Riya Verma · address changed on two phones' },
   ],
   lastBackup: 'Verified today at 6:02 AM · this PC and school Drive',

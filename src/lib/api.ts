@@ -482,11 +482,17 @@ export interface FeeDay {
   value_paise: number
 }
 
+/** A class whose attendance sheet is still a draft today (Home "Needs attention"). */
+export interface PendingClass {
+  class: string
+  teacher: string | null
+}
+
 export interface PrincipalDashboard {
   attendance_pct_tenths: number
   attendance_marked: number
   attendance_total: number
-  attendance_pending: string[]
+  attendance_pending: PendingClass[]
   collected_today_paise: number
   receipts_today: number
   waiting_paise: number

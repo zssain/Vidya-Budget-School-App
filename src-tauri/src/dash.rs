@@ -30,6 +30,15 @@ pub struct ClassPct {
     pub pct: Option<i64>,
 }
 
+/// A class whose attendance sheet is still a draft today — its display name and
+/// the class teacher's name (None if the class has no class teacher). Drives the
+/// Home "Needs attention" line "Class teacher <name> · not submitted yet today".
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct PendingClass {
+    pub class: String,
+    pub teacher: Option<String>,
+}
+
 /// One "Fee collection" day column (value in paise).
 #[derive(Debug, Clone, Serialize)]
 pub struct FeeDay {
@@ -44,7 +53,7 @@ pub struct PrincipalDashboard {
     pub attendance_pct_tenths: u32,
     pub attendance_marked: i64,
     pub attendance_total: i64,
-    pub attendance_pending: Vec<String>,
+    pub attendance_pending: Vec<PendingClass>,
     // Stat 2 — collected today.
     pub collected_today_paise: i64,
     pub receipts_today: i64,
@@ -242,13 +251,18 @@ pub fn attendance_today(conn: &Connection, today: &str) -> rusqlite::Result<Atte
     Ok(AttendanceToday { present: tp, absent: ta, leave: tl, marked, classes })
 }
 
-/// Names of classes with a `draft` (pending) attendance sheet today.
-pub fn attendance_pending(conn: &Connection, today: &str) -> rusqlite::Result<Vec<String>> {
+/// Classes with a `draft` (pending) attendance sheet today, each with its class
+/// teacher's name (§5: only the class teacher takes attendance for a class).
+pub fn attendance_pending(conn: &Connection, today: &str) -> rusqlite::Result<Vec<PendingClass>> {
     let mut stmt = conn.prepare(
-        "SELECT c.display FROM attendance_sheet s JOIN class c ON c.id=s.class_id \
+        "SELECT c.display, st.name \
+         FROM attendance_sheet s JOIN class c ON c.id=s.class_id \
+         LEFT JOIN staff st ON st.id=c.class_teacher_id \
          WHERE date(s.date)=date(?1) AND s.status='draft' ORDER BY c.sort_order",
     )?;
-    let rows = stmt.query_map(params![today], |r| r.get::<_, String>(0))?;
+    let rows = stmt.query_map(params![today], |r| {
+        Ok(PendingClass { class: r.get(0)?, teacher: r.get(1)? })
+    })?;
     rows.collect()
 }
 

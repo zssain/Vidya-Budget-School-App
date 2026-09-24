@@ -491,7 +491,11 @@ mod tests {
         assert_eq!(d.attendance_pct_tenths, 913, "attendance 91.3%");
         assert_eq!(d.attendance_marked, 612, "612 marked");
         assert_eq!(d.attendance_total, 670, "670 total");
-        assert_eq!(d.attendance_pending, vec!["VII-B".to_string()], "VII-B pending");
+        assert_eq!(
+            d.attendance_pending,
+            vec![dash::PendingClass { class: "VII-B".to_string(), teacher: Some("Meena Iyer".to_string()) }],
+            "VII-B pending, class teacher Meena Iyer"
+        );
 
         // Attendance by class rows (exact mock values).
         let classes: Vec<(String, Option<i64>)> =
