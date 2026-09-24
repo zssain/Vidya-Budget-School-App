@@ -23,7 +23,13 @@ export interface NavSection {
   items: NavItem[]
 }
 
-// Principal — Main.dc.html: Overview / Academics / Finance / School.
+// Principal — prototype NAV_PRINCIPAL (VidyaPrototype.jsx): Overview / Academics /
+// Finance / School. v2 (Phase 11): items whose module or screen does not exist yet
+// are HIDDEN, not placeholders — Timetable & Calendar (P16/P13), Accounts & School
+// store (P15) and Circulars (P14) appear as those phases build them. "Sync &
+// devices" moved into Settings (a LinkRow there) and stays reachable from the
+// header sync pill. "Day book" and "Reports" are reachable from the Fees screen
+// (Day book becomes an Accounts tab in P15); their sub-routes highlight Fees.
 export const PRINCIPAL_NAV: NavSection[] = [
   {
     labelKey: 'nav.section.overview',
@@ -38,23 +44,18 @@ export const PRINCIPAL_NAV: NavSection[] = [
       { key: 'students', labelKey: 'nav.students', icon: 'students', path: '/principal/students' },
       { key: 'attendance', labelKey: 'nav.attendance', icon: 'attendance', path: '/principal/attendance' },
       { key: 'marks', labelKey: 'nav.marks', icon: 'marks', path: '/principal/marks' },
-      // Reports is not in Main.dc.html's sidebar; added under Academics as the
-      // smallest way to reach the P07 reports (flagged for the owner in phase-7.md).
-      { key: 'reports', labelKey: 'nav.reports', icon: 'reportCard', path: '/principal/reports' },
     ],
   },
   {
     labelKey: 'nav.section.finance',
     items: [
       { key: 'fees', labelKey: 'nav.fees', icon: 'fees', path: '/principal/fees' },
-      { key: 'daybook', labelKey: 'nav.daybook', icon: 'daybook', path: '/principal/daybook' },
     ],
   },
   {
     labelKey: 'nav.section.school',
     items: [
       { key: 'staff', labelKey: 'nav.staff', icon: 'staff', path: '/principal/staff' },
-      { key: 'sync', labelKey: 'nav.sync', icon: 'sync', path: '/sync' },
       { key: 'backups', labelKey: 'nav.backups', icon: 'backups', path: '/principal/backups' },
       { key: 'settings', labelKey: 'nav.settings', icon: 'settings', path: '/principal/settings' },
     ],

@@ -49,7 +49,17 @@ export default function FeesScreen() {
 
   return (
     <div style={{ padding: '32px 40px', display: 'flex', flexDirection: 'column', gap: '24px', minHeight: '100%', boxSizing: 'border-box' }}>
-      <PageTitle eyebrow={t('fees.eyebrow')} title={t('fees.title')} sub={t('fees.sub')} />
+      <PageTitle
+        eyebrow={t('fees.eyebrow')}
+        title={t('fees.title')}
+        sub={t('fees.sub')}
+        actions={
+          <div style={{ display: 'inline-flex', gap: '10px' }}>
+            <button type="button" style={secondaryBtn()} onClick={() => navigate('/principal/daybook')}>{t('fees.daybook')}</button>
+            <button type="button" style={secondaryBtn()} onClick={() => navigate('/principal/reports')}>{t('fees.reports')}</button>
+          </div>
+        }
+      />
 
       <div style={{ display: 'inline-flex', alignSelf: 'flex-start', border: '1px solid var(--line-strong)', borderRadius: '6px', overflow: 'hidden' }}>
         <button type="button" style={seg(tab === 'overview')} onClick={() => setTab('overview')}>{t('fees.tab.overview')}</button>

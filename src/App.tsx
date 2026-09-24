@@ -173,7 +173,8 @@ export default function App() {
 // Map a desktop hash path to its active nav key + content. Sub-screens map to
 // their parent nav key. Unbuilt routes fall through to the role's home.
 function desktopRoute(base: string, role: Role): { active: string; node: ReactNode } {
-  if (base === '/sync') return { active: 'sync', node: <SyncDevicesScreen /> }
+  // Sync & devices moved into Settings (P11); highlight Settings when viewing it.
+  if (base === '/sync') return { active: 'settings', node: <SyncDevicesScreen /> }
   if (base === '/search') return { active: '', node: <GlobalSearch role={role} /> }
   if (base === '/inbox') return { active: '', node: <InboxScreen role={role} /> }
   if (base === '/session') return { active: '', node: <SessionScreen /> }
@@ -198,12 +199,14 @@ function desktopRoute(base: string, role: Role): { active: string; node: ReactNo
   if (base === '/principal/grade-scale') return { active: 'settings', node: <GradeScaleScreen /> }
   if (base === '/principal/settings') return { active: 'settings', node: <SettingsScreen /> }
   if (base === '/principal/backups') return { active: 'backups', node: <BackupsScreen /> }
-  if (base === '/principal/reports') return { active: 'reports', node: <ReportsScreen /> }
+  // Reports & the Principal's Day book are reached from the Fees screen (P11):
+  // they highlight Fees. Day book becomes an Accounts tab in P15.
+  if (base === '/principal/reports') return { active: 'fees', node: <ReportsScreen /> }
   if (base === '/principal/fees') return { active: 'fees', node: <FeesScreen /> }
   if (base === '/principal/receipts' || base === '/accountant/receipts')
     return { active: 'receipts', node: <ReceiptsScreen role={role} /> }
-  if (base === '/principal/daybook' || base === '/accountant/daybook')
-    return { active: 'daybook', node: <DayBookScreen /> }
+  if (base === '/principal/daybook') return { active: 'fees', node: <DayBookScreen /> }
+  if (base === '/accountant/daybook') return { active: 'daybook', node: <DayBookScreen /> }
   if (base === '/principal/home') return { active: 'home', node: <PrincipalHomeContainer /> }
   if (base === '/accountant/collect') return { active: 'collect', node: <CollectFeeContainer /> }
   if (role === 'accountant') return { active: 'home', node: <AccountantHomeScreen /> }
