@@ -25,6 +25,7 @@
 //! backup key as a parameter, so this decision does not change the mechanics.
 
 pub mod restore;
+pub mod schedule;
 
 use std::path::{Path, PathBuf};
 

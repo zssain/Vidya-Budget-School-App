@@ -61,7 +61,18 @@ const en: Record<string, string> = {
   'backups.restore.body': 'On a new PC, open Vidya → Recover and enter your recovery key to restore from a backup.',
   'backups.history.title': 'Backup history',
   'backups.history.empty': 'No backups yet.',
-  'backups.history.note': 'Automatic daily backups and a manual “Back up now” are being finalized — the backup engine is built and tested; enabling it safely is the next step.',
+  'backups.enabledPill': 'Automatic backups on',
+  'backups.autoNote': 'Vidya backs up automatically when your data changes (checked every {secs} seconds).',
+  'backups.now': 'Back up now',
+  'backups.running': 'Backing up…',
+  'backups.done': 'Backup complete.',
+  'backups.enable.title': 'Turn on backups',
+  'backups.enable.body': 'Enter your recovery key — the 30-character key shown when you set up the school. Backups are encrypted with it, so you’ll need the same key to restore. Keep it safe; it can’t be recovered for you.',
+  'backups.enable.placeholder': 'XXXXX-XXXXX-XXXXX-XXXXX-XXXXX-XXXXX',
+  'backups.enable.button': 'Turn on backups & back up now',
+  'backups.status.verified': 'Backed up · this PC and Drive',
+  'backups.status.partial': 'Backed up · this PC',
+  'backups.status.failed': 'Backup failed',
 }
 
 const hi: Record<string, string> = {
@@ -123,7 +134,18 @@ const hi: Record<string, string> = {
   'backups.restore.body': 'नए PC पर, Vidya → रिकवर खोलें और बैकअप से पुनर्स्थापित करने के लिए अपनी रिकवरी कुंजी दर्ज करें।',
   'backups.history.title': 'बैकअप इतिहास',
   'backups.history.empty': 'अभी कोई बैकअप नहीं।',
-  'backups.history.note': 'स्वचालित दैनिक बैकअप और मैन्युअल “अभी बैकअप लें” अंतिम रूप दिए जा रहे हैं — बैकअप इंजन बना और परखा हुआ है; इसे सुरक्षित रूप से सक्षम करना अगला कदम है।',
+  'backups.enabledPill': 'स्वचालित बैकअप चालू',
+  'backups.autoNote': 'आपके डेटा में बदलाव होने पर Vidya अपने आप बैकअप लेता है (हर {secs} सेकंड जाँचा जाता है)।',
+  'backups.now': 'अभी बैकअप लें',
+  'backups.running': 'बैकअप हो रहा है…',
+  'backups.done': 'बैकअप पूरा हुआ।',
+  'backups.enable.title': 'बैकअप चालू करें',
+  'backups.enable.body': 'अपनी रिकवरी कुंजी दर्ज करें — वही 30-अक्षरों की कुंजी जो स्कूल सेटअप के समय दिखाई गई थी। बैकअप इसी से एन्क्रिप्ट होते हैं, इसलिए पुनर्स्थापित करने के लिए वही कुंजी चाहिए। इसे सुरक्षित रखें; इसे पुनः प्राप्त नहीं किया जा सकता।',
+  'backups.enable.placeholder': 'XXXXX-XXXXX-XXXXX-XXXXX-XXXXX-XXXXX',
+  'backups.enable.button': 'बैकअप चालू करें और अभी बैकअप लें',
+  'backups.status.verified': 'बैकअप हुआ · यह PC और Drive',
+  'backups.status.partial': 'बैकअप हुआ · यह PC',
+  'backups.status.failed': 'बैकअप विफल',
 }
 
 const settings: Bundle = { en, hi }

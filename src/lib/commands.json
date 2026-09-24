@@ -73,6 +73,7 @@
     "set_accent",
     "verify_audit_chain",
     "backup_status",
+    "backup_now",
     "list_staff_access",
     "add_staff",
     "suspend_staff",

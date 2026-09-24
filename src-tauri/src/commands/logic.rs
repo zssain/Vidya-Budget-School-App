@@ -2729,8 +2729,15 @@ pub struct BackupRunDto {
     pub chain_head: Option<String>,
 }
 
+/// Backups screen status: whether backups are enabled on this PC + recent runs.
+#[derive(Debug, Serialize)]
+pub struct BackupStatusDto {
+    pub enabled: bool,
+    pub runs: Vec<BackupRunDto>,
+}
+
 /// Recent backup runs, newest first (read-only).
-pub fn backup_status_logic(conn: &mut Connection) -> CmdResult<Vec<BackupRunDto>> {
+pub fn backup_runs_logic(conn: &mut Connection) -> CmdResult<Vec<BackupRunDto>> {
     let mut stmt = conn.prepare(
         "SELECT COALESCE(finished_at, started_at), status, destination, chain_head \
          FROM backup_run ORDER BY started_at DESC LIMIT 30",

@@ -97,6 +97,7 @@ pub const COMMANDS: &[&str] = &[
     "set_accent",
     "verify_audit_chain",
     "backup_status",
+    "backup_now",
     // Phase 4 — staff & access, invitations, devices, sync, conflicts.
     "list_staff_access",
     "add_staff",
@@ -575,11 +576,22 @@ pub fn verify_audit_chain(state: State<RtCtx>) -> CmdResult<AuditChainDto> {
     })
 }
 
-/// Recent backup runs for the Backups screen (read-only; the write path + daily
-/// scheduler land next). Honest status: empty until a backup has actually run.
+/// Backups screen status: enabled? + recent runs.
 #[tauri::command]
-pub fn backup_status(state: State<RtCtx>) -> CmdResult<Vec<BackupRunDto>> {
-    state.with_db(backup_status_logic)
+pub fn backup_status(state: State<RtCtx>) -> CmdResult<BackupStatusDto> {
+    let enabled = crate::backup::schedule::read_cached_key(&state.data_dir).is_some();
+    let runs = state.with_db(backup_runs_logic)?;
+    Ok(BackupStatusDto { enabled, runs })
+}
+
+/// Turn on backups (first time, with the recovery key) or "Back up now" (once
+/// enabled). Runs one encrypted, verified backup and records it.
+#[tauri::command]
+pub fn backup_now(state: State<RtCtx>, recovery_key: Option<String>) -> CmdResult<BackupStatusDto> {
+    crate::backup::schedule::backup_now(&state, recovery_key.as_deref())?;
+    let enabled = crate::backup::schedule::read_cached_key(&state.data_dir).is_some();
+    let runs = state.with_db(backup_runs_logic)?;
+    Ok(BackupStatusDto { enabled, runs })
 }
 
 #[cfg(debug_assertions)]

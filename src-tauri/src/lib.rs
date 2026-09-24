@@ -178,6 +178,23 @@ pub fn run() {
                     recheck_licence(&handle).await;
                 });
             }
+
+            // Automatic backups (P08 engine, wired P10): tick every TICK_SECS and
+            // back up ONLY when the data changed since the last successful backup.
+            // No-op until backups are enabled (no cached key) — see backup::schedule.
+            #[cfg(not(target_os = "android"))]
+            {
+                let handle = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    let mut ticker =
+                        tokio::time::interval(std::time::Duration::from_secs(backup::schedule::TICK_SECS));
+                    loop {
+                        ticker.tick().await;
+                        let ctx = handle.state::<RtCtx>();
+                        backup::schedule::scheduler_tick(&ctx);
+                    }
+                });
+            }
             Ok(())
         })
         .invoke_handler(invoke_handler())
@@ -203,7 +220,7 @@ fn invoke_handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'stat
         get_report_card, class_student_ids, list_audit, admissions_by_month, fee_collection_report, exam_results, list_fee_dues,
         record_payment, list_payments, create_request, cancel_request, list_requests, get_request,
         decide_request, dashboard_principal, dashboard_accountant, dashboard_teacher, set_accent,
-        verify_audit_chain, backup_status,
+        verify_audit_chain, backup_status, backup_now,
         list_staff_access, add_staff, suspend_staff, remove_staff, create_invite, revoke_invite,
         set_class_teacher, assign_subject_teacher, effective_access, list_devices, revoke_device,
         server_status, sync_status, sync_now, list_conflicts, resolve_conflict, list_review_flags,
@@ -227,7 +244,7 @@ fn invoke_handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'stat
         get_report_card, class_student_ids, list_audit, admissions_by_month, fee_collection_report, exam_results, list_fee_dues,
         record_payment, list_payments, create_request, cancel_request, list_requests, get_request,
         decide_request, dashboard_principal, dashboard_accountant, dashboard_teacher, set_accent,
-        verify_audit_chain, backup_status,
+        verify_audit_chain, backup_status, backup_now,
         list_staff_access, add_staff, suspend_staff, remove_staff, create_invite, revoke_invite,
         set_class_teacher, assign_subject_teacher, effective_access, list_devices, revoke_device,
         server_status, sync_status, sync_now, list_conflicts, resolve_conflict, list_review_flags,

@@ -537,6 +537,11 @@ export interface BackupRunDto {
   chain_head: string | null
 }
 
+export interface BackupStatusDto {
+  enabled: boolean
+  runs: BackupRunDto[]
+}
+
 // ---- Input types ---------------------------------------------------------
 export interface SchoolInput {
   name: string
@@ -691,7 +696,9 @@ export const dashboard_accountant = () => invoke<AccountantDashboard>('dashboard
 export const dashboard_teacher = () => invoke<TeacherDashboard>('dashboard_teacher')
 export const set_accent = (hex: string) => invoke<void>('set_accent', { hex })
 export const verify_audit_chain = () => invoke<AuditChainDto>('verify_audit_chain')
-export const backup_status = () => invoke<BackupRunDto[]>('backup_status')
+export const backup_status = () => invoke<BackupStatusDto>('backup_status')
+export const backup_now = (recoveryKey?: string) =>
+  invoke<BackupStatusDto>('backup_now', { recoveryKey: recoveryKey ?? null })
 
 // ---- Phase 4: staff & access, invitations, devices, sync, conflicts --------
 export interface StaffFullDto {
