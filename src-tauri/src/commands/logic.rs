@@ -2040,6 +2040,9 @@ fn upsert_sheet_and_marks(
         }
     };
     for m in marks {
+        // v2: new marks are Present/Absent only (legacy L is read, never written).
+        let mark = vidya_core::attendance::parse_mark(&m.mark)?;
+        vidya_core::attendance::validate_new_mark(mark)?;
         conn.execute(
             "INSERT INTO attendance_mark(id,sheet_id,student_id,mark) VALUES (?1,?2,?3,?4) \
              ON CONFLICT(sheet_id,student_id) DO UPDATE SET mark=excluded.mark",
@@ -2183,8 +2186,9 @@ pub fn correct_attendance_mark_logic(
 ) -> CmdResult<()> {
     let actor = actor_from(conn, actor_s)?;
     require_allow(&actor, Action::EditSubmittedAttendance, &Target { kind: TargetKind::Attendance, class_id: Some(class_id.to_string()), is_locked: true, ..Default::default() })?;
-    if !matches!(mark, "P" | "A" | "L") {
-        return Err(CmdError::validation("mark", "invalid"));
+    // v2: corrections set a NEW mark → Present/Absent only (never Leave).
+    if !matches!(mark, "P" | "A") {
+        return Err(CmdError::validation("mark", "p_or_a"));
     }
     let sheet_id: String = conn
         .query_row("SELECT id FROM attendance_sheet WHERE class_id=?1 AND date=?2", params![class_id, date], |r| r.get(0))

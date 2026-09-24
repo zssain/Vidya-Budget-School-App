@@ -6,11 +6,14 @@ import { t } from '@/lib/i18n'
 import * as api from '@/lib/api'
 import type { AttendanceMonthDto, AttendanceSheetDto, ClassDto } from '@/lib/api'
 
-// Desktop attendance register (prompts/P07 §5): class + date day grid (P/A/L
-// buttons in a table), month view (days × students with totals + %), Principal
-// direct corrections (audited with reason).
+// Desktop attendance register (prompts/P07 §5): class + date day grid, month view
+// (days × students with totals + %), Principal direct corrections (audited with
+// reason). v2 (Phase 11): new marks are Present/Absent only — the day grid shows
+// P and A buttons; a legacy L already stored is shown read-only as a muted
+// "Leave (old)" pill (the Principal can still correct it to P/A).
 
 type View = 'day' | 'month'
+// 'L' is retained only to read legacy rows; new marks are 'P' | 'A'.
 type Mark = 'P' | 'A' | 'L'
 
 function todayIso(): string {
@@ -163,9 +166,12 @@ export default function AttendanceRegisterScreen() {
                 <div key={r.student_id} style={{ display: 'flex', alignItems: 'center', gap: '14px', padding: '7px 7px 7px 14px', borderTop: i > 0 ? '1px solid var(--track)' : 'none', background: !cur && !submitted ? 'var(--unmarked)' : 'transparent' }}>
                   <span style={{ fontFamily: 'var(--font-serif)', fontSize: '16px', color: 'var(--muted)', width: '32px' }}>{r.roll_no ?? ''}</span>
                   <span style={{ flex: 1, fontSize: '15px' }}>{r.name}</span>
-                  {(['P', 'A', 'L'] as Mark[]).map((m) => (
+                  {cur === 'L' ? (
+                    <span style={{ height: '44px', display: 'inline-flex', alignItems: 'center', padding: '0 12px', borderRadius: '8px', border: '1px solid var(--gold-line)', background: 'var(--unmarked)', color: 'var(--gold-text)', fontSize: '13px', fontWeight: 500 }}>{t('areg.leaveOld')}</span>
+                  ) : null}
+                  {(['P', 'A'] as Mark[]).map((m) => (
                     <button key={m} type="button" aria-pressed={cur === m} aria-label={`${r.name} ${m}`} style={markBtn(cur === m, m)} onClick={() => toggle(r.student_id, m)}>
-                      {t(`areg.${m === 'P' ? 'present' : m === 'A' ? 'absent' : 'leave'}`)}
+                      {t(`areg.${m === 'P' ? 'present' : 'absent'}`)}
                     </button>
                   ))}
                 </div>
@@ -192,7 +198,7 @@ export default function AttendanceRegisterScreen() {
                   {month.days.map((d) => <th key={d} style={{ padding: '10px 4px' }}>{d.slice(8)}</th>)}
                   <th style={{ padding: '10px 8px' }}>{t('areg.col.p')}</th>
                   <th style={{ padding: '10px 8px' }}>{t('areg.col.a')}</th>
-                  <th style={{ padding: '10px 8px' }}>{t('areg.col.l')}</th>
+                  <th style={{ padding: '10px 8px' }} title={t('areg.leaveOld')}>{t('areg.col.l')}</th>
                   <th style={{ padding: '10px 8px' }}>{t('areg.col.pct')}</th>
                 </tr>
               </thead>
@@ -202,7 +208,7 @@ export default function AttendanceRegisterScreen() {
                     <td style={{ textAlign: 'left', padding: '8px', position: 'sticky', left: 0, background: 'var(--surface)', whiteSpace: 'nowrap' }}>{s.roll_no != null ? `${s.roll_no}. ` : ''}{s.name}</td>
                     {s.marks.map((m, di) => (
                       <td key={di} style={{ padding: '6px 4px', textAlign: 'center' }}>
-                        {m ? <span style={{ display: 'inline-block', minWidth: '20px', borderRadius: '4px', background: MARK_BG[m], color: MARK_FG[m], fontWeight: 600 }}>{m}</span> : <span style={{ color: 'var(--line-strong)' }}>·</span>}
+                        {m ? <span title={m === 'L' ? t('areg.leaveOld') : undefined} style={{ display: 'inline-block', minWidth: '20px', borderRadius: '4px', background: MARK_BG[m], color: MARK_FG[m], fontWeight: 600 }}>{m}</span> : <span style={{ color: 'var(--line-strong)' }}>·</span>}
                       </td>
                     ))}
                     <td style={{ textAlign: 'center', color: 'var(--accent)' }}>{s.present}</td>

@@ -11,7 +11,10 @@
 //     width/height/strokeWidth/colour.
 //   - no hard-coded visible text: every string comes from t('att.*'), with {n}/{name}
 //     interpolated.
-//   - P/A/L buttons carry .v-active-93 (the mock's `:active { scale(.93) }`).
+//   - P/A buttons carry .v-active-93 (the mock's `:active { scale(.93) }`).
+// v2 (Phase 11): attendance is Present/Absent only — the Leave (L) button, the
+// Leave count and the Leave bar segment are removed (matches the prototype). A
+// legacy L already stored is shown read-only as a muted "Leave (old)" pill.
 import { useEffect, useRef, useState } from 'react'
 import { Icon } from '@/components/Icon'
 import { t } from '@/lib/i18n'
@@ -58,7 +61,6 @@ export default function AttendanceScreen({
   const count = (v: Mark) => st.filter((x) => x === v).length
   const cP = count('P')
   const cA = count('A')
-  const cL = count('L')
   const cU = count('')
   const hasUnmarked = cU > 0
 
@@ -72,7 +74,7 @@ export default function AttendanceScreen({
     width: (c / st.length) * 100 + '%',
   })
 
-  // P/A/L button styles. off = white; on: P accent/white, A red/white, L gold/navy.
+  // P/A button styles. off = white; on: P accent/white, A red/white.
   const btn: React.CSSProperties = {
     width: '44px',
     height: '44px',
@@ -86,10 +88,23 @@ export default function AttendanceScreen({
     background: '#FFFFFF',
     color: '#56657A',
   }
-  const on: Record<'P' | 'A' | 'L', React.CSSProperties> = {
+  const on: Record<'P' | 'A', React.CSSProperties> = {
     P: { ...btn, border: '1px solid ' + accent, background: accent, color: '#FFFFFF' },
     A: { ...btn, border: '1px solid #C0392B', background: '#C0392B', color: '#FFFFFF' },
-    L: { ...btn, border: '1px solid #C5AB7A', background: '#C5AB7A', color: '#0C1B38' },
+  }
+  // A legacy Leave mark (pre-v2) is shown read-only as a muted "Leave (old)" pill.
+  const leaveOldPill: React.CSSProperties = {
+    height: '44px',
+    display: 'flex',
+    alignItems: 'center',
+    padding: '0 12px',
+    borderRadius: '8px',
+    border: '1px solid #DCC495',
+    background: '#FAF4E6',
+    color: '#8C6A2F',
+    fontSize: '13px',
+    fontWeight: 500,
+    whiteSpace: 'nowrap',
   }
 
   // Tapping the active mark clears it (toggle to ''); any set clears `prev`.
@@ -236,7 +251,7 @@ export default function AttendanceScreen({
         <div
           style={{
             display: 'grid',
-            gridTemplateColumns: 'repeat(4, minmax(0, 1fr))',
+            gridTemplateColumns: 'repeat(3, minmax(0, 1fr))',
             borderTop: '1px solid rgba(255,255,255,0.14)',
             paddingTop: '12px',
           }}
@@ -292,28 +307,6 @@ export default function AttendanceScreen({
                 fontFamily: 'var(--font-serif)',
                 fontSize: '26px',
                 lineHeight: 1,
-                fontVariantNumeric: 'lining-nums tabular-nums',
-              }}
-            >
-              {cL}
-            </span>
-            <span style={{ fontSize: '11px', color: '#9FACBF' }}>{t('att.count.leave')}</span>
-          </div>
-          <div
-            style={{
-              display: 'flex',
-              flexDirection: 'column',
-              gap: '2px',
-              borderLeft: '1px solid rgba(255,255,255,0.12)',
-              paddingLeft: '12px',
-            }}
-          >
-            <span
-              className="v-serif"
-              style={{
-                fontFamily: 'var(--font-serif)',
-                fontSize: '26px',
-                lineHeight: 1,
                 color: '#C5AB7A',
                 fontVariantNumeric: 'lining-nums tabular-nums',
               }}
@@ -335,7 +328,6 @@ export default function AttendanceScreen({
         >
           <div style={seg(cP, '#7DB1B5')} />
           <div style={seg(cA, '#D07A73')} />
-          <div style={seg(cL, '#C5AB7A')} />
         </div>
       </header>
       <div style={{ flexGrow: 1, overflow: 'auto', display: 'flex', flexDirection: 'column' }}>
@@ -448,41 +440,34 @@ export default function AttendanceScreen({
                 >
                   {name}
                 </span>
-                <div style={{ display: 'flex', gap: '6px' }}>
-                  <button
-                    type="button"
-                    className="v-active-93"
-                    aria-label={t('att.aria.present', { name })}
-                    aria-pressed={m === 'P'}
-                    disabled={locked}
-                    onClick={set(i, 'P')}
-                    style={m === 'P' ? on.P : off}
-                  >
-                    P
-                  </button>
-                  <button
-                    type="button"
-                    className="v-active-93"
-                    aria-label={t('att.aria.absent', { name })}
-                    aria-pressed={m === 'A'}
-                    disabled={locked}
-                    onClick={set(i, 'A')}
-                    style={m === 'A' ? on.A : off}
-                  >
-                    A
-                  </button>
-                  <button
-                    type="button"
-                    className="v-active-93"
-                    aria-label={t('att.aria.leave', { name })}
-                    aria-pressed={m === 'L'}
-                    disabled={locked}
-                    onClick={set(i, 'L')}
-                    style={m === 'L' ? on.L : off}
-                  >
-                    L
-                  </button>
-                </div>
+                {m === 'L' ? (
+                  <span style={leaveOldPill}>{t('att.leaveOld')}</span>
+                ) : (
+                  <div style={{ display: 'flex', gap: '6px' }}>
+                    <button
+                      type="button"
+                      className="v-active-93"
+                      aria-label={t('att.aria.present', { name })}
+                      aria-pressed={m === 'P'}
+                      disabled={locked}
+                      onClick={set(i, 'P')}
+                      style={m === 'P' ? on.P : off}
+                    >
+                      P
+                    </button>
+                    <button
+                      type="button"
+                      className="v-active-93"
+                      aria-label={t('att.aria.absent', { name })}
+                      aria-pressed={m === 'A'}
+                      disabled={locked}
+                      onClick={set(i, 'A')}
+                      style={m === 'A' ? on.A : off}
+                    >
+                      A
+                    </button>
+                  </div>
+                )}
               </li>
             )
           })}

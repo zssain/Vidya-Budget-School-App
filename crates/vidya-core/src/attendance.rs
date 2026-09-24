@@ -6,9 +6,15 @@
 //! approved by the Principal (§5, §8.5).
 //!
 //! Design decisions taken here (owner defaults, see module report):
-//! * **Attendance % denominator = P + A + L** (Leave counts in the total), per
-//!   §17.9 default "% = P ÷ (P + A + L)". Percentages are integer **tenths of a
-//!   percent** (e.g. `914` = 91.4 %), rounded **half-up** with integer math only.
+//! * **v2: new marks are Present or Absent only.** The Leave (`L`) mark is removed
+//!   from new sheets ([`validate_new_mark`] → `VALIDATION{field:"mark",
+//!   rule:"p_or_a"}`). `L` is retained solely to read/keep legacy rows already
+//!   stored ([`parse_mark`]).
+//! * **Attendance % denominator = P + A + L_legacy** (00-SYSTEM-CONTEXT §7a): a
+//!   legacy `L` **counts as absent** — it is in the denominator but never the
+//!   numerator, so `% = P ÷ (P + A + L_legacy)`. New sheets have no `L`, so this
+//!   is just `P ÷ (P + A)`. Percentages are integer **tenths of a percent**
+//!   (e.g. `914` = 91.4 %), rounded **half-up** with integer math only.
 //! * A class with **0 active students cannot submit** — it returns
 //!   [`CoreError::IncompleteSheet`] `{ remaining: 0 }` (there is nothing to
 //!   submit yet).
@@ -122,10 +128,37 @@ pub fn edit_after_submit(role: Role) -> EditDecision {
     }
 }
 
+/// Parse a stored mark string (`"P"|"A"|"L"`) — used to **read legacy rows**.
+///
+/// New marks must go through [`validate_new_mark`] (P/A only); this parser still
+/// accepts `L` so historic sheets remain readable. Unknown strings →
+/// `VALIDATION{field:"mark", rule:"unknown"}`.
+pub fn parse_mark(s: &str) -> CoreResult<Mark> {
+    match s {
+        "P" => Ok(Mark::P),
+        "A" => Ok(Mark::A),
+        "L" => Ok(Mark::L),
+        _ => Err(CoreError::validation("mark", "unknown")),
+    }
+}
+
+/// Validate a mark being **written to a sheet** (v2): only Present or Absent.
+///
+/// The Leave (`L`) mark was removed from new sheets in Phase 11; attempting to
+/// write it returns `VALIDATION{field:"mark", rule:"p_or_a"}`. Legacy `L` rows
+/// already stored are read with [`parse_mark`] and never rewritten.
+pub fn validate_new_mark(mark: Mark) -> CoreResult<()> {
+    match mark {
+        Mark::P | Mark::A => Ok(()),
+        Mark::L => Err(CoreError::validation("mark", "p_or_a")),
+    }
+}
+
 /// Attendance percentage in **tenths of a percent**, rounded **half-up**.
 ///
-/// `= round_half_up(1000 * P / (P + A + L))`. The denominator is `P + A + L`
-/// (Leave counts, owner default §17.9). If `P + A + L == 0` → `0`.
+/// `= round_half_up(1000 * P / (P + A + L_legacy))`. The denominator is
+/// `P + A + L`, so a legacy `L` **counts as absent** (00-SYSTEM-CONTEXT §7a).
+/// New sheets have no `L`, so this is `P ÷ (P + A)`. If `P + A + L == 0` → `0`.
 ///
 /// No floats. Half-up on non-negative integers is `(2*num + den) / (2*den)`:
 /// here `num = 1000 * P`, `den = total`, so
@@ -299,6 +332,31 @@ mod tests {
         );
     }
 
+    // ---- v2 mark validation (P/A only; L legacy-read) --------------------
+
+    #[test]
+    fn new_marks_are_p_or_a() {
+        assert!(validate_new_mark(Mark::P).is_ok());
+        assert!(validate_new_mark(Mark::A).is_ok());
+    }
+
+    #[test]
+    fn new_leave_mark_rejected_p_or_a() {
+        assert_eq!(
+            validate_new_mark(Mark::L),
+            Err(CoreError::validation("mark", "p_or_a"))
+        );
+    }
+
+    #[test]
+    fn parse_mark_reads_legacy_leave() {
+        assert_eq!(parse_mark("P"), Ok(Mark::P));
+        assert_eq!(parse_mark("A"), Ok(Mark::A));
+        // Legacy L is still readable even though it can no longer be written.
+        assert_eq!(parse_mark("L"), Ok(Mark::L));
+        assert_eq!(parse_mark("X"), Err(CoreError::validation("mark", "unknown")));
+    }
+
     // ---- percent (half-up, tenths) ---------------------------------------
 
     #[test]
@@ -313,7 +371,8 @@ mod tests {
 
     #[test]
     fn percent_leave_counts_in_denominator() {
-        // P=8, A=1, L=1 → 8/10 = 80.0 % = 800 tenths (Leave counts).
+        // v2: a legacy L counts as absent (in the denominator, not the numerator).
+        // P=8, A=1, L=1 → 8/(8+1+1) = 8/10 = 80.0 % = 800 tenths.
         assert_eq!(percent_present(8, 1, 1), 800);
     }
 

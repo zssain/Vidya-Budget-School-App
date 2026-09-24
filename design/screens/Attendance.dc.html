@@ -31,17 +31,16 @@ button:disabled{cursor:not-allowed}
 <h1 style="margin: 0; font-family: 'Newsreader', Georgia, serif; font-weight: 400; font-size: 32px; line-height: 1.05; letter-spacing: -0.02em;">Attendance.</h1>
 <span style="font-family: 'Newsreader', Georgia, serif; font-style: italic; font-size: 22px; line-height: 1.25; color: #C5AB7A;">Class V-A · Wed, 23 Sep</span>
 </div>
-<div style="display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border-top: 1px solid rgba(255,255,255,0.14); padding-top: 12px;">
+<div style="display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); border-top: 1px solid rgba(255,255,255,0.14); padding-top: 12px;">
 <div style="display: flex; flex-direction: column; gap: 2px;"><span style="font-family: 'Newsreader', Georgia, serif; font-size: 26px; line-height: 1; font-variant-numeric: lining-nums tabular-nums;">{{cP}}</span><span style="font-size: 11px; color: #9FACBF;">Present</span></div>
 <div style="display: flex; flex-direction: column; gap: 2px; border-left: 1px solid rgba(255,255,255,0.12); padding-left: 12px;"><span style="font-family: 'Newsreader', Georgia, serif; font-size: 26px; line-height: 1; font-variant-numeric: lining-nums tabular-nums;">{{cA}}</span><span style="font-size: 11px; color: #9FACBF;">Absent</span></div>
-<div style="display: flex; flex-direction: column; gap: 2px; border-left: 1px solid rgba(255,255,255,0.12); padding-left: 12px;"><span style="font-family: 'Newsreader', Georgia, serif; font-size: 26px; line-height: 1; font-variant-numeric: lining-nums tabular-nums;">{{cL}}</span><span style="font-size: 11px; color: #9FACBF;">Leave</span></div>
 <div style="display: flex; flex-direction: column; gap: 2px; border-left: 1px solid rgba(255,255,255,0.12); padding-left: 12px;"><span style="font-family: 'Newsreader', Georgia, serif; font-size: 26px; line-height: 1; color: #C5AB7A; font-variant-numeric: lining-nums tabular-nums;">{{cU}}</span><span style="font-size: 11px; color: #9FACBF;">Not marked</span></div>
 </div>
-<div style="height: 4px; border-radius: 2px; background: rgba(255,255,255,0.12); display: flex; gap: 2px; overflow: hidden;"><div style="{{barP}}"></div><div style="{{barA}}"></div><div style="{{barL}}"></div></div>
+<div style="height: 4px; border-radius: 2px; background: rgba(255,255,255,0.12); display: flex; gap: 2px; overflow: hidden;"><div style="{{barP}}"></div><div style="{{barA}}"></div></div>
 </header>
 <div style="flex-grow: 1; overflow: auto; display: flex; flex-direction: column;">
 <div style="display: flex; align-items: center; justify-content: space-between; padding: 14px 16px 10px;">
-<span style="font-size: 10px; font-weight: 600; letter-spacing: 0.16em; text-transform: uppercase; color: #56657A;">34 students · tap P, A or L</span>
+<span style="font-size: 10px; font-weight: 600; letter-spacing: 0.16em; text-transform: uppercase; color: #56657A;">34 students · tap P or A</span>
 <sc-if value="{{canMarkAll}}" hint-placeholder-val="{{ true }}"><button type="button" onClick="{{markAll}}" style="height: 36px; padding: 0 14px; border-radius: 18px; border: 1px solid #0C1B38; background: #0C1B38; color: #FFFFFF; font-size: 13px; font-weight: 500; display: flex; align-items: center; gap: 6px;"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#C5AB7A" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12.5 4.5 4.5L19 7.5"></path></svg>Mark all present</button></sc-if>
 <sc-if value="{{canUndo}}" hint-placeholder-val="{{ false }}"><button type="button" onClick="{{undo}}" style="height: 36px; padding: 0 14px; border-radius: 18px; border: 1px solid #C9D3D2; background: transparent; color: #13233F; font-size: 13px; font-weight: 500; animation: vIn 200ms ease both;">Undo mark all</button></sc-if>
 </div>
@@ -53,7 +52,6 @@ button:disabled{cursor:not-allowed}
 <div style="display: flex; gap: 6px;">
 <button type="button" aria-label="{{s.pLabel}}" aria-pressed="{{s.pOn}}" disabled="{{locked}}" onClick="{{s.setP}}" style="{{s.pStyle}}">P</button>
 <button type="button" aria-label="{{s.aLabel}}" aria-pressed="{{s.aOn}}" disabled="{{locked}}" onClick="{{s.setA}}" style="{{s.aStyle}}">A</button>
-<button type="button" aria-label="{{s.lLabel}}" aria-pressed="{{s.lOn}}" disabled="{{locked}}" onClick="{{s.setL}}" style="{{s.lStyle}}">L</button>
 </div>
 </li>
 </sc-for>
@@ -85,7 +83,7 @@ class Component extends DCLogic {
     super(props);
     const names = ['Aadhya Sharma', 'Aarav Gupta', 'Ananya Reddy', 'Arjun Yadav', 'Diya Patel', 'Ishaan Khan', 'Kabir Joshi', 'Meera Nair', 'Mohammed Faiz', 'Pooja Verma', 'Rahul Kumar', 'Riya Verma', 'Saanvi Rao', 'Vivaan Singh', 'Aditi Mishra', 'Ayaan Qureshi', 'Bhavya Jain', 'Dev Malhotra', 'Fatima Sheikh', 'Gaurav Chauhan', 'Harini Iyer', 'Ira Kapoor', 'Karan Mehta', 'Lakshmi Pillai', 'Manav Tiwari', 'Nandini Das', 'Om Prakash', 'Prisha Agarwal', 'Reyansh Bose', 'Sara Thomas', 'Tanvi Kulkarni', 'Uday Rathore', 'Vanya Saxena', 'Zoya Ansari'];
     this.names = names;
-    this.state = { st: names.map((_, i) => (i >= 30 ? '' : i === 8 || i === 10 ? 'A' : i === 4 ? 'L' : 'P')), prev: null, submitted: false, toast: false };
+    this.state = { st: names.map((_, i) => (i >= 30 ? '' : i === 8 || i === 10 ? 'A' : 'P')), prev: null, submitted: false, toast: false };
   }
   componentWillUnmount() { clearTimeout(this.t); }
   renderVals() {
@@ -95,14 +93,13 @@ class Component extends DCLogic {
     const s = this.state;
     const st = s.st;
     const count = (v) => st.filter((x) => x === v).length;
-    const cP = count('P'), cA = count('A'), cL = count('L'), cU = count('');
+    const cP = count('P'), cA = count('A'), cU = count('');
     const seg = (c, col) => 'height: 100%; transition: width .35s cubic-bezier(.2,.8,.2,1); background: ' + col + '; width: ' + (c / st.length * 100) + '%;';
     const btn = 'width: 44px; height: 44px; border-radius: 8px; font-size: 14px; font-weight: 600; ';
     const off = btn + 'border: 1px solid #D5DDE0; background: #FFFFFF; color: #56657A;';
     const on = {
       P: btn + 'border: 1px solid ' + accent + '; background: ' + accent + '; color: #FFFFFF;',
-      A: btn + 'border: 1px solid #C0392B; background: #C0392B; color: #FFFFFF;',
-      L: btn + 'border: 1px solid #C5AB7A; background: #C5AB7A; color: #0C1B38;'
+      A: btn + 'border: 1px solid #C0392B; background: #C0392B; color: #FFFFFF;'
     };
     const set = (i, v) => () => {
       if (this.state.submitted) return;
@@ -113,15 +110,15 @@ class Component extends DCLogic {
     const students = this.names.map((name, i) => ({
       roll: String(i + 1), name,
       rowStyle: 'display: flex; align-items: center; gap: 10px; padding: 7px 7px 7px 14px; border-radius: 10px; transition: background-color .18s ease, border-color .18s ease; border: 1px solid ' + (st[i] ? '#D5DDE0' : '#DCC495') + '; background: ' + (st[i] ? '#FDFDFB' : '#FAF4E6') + ';',
-      pOn: st[i] === 'P', aOn: st[i] === 'A', lOn: st[i] === 'L',
-      pStyle: st[i] === 'P' ? on.P : off, aStyle: st[i] === 'A' ? on.A : off, lStyle: st[i] === 'L' ? on.L : off,
-      pLabel: name + ' present', aLabel: name + ' absent', lLabel: name + ' on leave',
-      setP: set(i, 'P'), setA: set(i, 'A'), setL: set(i, 'L')
+      pOn: st[i] === 'P', aOn: st[i] === 'A',
+      pStyle: st[i] === 'P' ? on.P : off, aStyle: st[i] === 'A' ? on.A : off,
+      pLabel: name + ' present', aLabel: name + ' absent',
+      setP: set(i, 'P'), setA: set(i, 'A')
     }));
     const hasUnmarked = cU > 0;
     return {
-      students, cP, cA, cL, cU, hasUnmarked,
-      barP: seg(cP, '#7DB1B5'), barA: seg(cA, '#D07A73'), barL: seg(cL, '#C5AB7A'),
+      students, cP, cA, cU, hasUnmarked,
+      barP: seg(cP, '#7DB1B5'), barA: seg(cA, '#D07A73'),
       locked: s.submitted,
       canMarkAll: !s.submitted && !s.prev,
       canUndo: !s.submitted && !!s.prev,

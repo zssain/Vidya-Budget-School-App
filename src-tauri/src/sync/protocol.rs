@@ -33,6 +33,10 @@ pub mod codes {
     /// An op whose table or a payload column name is not a plain SQL identifier
     /// (rejected before any SQL is built — see `is_safe_ident`).
     pub const MALFORMED: &str = "MALFORMED";
+    /// A new attendance `L` (Leave) mark carried by an op whose HLC is at/after the
+    /// v2 Present/Absent cutover (00-SYSTEM-CONTEXT §7a). The device is running an
+    /// old Vidya; the user is told to update. Pre-cutover L ops apply as legacy.
+    pub const LEAVE_MARK_REMOVED: &str = "LEAVE_MARK_REMOVED";
 }
 
 /// True iff `s` is a plain SQL identifier: 1–64 chars, ASCII letter/underscore

@@ -122,6 +122,38 @@ fn resolve_class_id(conn: &Connection, table: &str, record_id: &str, payload: &s
     }
 }
 
+/// The v2 attendance Present/Absent cutover, in Unix ms (00-SYSTEM-CONTEXT §7a),
+/// written into `schema_meta` by migration `0005_v2_attendance_pa.sql`. `None`
+/// if the row is absent (older DBs) — then no L op is rejected on cutover.
+fn attendance_pa_cutover_ms(conn: &Connection) -> rusqlite::Result<Option<u64>> {
+    let v: Option<String> = conn
+        .query_row("SELECT value FROM schema_meta WHERE key='attendance_pa_cutover_ms'", [], |r| r.get(0))
+        .optional()?;
+    Ok(v.and_then(|s| s.trim().parse::<u64>().ok()))
+}
+
+/// True iff `op` writes a Leave (`L`) `attendance_mark` and its HLC is at/after
+/// the v2 cutover — i.e. a new L from an out-of-date device (§7a). Pre-cutover L
+/// ops (older `wall_ms`) and non-L ops return `false` and apply normally. The
+/// HLC's leading 13 digits are the `wall_ms` (see `vidya_core::hlc`).
+fn leave_after_cutover(conn: &Connection, op: &Op) -> rusqlite::Result<bool> {
+    if op.table != "attendance_mark" {
+        return Ok(false);
+    }
+    if op.payload.get("mark").and_then(|v| v.as_str()) != Some("L") {
+        return Ok(false);
+    }
+    let cutover = match attendance_pa_cutover_ms(conn)? {
+        Some(c) => c,
+        None => return Ok(false),
+    };
+    match vidya_core::hlc::Hlc::parse(&op.hlc) {
+        Ok(hlc) => Ok(hlc.wall_ms >= cutover),
+        // A non-packed HLC (e.g. a server-local ISO op) is never a device L write.
+        Err(_) => Ok(false),
+    }
+}
+
 /// The current `version` of a synced row, if it exists.
 fn current_version(conn: &Connection, table: &str, id: &str) -> rusqlite::Result<Option<i64>> {
     // Only synced tables carry `version`; the caller only asks for those.
@@ -147,6 +179,13 @@ pub fn apply_op(conn: &mut Connection, op: &Op) -> rusqlite::Result<OpResult> {
     //     Identifiers can't be bound as parameters, so this is the injection gate.
     if !crate::sync::protocol::op_identifiers_safe(&op.table, &op.payload) {
         return finalize(conn, op, rejected(&op.op_id, codes::MALFORMED));
+    }
+
+    // 1c) v2 attendance cutover (§7a): a new `L` (Leave) mark carried by an op
+    //     whose HLC is at/after the cutover is rejected (the phone runs old
+    //     Vidya). Ops from before the cutover apply as legacy.
+    if leave_after_cutover(conn, op)? {
+        return finalize(conn, op, rejected(&op.op_id, codes::LEAVE_MARK_REMOVED));
     }
 
     // 2) Author's CURRENT actor.

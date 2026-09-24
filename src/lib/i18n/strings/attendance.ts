@@ -9,9 +9,9 @@ const en: Record<string, string> = {
   'att.subtitle': 'Class V-A · Wed, 23 Sep',
   'att.count.present': 'Present',
   'att.count.absent': 'Absent',
-  'att.count.leave': 'Leave',
   'att.count.notMarked': 'Not marked',
-  'att.hint': '34 students · tap P, A or L',
+  'att.leaveOld': 'Leave (old)',
+  'att.hint': '34 students · tap P or A',
   'att.markAll': 'Mark all present',
   'att.undo': 'Undo mark all',
   'att.notMarked': '{n} students not marked yet',
@@ -25,7 +25,6 @@ const en: Record<string, string> = {
   'att.net.waiting': 'Offline · 1 waiting to send',
   'att.aria.present': '{name} present',
   'att.aria.absent': '{name} absent',
-  'att.aria.leave': '{name} on leave',
 }
 
 const hi: Record<string, string> = {
@@ -33,9 +32,9 @@ const hi: Record<string, string> = {
   'att.subtitle': 'कक्षा V-A · बुध, 23 सितंबर',
   'att.count.present': 'उपस्थित',
   'att.count.absent': 'अनुपस्थित',
-  'att.count.leave': 'अवकाश',
   'att.count.notMarked': 'चिह्नित नहीं',
-  'att.hint': '34 विद्यार्थी · P, A या L दबाएँ',
+  'att.leaveOld': 'अवकाश (पुराना)',
+  'att.hint': '34 विद्यार्थी · P या A दबाएँ',
   'att.markAll': 'सभी को उपस्थित करें',
   'att.undo': 'सभी उपस्थित पूर्ववत करें',
   'att.notMarked': '{n} विद्यार्थी अभी चिह्नित नहीं',
@@ -49,7 +48,6 @@ const hi: Record<string, string> = {
   'att.net.waiting': 'ऑफ़लाइन · 1 भेजने के लिए बाकी',
   'att.aria.present': '{name} उपस्थित',
   'att.aria.absent': '{name} अनुपस्थित',
-  'att.aria.leave': '{name} अवकाश पर',
 }
 
 const attendance: Bundle = { en, hi }
