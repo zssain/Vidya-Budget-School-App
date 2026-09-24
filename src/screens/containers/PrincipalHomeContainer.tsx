@@ -13,6 +13,15 @@ import type { HomeApproval, HomeNeed, PrincipalHomeData } from '@/dev/fixtures/p
 import { formatDateLong, formatMoney, formatRelative, greeting } from '@/lib/format'
 import { t } from '@/lib/i18n'
 import { useStore } from '@/lib/store'
+import { navigate } from '@/lib/router'
+
+const NAV_DEST: Record<string, string> = {
+  admission: '/principal/students/new',
+  approvals: '/principal/approvals',
+  attendance: '/principal/attendance',
+  fees: '/principal/fees',
+  students: '/principal/students',
+}
 
 const BADGE: Record<string, { bg: string; fg: string; accent?: boolean }> = {
   marks_correction: { bg: '#E7E3F1', fg: '#4A3B78' },
@@ -146,5 +155,5 @@ export default function PrincipalHomeContainer() {
       </div>
     )
   }
-  return <PrincipalHomeScreen data={data} chrome={false} />
+  return <PrincipalHomeScreen data={data} chrome={false} onNav={(dest) => navigate(NAV_DEST[dest])} />
 }

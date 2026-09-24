@@ -530,6 +530,13 @@ export interface AuditChainDto {
   first_bad_seq: number | null
 }
 
+export interface BackupRunDto {
+  at: string
+  status: string
+  destination: string | null
+  chain_head: string | null
+}
+
 // ---- Input types ---------------------------------------------------------
 export interface SchoolInput {
   name: string
@@ -684,6 +691,7 @@ export const dashboard_accountant = () => invoke<AccountantDashboard>('dashboard
 export const dashboard_teacher = () => invoke<TeacherDashboard>('dashboard_teacher')
 export const set_accent = (hex: string) => invoke<void>('set_accent', { hex })
 export const verify_audit_chain = () => invoke<AuditChainDto>('verify_audit_chain')
+export const backup_status = () => invoke<BackupRunDto[]>('backup_status')
 
 // ---- Phase 4: staff & access, invitations, devices, sync, conflicts --------
 export interface StaffFullDto {

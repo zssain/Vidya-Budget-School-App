@@ -72,6 +72,7 @@
     "dashboard_teacher",
     "set_accent",
     "verify_audit_chain",
+    "backup_status",
     "list_staff_access",
     "add_staff",
     "suspend_staff",

@@ -1,0 +1,163 @@
+// Settings (docs §6.2, prompts/P08 Part E). Derived screen: eyebrow + serif h1 +
+// cards. Every control here is REAL — School (get_school), Appearance (set_accent),
+// Language (i18n), Academics/Data links (navigate), Security (verify_audit_chain),
+// Licence (app_state), About (build version). Sections whose own editors live
+// elsewhere link to them rather than duplicating.
+
+import { useEffect, useState } from 'react'
+import * as api from '@/lib/api'
+import type { AuditChainDto, CmdError, SchoolDto } from '@/lib/api'
+import { getLang, setLang, t, useLang } from '@/lib/i18n'
+import { navigate } from '@/lib/router'
+import { ACCENT_OPTIONS, loadAccent, setAccent } from '@/lib/theme'
+import { useStore } from '@/lib/store'
+
+declare const __APP_VERSION__: string
+
+const CARD: React.CSSProperties = { background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 16, padding: 24 }
+const SERIF = "'Newsreader', Georgia, serif"
+const H3: React.CSSProperties = { fontSize: 15, fontWeight: 600, margin: '0 0 14px' }
+
+function Row({ label, value }: { label: string; value: string }) {
+  return (
+    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 16, padding: '8px 0', fontSize: 14, borderTop: '1px solid var(--track)' }}>
+      <span style={{ color: 'var(--muted)' }}>{label}</span>
+      <span style={{ color: 'var(--ink)', textAlign: 'right' }}>{value}</span>
+    </div>
+  )
+}
+
+function LinkRow({ title, sub, onClick }: { title: string; sub: string; onClick: () => void }) {
+  return (
+    <button
+      onClick={onClick}
+      style={{ width: '100%', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 16, padding: '14px 0', background: 'transparent', border: 'none', borderTop: '1px solid var(--track)', cursor: 'pointer', textAlign: 'left' }}
+    >
+      <span style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+        <span style={{ fontSize: 14, fontWeight: 500, color: 'var(--ink)' }}>{title}</span>
+        <span style={{ fontSize: 12, color: 'var(--muted)' }}>{sub}</span>
+      </span>
+      <span style={{ fontSize: 13, color: 'var(--accent)', fontWeight: 500 }}>{t('settings.open')} →</span>
+    </button>
+  )
+}
+
+export default function SettingsScreen() {
+  useLang()
+  const store = useStore()
+  const [school, setSchool] = useState<SchoolDto | null>(null)
+  const [accent, setAccentState] = useState<string>(loadAccent())
+  const [chain, setChain] = useState<AuditChainDto | null>(null)
+
+  useEffect(() => {
+    api.get_school().then(setSchool).catch(() => {})
+    api.verify_audit_chain().then(setChain).catch(() => {})
+  }, [])
+
+  const chooseAccent = (hex: string) => {
+    setAccent(hex)
+    setAccentState(hex)
+    api.set_accent(hex).catch((e) => void (e as CmdError))
+  }
+  const chooseLang = (next: 'en' | 'hi') => setLang(next)
+
+  const lang = getLang()
+  const licence = store.app?.licence_status ?? 'active'
+  const licenceLabel =
+    licence === 'revoked' ? t('settings.licence.revoked') : licence === 'moved' ? t('settings.licence.moved') : t('settings.licence.active')
+
+  return (
+    <div style={{ minHeight: '100vh', background: 'var(--bg)', color: 'var(--ink)', padding: 40, fontFamily: "'Geist', 'Noto Sans Devanagari', system-ui, sans-serif" }}>
+      <div style={{ marginBottom: 24 }}>
+        <h1 style={{ fontFamily: SERIF, fontSize: 40, letterSpacing: '-0.025em', margin: 0 }}>{t('settings.title')}</h1>
+        <p style={{ color: 'var(--muted)', fontSize: 14, margin: '6px 0 0' }}>{t('settings.subtitle')}</p>
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 20, maxWidth: 900 }}>
+        {/* School */}
+        <div style={CARD}>
+          <h3 style={H3}>{t('settings.school.title')}</h3>
+          <Row label={t('settings.school.name')} value={school?.name ?? '—'} />
+          <Row label={t('settings.school.board')} value={school?.board ?? '—'} />
+          <Row label={t('settings.school.session')} value={school?.session_label ?? '—'} />
+          <Row label={t('settings.school.phone')} value={school?.phone ?? '—'} />
+        </div>
+
+        {/* Appearance */}
+        <div style={CARD}>
+          <h3 style={H3}>{t('settings.appearance.title')}</h3>
+          <div style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 12 }}>{t('settings.appearance.accent')}</div>
+          <div style={{ display: 'flex', gap: 12 }}>
+            {ACCENT_OPTIONS.map((hex) => (
+              <button
+                key={hex}
+                onClick={() => chooseAccent(hex)}
+                aria-label={hex}
+                style={{ width: 40, height: 40, borderRadius: 10, background: hex, cursor: 'pointer', border: accent.toLowerCase() === hex.toLowerCase() ? '3px solid var(--ink)' : '3px solid transparent', boxShadow: '0 0 0 1px var(--line)' }}
+              />
+            ))}
+          </div>
+        </div>
+
+        {/* Language */}
+        <div style={CARD}>
+          <h3 style={H3}>{t('settings.language.title')}</h3>
+          <div style={{ display: 'flex', gap: 10, marginBottom: 8 }}>
+            {(['en', 'hi'] as const).map((l) => (
+              <button
+                key={l}
+                onClick={() => chooseLang(l)}
+                style={{ height: 40, padding: '0 18px', borderRadius: 8, fontSize: 14, fontWeight: 500, cursor: 'pointer', border: '1px solid var(--line-strong)', background: lang === l ? 'var(--accent)' : 'var(--white)', color: lang === l ? '#fff' : 'var(--ink)' }}
+              >
+                {l === 'en' ? 'English' : 'हिन्दी'}
+              </button>
+            ))}
+          </div>
+          <div style={{ fontSize: 12, color: 'var(--muted)' }}>{t('settings.language.hint')}</div>
+        </div>
+
+        {/* Academics */}
+        <div style={CARD}>
+          <h3 style={H3}>{t('settings.academics.title')}</h3>
+          <LinkRow title={t('settings.academics.gradeScale')} sub={t('settings.academics.gradeScaleSub')} onClick={() => navigate('/principal/grade-scale')} />
+          <LinkRow title={t('settings.academics.session')} sub={t('settings.academics.sessionSub')} onClick={() => navigate('/session')} />
+        </div>
+
+        {/* Backups & data */}
+        <div style={CARD}>
+          <h3 style={H3}>{t('settings.data.title')}</h3>
+          <LinkRow title={t('settings.data.backups')} sub={t('settings.data.backupsSub')} onClick={() => navigate('/principal/backups')} />
+          <LinkRow title={t('settings.data.sync')} sub={t('settings.data.syncSub')} onClick={() => navigate('/sync')} />
+        </div>
+
+        {/* Security */}
+        <div style={CARD}>
+          <h3 style={H3}>{t('settings.security.title')}</h3>
+          <p style={{ fontSize: 13, color: 'var(--muted)', margin: '0 0 10px' }}>{t('settings.security.encrypted')}</p>
+          <p style={{ fontSize: 13, margin: 0, color: chain == null ? 'var(--muted)' : chain.ok ? 'var(--accent)' : 'var(--danger)' }}>
+            {chain == null
+              ? t('settings.security.chainChecking')
+              : chain.ok
+                ? t('settings.security.chainOk')
+                : t('settings.security.chainBad', { seq: chain.first_bad_seq ?? 0 })}
+          </p>
+        </div>
+
+        {/* Licence */}
+        <div style={CARD}>
+          <h3 style={H3}>{t('settings.licence.title')}</h3>
+          <Row label={t('settings.licence.status')} value={licenceLabel} />
+          <p style={{ fontSize: 12, color: 'var(--muted)', margin: '10px 0 0' }}>{t('settings.licence.note')}</p>
+        </div>
+
+        {/* About */}
+        <div style={CARD}>
+          <h3 style={H3}>{t('settings.about.title')}</h3>
+          <div style={{ fontFamily: SERIF, fontSize: 20 }}>{t('settings.about.product')}</div>
+          <Row label={t('settings.about.version')} value={typeof __APP_VERSION__ === 'string' ? __APP_VERSION__ : '—'} />
+          <p style={{ fontSize: 12, color: 'var(--muted)', margin: '10px 0 0' }}>{t('settings.about.tagline')}</p>
+        </div>
+      </div>
+    </div>
+  )
+}

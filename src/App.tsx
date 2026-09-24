@@ -4,7 +4,7 @@ import { useRoute, matchRoute } from '@/lib/router'
 import * as api from '@/lib/api'
 import type { CmdError, StaffDto } from '@/lib/api'
 import { useStore, refreshAppState, routeForState } from '@/lib/store'
-import { t } from '@/lib/i18n'
+import { t, useLang } from '@/lib/i18n'
 import AppShell from '@/components/desktop/AppShell'
 import type { Role } from '@/lib/nav'
 import WelcomeScreen from '@/screens/shared/WelcomeScreen'
@@ -30,6 +30,8 @@ import GlobalSearch from '@/screens/desktop/GlobalSearch'
 import MarksScreen from '@/screens/desktop/MarksScreen'
 import GradeScaleScreen from '@/screens/desktop/GradeScaleScreen'
 import ReportsScreen from '@/screens/desktop/ReportsScreen'
+import SettingsScreen from '@/screens/desktop/SettingsScreen'
+import BackupsScreen from '@/screens/desktop/BackupsScreen'
 import ReportCardDoc from '@/screens/print/ReportCardDoc'
 import ReceiptDoc from '@/screens/print/ReceiptDoc'
 import DayBookDoc from '@/screens/print/DayBookDoc'
@@ -65,6 +67,7 @@ export default function App() {
   const path = useRoute()
   const base = path.split('?')[0]
   const store = useStore()
+  useLang() // re-render the whole tree when the language changes (Settings)
   const [activateErr, setActivateErr] = useState<CmdError | null>(null)
 
   // Guarded by import.meta.env.DEV so the route strings are dead-code-eliminated
@@ -193,6 +196,8 @@ function desktopRoute(base: string, role: Role): { active: string; node: ReactNo
   if (base === '/principal/attendance') return { active: 'attendance', node: <AttendanceRegisterScreen /> }
   if (base === '/principal/marks') return { active: 'marks', node: <MarksScreen /> }
   if (base === '/principal/grade-scale') return { active: 'settings', node: <GradeScaleScreen /> }
+  if (base === '/principal/settings') return { active: 'settings', node: <SettingsScreen /> }
+  if (base === '/principal/backups') return { active: 'backups', node: <BackupsScreen /> }
   if (base === '/principal/reports') return { active: 'reports', node: <ReportsScreen /> }
   if (base === '/principal/fees') return { active: 'fees', node: <FeesScreen /> }
   if (base === '/principal/receipts' || base === '/accountant/receipts')

@@ -17,8 +17,10 @@ import '@fontsource/noto-sans-devanagari/latin-600.css'
 
 import './styles/app.css'
 import { loadAccent } from './lib/theme'
+import { loadLang } from './lib/i18n'
 
 loadAccent()
+loadLang()
 
 // Phase-1-only DEV flag: `VITE_DEV_START=teacher` opens on Teacher Home (used by
 // the Android debug build so it lands on a phone screen). Phase 3 removes it.

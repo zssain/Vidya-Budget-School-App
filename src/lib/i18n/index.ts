@@ -21,6 +21,7 @@ import attendanceReg from './strings/attendanceReg'
 import shared from './strings/shared'
 import academics from './strings/academics'
 import reports from './strings/reports'
+import settings from './strings/settings'
 
 export type Lang = 'en' | 'hi'
 export interface Bundle {
@@ -28,18 +29,37 @@ export interface Bundle {
   hi: Record<string, string>
 }
 
-const bundles: Bundle[] = [common, welcome, principalHome, collectFee, teacherHome, attendance, errors, p04, shell, students, fees, receipts, daybook, attendanceReg, shared, academics, reports]
+const bundles: Bundle[] = [common, welcome, principalHome, collectFee, teacherHome, attendance, errors, p04, shell, students, fees, receipts, daybook, attendanceReg, shared, academics, reports, settings]
 const en: Record<string, string> = Object.assign({}, ...bundles.map((b) => b.en))
 const hi: Record<string, string> = Object.assign({}, ...bundles.map((b) => b.hi))
 const dict: Record<Lang, Record<string, string>> = { en, hi }
 
 let lang: Lang = 'en'
 const listeners = new Set<() => void>()
+const LANG_KEY = 'vidya.lang'
 
 export function setLang(next: Lang): void {
   lang = next
   if (typeof document !== 'undefined') document.documentElement.setAttribute('lang', next)
+  try {
+    localStorage.setItem(LANG_KEY, next)
+  } catch {
+    /* storage unavailable (private mode) — keep the in-memory choice */
+  }
   for (const l of listeners) l()
+}
+
+/** Apply the saved language on startup (call before render, like loadAccent). */
+export function loadLang(): void {
+  try {
+    const v = localStorage.getItem(LANG_KEY)
+    if (v === 'en' || v === 'hi') {
+      lang = v
+      if (typeof document !== 'undefined') document.documentElement.setAttribute('lang', v)
+    }
+  } catch {
+    /* ignore */
+  }
 }
 export function getLang(): Lang {
   return lang

@@ -2720,6 +2720,29 @@ pub struct AuditChainDto {
     pub first_bad_seq: Option<i64>,
 }
 
+/// One recorded backup run (Backups screen; Principal Home "Last backup").
+#[derive(Debug, Serialize)]
+pub struct BackupRunDto {
+    pub at: String,
+    pub status: String,
+    pub destination: Option<String>,
+    pub chain_head: Option<String>,
+}
+
+/// Recent backup runs, newest first (read-only).
+pub fn backup_status_logic(conn: &mut Connection) -> CmdResult<Vec<BackupRunDto>> {
+    let mut stmt = conn.prepare(
+        "SELECT COALESCE(finished_at, started_at), status, destination, chain_head \
+         FROM backup_run ORDER BY started_at DESC LIMIT 30",
+    )?;
+    let rows = stmt
+        .query_map([], |r| {
+            Ok(BackupRunDto { at: r.get(0)?, status: r.get(1)?, destination: r.get(2)?, chain_head: r.get(3)? })
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
 // ============================================================= academics ======
 //
 // Grade scale (edit bands), exams (list/create + status grid), marks entry

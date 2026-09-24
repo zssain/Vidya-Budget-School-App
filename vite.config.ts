@@ -8,6 +8,10 @@ import { fileURLToPath } from 'node:url'
 // Tauri sets these during `tauri dev/build` and `tauri android dev/build`.
 const host = process.env.TAURI_DEV_HOST
 const platform = process.env.TAURI_ENV_PLATFORM === 'android' ? 'android' : 'desktop'
+// App version, single-sourced from package.json (shown in Settings → About).
+const appVersion: string = JSON.parse(
+  readFileSync(fileURLToPath(new URL('./package.json', import.meta.url)), 'utf8'),
+).version
 
 // DEV ONLY: serve the mock renderer at /design/screens/support.js so the
 // unmodified design/screens/*.dc.html files render in the browser for the
@@ -41,7 +45,10 @@ export default defineConfig({
     alias: { '@': fileURLToPath(new URL('./src', import.meta.url)) },
   },
   // Platform is decided at BUILD time (see src/lib/platform.ts).
-  define: { 'import.meta.env.VITE_PLATFORM': JSON.stringify(platform) },
+  define: {
+    'import.meta.env.VITE_PLATFORM': JSON.stringify(platform),
+    __APP_VERSION__: JSON.stringify(appVersion),
+  },
   clearScreen: false,
   // Vitest runs unit tests only; Playwright owns tests/e2e/*.spec.ts.
   test: {

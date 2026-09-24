@@ -85,7 +85,18 @@ function feeBarStyle(day: string, value: number, i: number): CSSProperties {
 // header) used by the fidelity gallery. The real app passes chrome={false}: the
 // shared desktop AppShell owns the sidebar + header, and only the main content
 // column renders here. The content JSX is identical in both modes.
-export default function PrincipalHomeScreen({ data, chrome = true }: { data: PrincipalHomeData; chrome?: boolean }) {
+// `onNav(dest)` is wired by the real container to the router; the fidelity gallery
+// omits it, so the mock render is pixel-identical (buttons are inert there).
+export default function PrincipalHomeScreen({
+  data,
+  chrome = true,
+  onNav,
+}: {
+  data: PrincipalHomeData
+  chrome?: boolean
+  onNav?: (dest: 'admission' | 'approvals' | 'attendance' | 'fees' | 'students') => void
+}) {
+  const STAT_DEST = ['attendance', 'fees', 'fees', 'students'] as const
   return (
     <div
       style={
@@ -697,6 +708,7 @@ export default function PrincipalHomeScreen({ data, chrome = true }: { data: Pri
             <div style={{ display: 'flex', gap: '10px' }}>
               <button
                 type="button"
+                onClick={() => onNav?.('admission')}
                 style={{
                   height: '44px',
                   padding: '0 18px',
@@ -709,6 +721,7 @@ export default function PrincipalHomeScreen({ data, chrome = true }: { data: Pri
                   display: 'flex',
                   alignItems: 'center',
                   gap: '8px',
+                  cursor: onNav ? 'pointer' : 'default',
                 }}
               >
                 <Icon name="plus" size={16} strokeWidth={1.75} />
@@ -716,6 +729,7 @@ export default function PrincipalHomeScreen({ data, chrome = true }: { data: Pri
               </button>
               <button
                 type="button"
+                onClick={() => onNav?.('approvals')}
                 style={{
                   height: '44px',
                   padding: '0 20px',
@@ -728,6 +742,7 @@ export default function PrincipalHomeScreen({ data, chrome = true }: { data: Pri
                   display: 'flex',
                   alignItems: 'center',
                   gap: '14px',
+                  cursor: onNav ? 'pointer' : 'default',
                 }}
               >
                 {t('home.reviewApprovals')}
@@ -747,7 +762,15 @@ export default function PrincipalHomeScreen({ data, chrome = true }: { data: Pri
             }}
           >
             {data.stats.map((k, i) => (
-              <a key={i} href="#" style={cellStyle(i)}>
+              <a
+                key={i}
+                href="#"
+                onClick={(e) => {
+                  e.preventDefault()
+                  onNav?.(STAT_DEST[i] ?? 'students')
+                }}
+                style={cellStyle(i)}
+              >
                 <div
                   style={{
                     display: 'flex',
@@ -830,6 +853,10 @@ export default function PrincipalHomeScreen({ data, chrome = true }: { data: Pri
                 </div>
                 <a
                   href="#"
+                  onClick={(e) => {
+                    e.preventDefault()
+                    onNav?.('approvals')
+                  }}
                   style={{
                     fontSize: '13px',
                     textDecoration: 'none',
@@ -882,6 +909,7 @@ export default function PrincipalHomeScreen({ data, chrome = true }: { data: Pri
                   </div>
                   <button
                     type="button"
+                    onClick={() => onNav?.('approvals')}
                     style={{
                       height: '34px',
                       padding: '0 14px',
@@ -891,6 +919,7 @@ export default function PrincipalHomeScreen({ data, chrome = true }: { data: Pri
                       color: '#13233F',
                       fontSize: '13px',
                       fontWeight: 500,
+                      cursor: onNav ? 'pointer' : 'default',
                     }}
                   >
                     {t('home.approvals.review')}
@@ -1050,6 +1079,10 @@ export default function PrincipalHomeScreen({ data, chrome = true }: { data: Pri
                 </h2>
                 <a
                   href="#"
+                  onClick={(e) => {
+                    e.preventDefault()
+                    onNav?.('attendance')
+                  }}
                   style={{ fontSize: '13px', textDecoration: 'none', color: 'var(--accent)' }}
                 >
                   {t('home.fullRegister')}

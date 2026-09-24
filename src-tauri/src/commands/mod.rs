@@ -96,6 +96,7 @@ pub const COMMANDS: &[&str] = &[
     "dashboard_teacher",
     "set_accent",
     "verify_audit_chain",
+    "backup_status",
     // Phase 4 — staff & access, invitations, devices, sync, conflicts.
     "list_staff_access",
     "add_staff",
@@ -572,6 +573,13 @@ pub fn verify_audit_chain(state: State<RtCtx>) -> CmdResult<AuditChainDto> {
         let first_bad = crate::security::audit::verify_chain(conn)?;
         Ok(AuditChainDto { ok: first_bad.is_none(), first_bad_seq: first_bad })
     })
+}
+
+/// Recent backup runs for the Backups screen (read-only; the write path + daily
+/// scheduler land next). Honest status: empty until a backup has actually run.
+#[tauri::command]
+pub fn backup_status(state: State<RtCtx>) -> CmdResult<Vec<BackupRunDto>> {
+    state.with_db(backup_status_logic)
 }
 
 #[cfg(debug_assertions)]
