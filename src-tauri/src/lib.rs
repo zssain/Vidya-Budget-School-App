@@ -3,6 +3,7 @@
 //! Phase 3 adds the licence/setup/PIN command surface, the app state machine and
 //! the demo seed on top of the Phase-2 encrypted DB + audit chain + write helper.
 
+pub mod backup;
 pub mod commands;
 pub mod config;
 pub mod ctx;
@@ -13,6 +14,7 @@ pub mod kv;
 pub mod licence;
 pub mod security;
 pub mod server;
+pub mod session;
 pub mod state;
 pub mod sync;
 pub mod write;

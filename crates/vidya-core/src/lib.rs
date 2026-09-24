@@ -11,6 +11,7 @@ pub mod types;
 pub mod admissions;
 pub mod attendance;
 pub mod audience;
+pub mod backup;
 pub mod conflicts;
 pub mod csv;
 pub mod epoch;
@@ -23,6 +24,8 @@ pub mod marks;
 pub mod permissions;
 pub mod receipts;
 pub mod requests;
+pub mod restore;
+pub mod session;
 pub mod validation;
 pub mod words;
 

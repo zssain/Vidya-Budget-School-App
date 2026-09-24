@@ -10,6 +10,7 @@ pub const MIGRATIONS: &[(i64, &str)] = &[
     (1, include_str!("migrations/0001_init.sql")),
     (2, include_str!("migrations/0002_p03.sql")),
     (3, include_str!("migrations/0003_p05.sql")),
+    (4, include_str!("migrations/0004_p08.sql")),
 ];
 
 /// Current UTC time as an RFC-3339 string (src-tauri may read the clock).
@@ -42,6 +43,19 @@ pub fn open_in_memory(key_hex: &str) -> rusqlite::Result<Connection> {
     let conn = Connection::open_in_memory()?;
     apply_key(&conn, key_hex)?;
     conn.execute_batch("PRAGMA foreign_keys = ON;")?;
+    Ok(conn)
+}
+
+/// Open an encrypted DB file **read-only** (verification / restore inspection).
+/// Sets the key first, then opens read-only — so it never switches the file to
+/// WAL or otherwise mutates it (a backup must not change when it is verified).
+pub fn open_encrypted_readonly(path: &Path, key_hex: &str) -> rusqlite::Result<Connection> {
+    use rusqlite::OpenFlags;
+    let conn = Connection::open_with_flags(
+        path,
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )?;
+    apply_key(&conn, key_hex)?;
     Ok(conn)
 }
 
