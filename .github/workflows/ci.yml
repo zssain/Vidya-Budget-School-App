@@ -1,104 +1,162 @@
 name: CI
 
+# Push/PR gate (prompts/P09 §9): tsc, vitest, cargo test, clippy, check scripts,
+# a build, and the size report. Only the §4 allow-listed actions are used
+# (checkout, setup-node, rust-toolchain, setup-java, setup-android, tauri-action,
+# upload-artifact, action-gh-release) — no caching or install actions.
+
 on:
   push:
   pull_request:
 
 jobs:
-  macos:
-    name: macOS — verify, package and size
-    runs-on: macos-latest
+  # ---- Fast, platform-independent gate ------------------------------------
+  checks:
+    name: checks — tsc · vitest · check scripts · cargo test · clippy
+    runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@v4
         with:
           node-version-file: '.nvmrc'
           cache: 'npm'
 
       - uses: dtolnay/rust-toolchain@stable
         with:
-          components: rustfmt, clippy
+          components: clippy
 
-      - uses: Swatinem/rust-cache@v2
+      - name: Install Linux build prerequisites (webkit2gtk for Tauri)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
 
       - run: npm ci
 
+      # tsc + check:hex + check:i18n + check:deps + check:version + check:contrast
+      # + check:logs + vitest
       - run: npm run verify
 
-      - name: Show SQLCipher version and provider
-        run: cargo test -p vidya-db sqlcipher_is_linked -- --nocapture
+      # Build the frontend and prove no dev routes/seed/fixtures/dev keys leak.
+      - name: Release-artifact cleanliness
+        run: npm run check:release-clean
 
+      - name: Rust tests
+        run: cargo test --workspace --locked
+
+      - name: Clippy (deny warnings)
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+      - name: Crypto gate — ring only, no aws-lc-rs
+        run: |
+          if cargo tree -i aws-lc-rs 2>/dev/null | grep -q aws-lc-rs; then
+            echo "aws-lc-rs is linked — §13 forbids it (ring must be the sole provider)"; exit 1
+          fi
+          echo "OK — aws-lc-rs is absent."
+
+  # ---- Supply-chain advisories (tools, not dependencies) ------------------
+  audit:
+    name: audit — cargo audit · npm audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: '.nvmrc'
+      - uses: dtolnay/rust-toolchain@stable
+      - name: npm audit (production deps, high+)
+        run: npm audit --omit=dev --audit-level=high
+      - name: cargo audit
+        run: |
+          cargo install cargo-audit --locked
+          cargo audit
+
+  # ---- Real bundle + size gate: macOS -------------------------------------
+  macos:
+    name: macOS — build · size gate
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: '.nvmrc'
+          cache: 'npm'
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+      - run: npm ci
       - name: Build Apple Silicon DMG
-        run: npm run tauri build -- --target aarch64-apple-darwin --bundles dmg
-
-      - name: Enforce size budget
-        run: node scripts/check-size.mjs
-
-      - name: Upload macOS size report
-        uses: actions/upload-artifact@v7
+        run: npm run tauri build -- --target aarch64-apple-darwin --bundles dmg app
+      - name: Size gate (download ≤ 40 MB, installed ≤ 50 MB)
+        run: node scripts/size-report.mjs
+      - uses: actions/upload-artifact@v4
         with:
           name: size-macos
           path: size-report.json
           if-no-files-found: error
 
+  # ---- Real bundle + size gate: Windows -----------------------------------
   windows:
-    name: Windows — verify and installer
+    name: Windows — installer · size gate
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v6
-
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
         with:
           node-version-file: '.nvmrc'
           cache: 'npm'
-
       - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
-
-      - uses: Swatinem/rust-cache@v2
-
       - run: npm ci
-
-      - run: npm run verify
-
-      - name: Show SQLCipher version and provider
-        run: cargo test -p vidya-db sqlcipher_is_linked -- --nocapture
-
       - name: Build NSIS installer
         run: npm run tauri build -- --bundles nsis
-
-      - name: Enforce size budget
-        run: node scripts/check-size.mjs
-
-      - name: Upload Windows installer
-        uses: actions/upload-artifact@v7
+      - name: Measure NSIS silent-install footprint (installed size)
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem target/release/bundle/nsis/*.exe | Select-Object -First 1
+          $dir = Join-Path $env:RUNNER_TEMP 'vidya-installed'
+          New-Item -ItemType Directory -Force -Path $dir | Out-Null
+          Start-Process -FilePath $exe.FullName -ArgumentList "/S","/D=$dir" -Wait
+          $bytes = (Get-ChildItem $dir -Recurse -File | Measure-Object -Property Length -Sum).Sum
+          Set-Content -NoNewline -Path scripts/.windows-installed-bytes -Value $bytes
+      - name: Size gate (download ≤ 40 MB, installed ≤ 50 MB)
+        run: node scripts/size-report.mjs
+      - uses: actions/upload-artifact@v4
         with:
           name: vidya-windows-installer
           path: target/release/bundle/nsis/*.exe
           retention-days: 14
           if-no-files-found: error
-
-      - name: Upload Windows size report
-        uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@v4
         with:
           name: size-windows
           path: size-report.json
           if-no-files-found: error
 
-  deny:
-    name: cargo-deny
+  # ---- Android debug build + size report ----------------------------------
+  android:
+    name: Android — split APKs · size gate
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
-
-      # cargo-deny reads the dependency graph via `cargo metadata`, so a Rust
-      # toolchain must be on PATH.
-      - uses: dtolnay/rust-toolchain@stable
-
-      - uses: taiki-e/install-action@v2
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
         with:
-          tool: cargo-deny
-
-      - run: cargo deny check
+          node-version-file: '.nvmrc'
+          cache: 'npm'
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi
+      - run: npm ci
+      - name: Build split APKs (debug; unsigned test build)
+        run: npm run tauri android build -- --apk --split-per-abi --debug
+      - name: Size gate (download ≤ 40 MB, installed ≤ 50 MB)
+        run: node scripts/size-report.mjs
+      - uses: actions/upload-artifact@v4
+        with:
+          name: size-android
+          path: size-report.json
+          if-no-files-found: error

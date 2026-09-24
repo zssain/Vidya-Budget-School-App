@@ -67,7 +67,9 @@ export default function App() {
   const store = useStore()
   const [activateErr, setActivateErr] = useState<CmdError | null>(null)
 
-  const isDevRoute = base === '/__gallery' || base === '/__mocks'
+  // Guarded by import.meta.env.DEV so the route strings are dead-code-eliminated
+  // from release bundles (prompts/P09 §2 — no dev routes in shipped artifacts).
+  const isDevRoute = import.meta.env.DEV && (base === '/__gallery' || base === '/__mocks')
 
   // Load app_state once (except on the DEV fixture routes used by fidelity).
   useEffect(() => {

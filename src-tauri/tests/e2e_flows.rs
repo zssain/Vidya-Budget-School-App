@@ -29,6 +29,10 @@ fn fresh() -> Connection {
 fn seeded() -> Connection {
     let mut c = fresh();
     let now = OffsetDateTime::parse("2026-09-23T09:00:00Z", &time::format_description::well_known::Rfc3339).unwrap();
+    // Freeze the app clock to the seed's "today" (debug-only hook) so a payment
+    // recorded during a flow lands on the same day the dashboard/seed use — the
+    // test must not depend on the real wall-clock date.
+    db::set_test_now(Some("2026-09-23T11:30:00Z".into()));
     seed::seed_demo_school(&mut c, now).unwrap();
     c
 }

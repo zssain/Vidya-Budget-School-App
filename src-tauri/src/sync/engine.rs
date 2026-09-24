@@ -98,6 +98,11 @@ fn upsert_canonical(conn: &Connection, table: &str, payload: &serde_json::Value)
     if obj.is_empty() {
         return Ok(());
     }
+    // Server-supplied table/column names are interpolated (identifiers can't be
+    // bound); reject anything that isn't a plain SQL identifier (§2 injection gate).
+    if !crate::sync::protocol::is_safe_ident(table) || !obj.keys().all(|k| crate::sync::protocol::is_safe_ident(k)) {
+        return Ok(());
+    }
     let cols: Vec<String> = obj.keys().cloned().collect();
     let place: Vec<String> = (1..=cols.len()).map(|i| format!("?{i}")).collect();
     let sql = format!("INSERT OR REPLACE INTO {} ({}) VALUES ({})", table, cols.join(","), place.join(","));
@@ -121,6 +126,9 @@ fn apply_pull(conn: &Connection, pull: &PullResp) -> rusqlite::Result<usize> {
         upsert_canonical(conn, &ch.table, &ch.payload)?;
     }
     for del in &pull.deletes {
+        if !crate::sync::protocol::is_safe_ident(&del.table) {
+            continue;
+        }
         conn.execute(&format!("DELETE FROM {} WHERE id=?1", del.table), params![del.record_id]).ok();
     }
     set_cursor(conn, pull.next_cursor)?;

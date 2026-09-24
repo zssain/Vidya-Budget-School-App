@@ -142,6 +142,13 @@ pub fn apply_op(conn: &mut Connection, op: &Op) -> rusqlite::Result<OpResult> {
         }
     }
 
+    // 1b) Reject anything whose table or a payload column is not a plain SQL
+    //     identifier BEFORE any dynamic-identifier SQL is built for it (§2).
+    //     Identifiers can't be bound as parameters, so this is the injection gate.
+    if !crate::sync::protocol::op_identifiers_safe(&op.table, &op.payload) {
+        return finalize(conn, op, rejected(&op.op_id, codes::MALFORMED));
+    }
+
     // 2) Author's CURRENT actor.
     let actor = match load_actor(conn, &op.staff_id)? {
         Some(a) => a,

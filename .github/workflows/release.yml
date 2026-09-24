@@ -1,0 +1,184 @@
+name: Release
+
+# Cut a release (prompts/P09 §9). Pushing a tag `v1.2.3` builds every platform,
+# renames artifacts to the §2 names, measures installed size, attaches them to a
+# DRAFT GitHub Release, then adds SHA256SUMS.txt. Signing happens only when the
+# matching secrets exist; otherwise the artifact ships UNSIGNED and its filename
+# + the notes say so (rule 6 — never fake a signature). Only §4 allow-listed
+# actions are used (no download-artifact — cross-job assembly uses the preinstalled
+# `gh` CLI). Artifacts are attached to the draft by each job via action-gh-release.
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  # ---- macOS: universal DMG ------------------------------------------------
+  macos:
+    name: macOS DMG
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: '.nvmrc'
+          cache: 'npm'
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+      - run: npm ci
+      - name: Sync version from the tag
+        run: node scripts/set-version.mjs "${GITHUB_REF_NAME#v}"
+      - name: Build universal DMG (signed + notarized only if Apple secrets exist)
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: npm run tauri build -- --target universal-apple-darwin --bundles dmg app
+      - name: Rename (flag unsigned)
+        run: |
+          VER="${GITHUB_REF_NAME#v}"
+          SUFFIX=""; [ -z "${{ secrets.APPLE_SIGNING_IDENTITY }}" ] && SUFFIX="-UNSIGNED"
+          mkdir -p out
+          cp target/universal-apple-darwin/release/bundle/dmg/*.dmg "out/Vidya_${VER}_universal${SUFFIX}.dmg"
+      - name: Installed-size gate (.app bundle)
+        run: node scripts/size-report.mjs
+      - name: Attach to DRAFT release
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          tag_name: ${{ github.ref_name }}
+          name: Vidya ${{ github.ref_name }}
+          body_path: CHANGELOG.md
+          files: out/*
+
+  # ---- Windows: NSIS setup -------------------------------------------------
+  windows:
+    name: Windows NSIS
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: '.nvmrc'
+          cache: 'npm'
+      - uses: dtolnay/rust-toolchain@stable
+      - run: npm ci
+      - name: Sync version from the tag
+        shell: bash
+        run: node scripts/set-version.mjs "${GITHUB_REF_NAME#v}"
+      - name: Build NSIS installer (signtool runs only if the cert secrets exist)
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.WINDOWS_CERTIFICATE }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        run: npm run tauri build -- --bundles nsis
+      - name: Measure installed footprint + rename
+        shell: pwsh
+        run: |
+          $ver = $env:GITHUB_REF_NAME.TrimStart('v')
+          $exe = Get-ChildItem target/release/bundle/nsis/*.exe | Select-Object -First 1
+          $dir = Join-Path $env:RUNNER_TEMP 'vidya-installed'
+          New-Item -ItemType Directory -Force -Path $dir | Out-Null
+          Start-Process -FilePath $exe.FullName -ArgumentList "/S","/D=$dir" -Wait
+          $bytes = (Get-ChildItem $dir -Recurse -File | Measure-Object -Property Length -Sum).Sum
+          Set-Content -NoNewline -Path scripts/.windows-installed-bytes -Value $bytes
+          $suffix = ""; if (-not "${{ secrets.WINDOWS_CERTIFICATE }}") { $suffix = "-UNSIGNED" }
+          New-Item -ItemType Directory -Force -Path out | Out-Null
+          Copy-Item $exe.FullName "out/Vidya_${ver}_x64-setup$suffix.exe"
+      - name: Size gate
+        run: node scripts/size-report.mjs
+      - name: Attach to DRAFT release
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          tag_name: ${{ github.ref_name }}
+          name: Vidya ${{ github.ref_name }}
+          body_path: CHANGELOG.md
+          files: out/*
+
+  # ---- Android: split APKs per ABI ----------------------------------------
+  android:
+    name: Android APKs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: '.nvmrc'
+          cache: 'npm'
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android,armv7-linux-androideabi
+      - run: npm ci
+      - name: Sync version from the tag
+        run: node scripts/set-version.mjs "${GITHUB_REF_NAME#v}"
+      - name: Write keystore.properties if the keystore secret exists
+        id: ks
+        run: |
+          if [ -n "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" ]; then
+            echo "${{ secrets.ANDROID_KEYSTORE_BASE64 }}" | base64 -d > "$RUNNER_TEMP/vidya.keystore"
+            {
+              echo "storeFile=$RUNNER_TEMP/vidya.keystore"
+              echo "storePassword=${{ secrets.ANDROID_KEYSTORE_PASSWORD }}"
+              echo "keyAlias=${{ secrets.ANDROID_KEY_ALIAS }}"
+              echo "keyPassword=${{ secrets.ANDROID_KEY_PASSWORD }}"
+            } > src-tauri/gen/android/keystore.properties
+            echo "signed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "signed=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Build split APKs
+        run: npm run tauri android build -- --apk --split-per-abi
+      - name: Rename APKs (flag debug-signed test builds)
+        run: |
+          VER="${GITHUB_REF_NAME#v}"
+          SUFFIX=""; [ "${{ steps.ks.outputs.signed }}" = "false" ] && SUFFIX="-UNSIGNED-TEST"
+          mkdir -p out
+          BASE=src-tauri/gen/android/app/build/outputs/apk
+          for abi in arm64-v8a armeabi-v7a; do
+            f=$(find "$BASE" -name "*${abi}*.apk" | head -1)
+            [ -n "$f" ] && cp "$f" "out/Vidya_${VER}_${abi}${SUFFIX}.apk"
+          done
+      - name: Size gate
+        run: node scripts/size-report.mjs
+      - name: Attach to DRAFT release
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          tag_name: ${{ github.ref_name }}
+          name: Vidya ${{ github.ref_name }}
+          body_path: CHANGELOG.md
+          files: out/*
+
+  # ---- SHA256SUMS.txt over every attached asset ---------------------------
+  checksums:
+    name: SHA256SUMS.txt
+    needs: [macos, windows, android]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Hash the draft's assets and attach the sums
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p release
+          gh release download "$GITHUB_REF_NAME" -D release --clobber
+          ( cd release && sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt )
+      - name: Attach SHA256SUMS.txt to the DRAFT release
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          tag_name: ${{ github.ref_name }}
+          files: release/SHA256SUMS.txt

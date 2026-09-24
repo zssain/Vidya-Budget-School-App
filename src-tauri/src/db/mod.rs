@@ -13,8 +13,27 @@ pub const MIGRATIONS: &[(i64, &str)] = &[
     (4, include_str!("migrations/0004_p08.sql")),
 ];
 
+// A per-thread frozen clock for deterministic tests. Compiled ONLY in debug
+// builds, so the hook can never reach a release artifact; release `now_iso`
+// always reads the real clock. libtest runs each `#[test]` on its own thread,
+// so a value set here never leaks between tests.
+#[cfg(debug_assertions)]
+thread_local! {
+    static TEST_NOW: std::cell::RefCell<Option<String>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Freeze (`Some`) or release (`None`) this thread's clock. Debug-only test hook.
+#[cfg(debug_assertions)]
+pub fn set_test_now(iso: Option<String>) {
+    TEST_NOW.with(|c| *c.borrow_mut() = iso);
+}
+
 /// Current UTC time as an RFC-3339 string (src-tauri may read the clock).
 pub fn now_iso() -> String {
+    #[cfg(debug_assertions)]
+    if let Some(frozen) = TEST_NOW.with(|c| c.borrow().clone()) {
+        return frozen;
+    }
     time::OffsetDateTime::now_utc()
         .format(&time::format_description::well_known::Rfc3339)
         .unwrap_or_default()

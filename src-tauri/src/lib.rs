@@ -12,6 +12,7 @@ pub mod db;
 pub mod error;
 pub mod kv;
 pub mod licence;
+pub mod reliability;
 pub mod security;
 pub mod server;
 pub mod session;
@@ -146,6 +147,12 @@ pub fn run() {
                 .path()
                 .app_data_dir()
                 .unwrap_or_else(|_| std::path::PathBuf::from("."));
+
+            // Rotated file logs + panic hook (§3) as early as possible, so a
+            // panic during startup is still captured and the next launch can
+            // show the calm "Restart Vidya" screen.
+            reliability::init(&data_dir);
+
             app.manage(build_ctx(data_dir));
 
             // Start the school server in the background (Server mode, desktop).

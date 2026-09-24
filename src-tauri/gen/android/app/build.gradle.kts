@@ -44,9 +44,12 @@ android {
         getByName("release") {
             isMinifyEnabled = true
             isShrinkResources = true
-            // Keep native libs compressed inside the APK (smaller download).
+            // Store native libs uncompressed and page-aligned inside the APK so
+            // they are mmap'd directly and NOT extracted to disk at install —
+            // installed size then ≈ APK size (prompts/P09 §5; pairs with
+            // android:extractNativeLibs="false" in the manifest).
             packaging {
-                jniLibs.useLegacyPackaging = true
+                jniLibs.useLegacyPackaging = false
             }
             proguardFiles(
                 *fileTree(".") { include("**/*.pro") }

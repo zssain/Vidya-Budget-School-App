@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- macOS hardened-runtime entitlements (prompts/P09 §8). Vidya runs a LAN
+     school server AND connects out (to peers, the relay and Google Drive), and
+     stores the DB/backup keys in the login keychain via the `keyring` crate.
+     The app is NOT sandboxed (Developer ID distribution, not the Mac App Store),
+     so keychain access needs no extra entitlement; the two network entitlements
+     below are what a hardened-runtime, notarised build requires. -->
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Accept inbound connections: the on-device school server. -->
+    <key>com.apple.security.network.server</key>
+    <true/>
+    <!-- Make outbound connections: client sync, relay tunnel, Google Drive. -->
+    <key>com.apple.security.network.client</key>
+    <true/>
+</dict>
+</plist>

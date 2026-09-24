@@ -1,11 +1,14 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "enables the default permissions",
+  "description": "Minimal surface: core defaults plus only the plugin commands the frontend actually calls — dialog open/save (file pickers in src/lib/files.ts) and opener open-url (external links). Deep-link is handled entirely in Rust, so it needs no frontend permission. No shell, no fs, no broad plugin defaults (prompts/P09 §2).",
   "windows": [
     "main"
   ],
   "permissions": [
-    "core:default"
+    "core:default",
+    "dialog:allow-open",
+    "dialog:allow-save",
+    "opener:allow-open-url"
   ]
 }

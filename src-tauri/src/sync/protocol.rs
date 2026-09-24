@@ -30,6 +30,40 @@ pub mod codes {
     pub const INVITE_INVALID: &str = "INVITE_INVALID";
     pub const RATE_LIMITED: &str = "RATE_LIMITED";
     pub const BODY_TOO_LARGE: &str = "BODY_TOO_LARGE";
+    /// An op whose table or a payload column name is not a plain SQL identifier
+    /// (rejected before any SQL is built — see `is_safe_ident`).
+    pub const MALFORMED: &str = "MALFORMED";
+}
+
+/// True iff `s` is a plain SQL identifier: 1–64 chars, ASCII letter/underscore
+/// first, then letters/digits/underscores. Table and column names arrive inside
+/// AEAD-sealed ops from peer devices and can never be bound as SQL parameters
+/// (identifiers aren't parameterisable), so every dynamic-identifier SQL path in
+/// the sync engine validates them through here first — a value containing a
+/// quote, semicolon, parenthesis or space cannot pass, which closes SQL
+/// injection even though the identifier is interpolated. (prompts/P09 §2.)
+pub fn is_safe_ident(s: &str) -> bool {
+    if !(1..=64).contains(&s.len()) {
+        return false;
+    }
+    let mut bytes = s.bytes();
+    match bytes.next() {
+        Some(c) if c.is_ascii_alphabetic() || c == b'_' => {}
+        _ => return false,
+    }
+    bytes.all(|c| c.is_ascii_alphanumeric() || c == b'_')
+}
+
+/// True iff `table` and every key of `payload` (when it is a JSON object) are
+/// plain SQL identifiers. Ops that fail this are rejected as `MALFORMED`.
+pub fn op_identifiers_safe(table: &str, payload: &serde_json::Value) -> bool {
+    if !is_safe_ident(table) {
+        return false;
+    }
+    match payload.as_object() {
+        Some(obj) => obj.keys().all(|k| is_safe_ident(k)),
+        None => true,
+    }
 }
 
 /// One recorded change (docs §8.1). Serde mirror of `crate::write::Op` for the wire.
@@ -240,6 +274,47 @@ mod tests {
         let s = serde_json::to_string(v).unwrap();
         let back: T = serde_json::from_str(&s).unwrap();
         assert_eq!(&back, v);
+    }
+
+    #[test]
+    fn safe_ident_accepts_real_table_and_column_names() {
+        for ok in ["student", "attendance_mark", "fee_due", "class_subject", "server_seq", "_hidden", "a", "V123"] {
+            assert!(is_safe_ident(ok), "{ok} should be accepted");
+        }
+    }
+
+    #[test]
+    fn safe_ident_rejects_injection_and_junk() {
+        for bad in [
+            "",                               // empty
+            "1student",                       // leading digit
+            "payment; DROP TABLE payment",    // stacked statement
+            "student WHERE 1=1",              // space
+            "student--",                      // comment
+            "pay)ment",                       // paren
+            "na'me",                          // quote
+            "col,other",                      // comma
+            "tab\tle",                        // control char
+            "школа",                          // non-ascii
+        ] {
+            assert!(!is_safe_ident(bad), "{bad:?} must be rejected");
+        }
+        // 64 chars ok, 65 rejected.
+        assert!(is_safe_ident(&"a".repeat(64)));
+        assert!(!is_safe_ident(&"a".repeat(65)));
+    }
+
+    #[test]
+    fn op_identifiers_safe_checks_table_and_every_payload_key() {
+        let good = serde_json::json!({ "id": "x", "amount_paise": 100 });
+        assert!(op_identifiers_safe("payment", &good));
+        // Bad table.
+        assert!(!op_identifiers_safe("payment); DROP TABLE payment; --", &good));
+        // Bad column key.
+        let bad = serde_json::json!({ "id": "x", "amount_paise) VALUES (0); --": 1 });
+        assert!(!op_identifiers_safe("payment", &bad));
+        // Non-object payload (action params) is allowed as long as the table is safe.
+        assert!(op_identifiers_safe("payment", &serde_json::json!("noop")));
     }
 
     #[test]
