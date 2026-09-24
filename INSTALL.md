@@ -231,9 +231,10 @@ Drive, approvals, backups, moving to a new PC — see **ADMIN-GUIDE.md**.
 
 ## Publisher & support
 
-- **Published by:** Zuhair Hussain
+- **Developed by:** Zuhair Hussain
 - **Support:** mohammedzuhairhussain28@gmail.com
-- **Website:** https://zuhairhussain.com
+- **Website:** https://vidya.zuhairhussain.com
+- © 2026 Zuhair Hussain
 
 Because v1.0.0 is unsigned, Windows shows the publisher as "Unknown" and macOS
 cannot verify the developer — the one-time steps above are expected and safe for

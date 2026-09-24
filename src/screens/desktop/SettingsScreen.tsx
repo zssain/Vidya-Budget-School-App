@@ -155,7 +155,11 @@ export default function SettingsScreen() {
           <h3 style={H3}>{t('settings.about.title')}</h3>
           <div style={{ fontFamily: SERIF, fontSize: 20 }}>{t('settings.about.product')}</div>
           <Row label={t('settings.about.version')} value={typeof __APP_VERSION__ === 'string' ? __APP_VERSION__ : '—'} />
+          <Row label={t('settings.about.support')} value="mohammedzuhairhussain28@gmail.com" />
+          <Row label={t('settings.about.website')} value="vidya.zuhairhussain.com" />
           <p style={{ fontSize: 12, color: 'var(--muted)', margin: '10px 0 0' }}>{t('settings.about.tagline')}</p>
+          <p style={{ fontSize: 12, color: 'var(--muted)', margin: '10px 0 0' }}>{t('settings.about.developer')}</p>
+          <p style={{ fontSize: 12, color: 'var(--muted)', margin: '2px 0 0' }}>{t('settings.about.copyright')}</p>
         </div>
       </div>
     </div>

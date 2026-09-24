@@ -335,5 +335,9 @@ and tells you the exact step to fix it — a failed backup, a full Google Drive,
 disconnected account, a pending approval, a conflict, or a review flag. Vidya never
 hides a problem behind a false "everything's fine".
 
-For anything this guide doesn't cover, contact [Company name] support at
-[support contact].
+For anything this guide doesn't cover, contact support at
+**mohammedzuhairhussain28@gmail.com** (website **vidya.zuhairhussain.com**).
+
+---
+
+Developed by Zuhair Hussain · © 2026 Zuhair Hussain
