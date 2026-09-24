@@ -4,6 +4,24 @@ The five files in `design/screens/` ARE the design. This document indexes what i
 so nothing is missed. When this document and a mock file disagree, **the mock file wins**
 — report the difference in the phase handoff.
 
+## v2 amendments (Phase 11)
+
+These override the matching parts of this document for v2:
+
+- **Attendance is Present / Absent only.** The Leave (**L**) button, the Leave count and the
+  Leave segment of the stacked bar are removed from the Attendance screen and the desktop
+  register (owner-approved change to `design/screens/Attendance.dc.html`). The help text becomes
+  "34 students · tap P or A". Legacy `L` marks already stored are shown in history as a muted
+  "Leave (old)" pill. The `AttendanceRow` component keeps only the P and A buttons (§7); the
+  Attendance fidelity baseline (§9) is regenerated. This supersedes the L references in §2.1
+  (`--gold` "L button"), §5, §7 (AttendanceRow) and §8 (Attendance sample marks).
+- **No attendance cut-off copy.** Principal Home's "Needs attention" no longer says "usually
+  done by 10:30"; it reads "<class> attendance not submitted" with the sub-line "Class teacher
+  <name> · not submitted yet today". There is no cut-off or low-attendance-threshold setting.
+- **The prototype is the reference for every new screen.** Beyond these five mock screens, all
+  new v2 screens follow `design/prototype/VidyaPrototype.jsx` (see `docs/03-PROTOTYPE-SPEC.md`),
+  using the same tokens, components and animations catalogued here.
+
 ## 1. How to read a `.dc.html` mock file
 
 | In the file | Meaning |
