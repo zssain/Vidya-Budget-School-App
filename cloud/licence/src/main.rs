@@ -153,6 +153,52 @@ fn public_key_b64(signing: &SigningKey) -> String {
     STANDARD.encode(signing.verifying_key().to_bytes())
 }
 
+/// The signing key for THIS run: `LICENCE_SIGNING_KEY` (base64 32-byte seed) in
+/// production, otherwise the dev key persisted under `.dev-keys/`.
+fn load_signing_key() -> SigningKey {
+    if let Ok(b64) = std::env::var("LICENCE_SIGNING_KEY") {
+        let seed = STANDARD.decode(b64.trim()).expect("LICENCE_SIGNING_KEY must be base64");
+        let seed32 = <[u8; 32]>::try_from(seed.as_slice())
+            .expect("LICENCE_SIGNING_KEY must decode to exactly 32 bytes");
+        return SigningKey::from_bytes(&seed32);
+    }
+    ensure_keys()
+}
+
+/// Where the code/licence store lives: `LICENCE_DATA_DIR` (a persistent Fly
+/// volume) in production, otherwise `.dev-keys/`.
+fn data_dir() -> PathBuf {
+    std::env::var("LICENCE_DATA_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| keys_dir())
+}
+
+/// Generate a fresh PRODUCTION ed25519 keypair: print the PUBLIC key (for
+/// build-config/release.json + the `LICENCE_PUBLIC_KEY` repo Variable) and write
+/// the PRIVATE seed to a local, gitignored file the owner uploads as the
+/// `LICENCE_SIGNING_KEY` Fly secret. Never reuses the dev key; never commits either.
+fn gen_prod_key() {
+    let mut seed = [0u8; 32];
+    rand::rngs::OsRng.fill_bytes(&mut seed);
+    let signing = SigningKey::from_bytes(&seed);
+    let out = Path::new("vidya-licence-signing.key");
+    std::fs::write(out, STANDARD.encode(seed)).expect("write private key file");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(out, std::fs::Permissions::from_mode(0o600));
+    }
+    println!("Production licence keypair generated.\n");
+    println!("PUBLIC key  → build-config/release.json \"licence_public_key\"");
+    println!("            → GitHub repo Variable LICENCE_PUBLIC_KEY:\n");
+    println!("    {}\n", public_key_b64(&signing));
+    println!("PRIVATE key → written to {} (gitignored).", out.display());
+    println!("            Upload to the licence server as a Fly secret, then DELETE it:\n");
+    println!("    fly secrets set LICENCE_SIGNING_KEY=\"$(cat {})\"\n", out.display());
+    println!("WARNING: keep the private key in two safe places and NEVER commit it.");
+    println!("If it leaks, every issued licence must be re-signed with a new key.");
+}
+
 // -------------------------------------------------------------- utilities ---
 
 fn hex(bytes: &[u8]) -> String {
@@ -321,6 +367,7 @@ async fn transfer() -> axum::response::Response {
 
 fn router(state: AppState) -> Router {
     Router::new()
+        .route("/healthz", axum::routing::get(|| async { "ok" }))
         .route("/v1/activate", post(activate))
         .route("/v1/check", post(check))
         .route("/v1/transfer", post(transfer))
@@ -332,11 +379,19 @@ fn router(state: AppState) -> Router {
 #[tokio::main]
 async fn main() {
     let arg = std::env::args().nth(1).unwrap_or_default();
-    let signing = ensure_keys();
+
+    // gen-prod-key never touches the dev key / .dev-keys — handle it first.
+    if arg == "gen-prod-key" {
+        gen_prod_key();
+        return;
+    }
+
+    let signing = load_signing_key();
 
     match arg.as_str() {
         "gen-code" => {
-            let dir = keys_dir();
+            let dir = data_dir();
+            std::fs::create_dir_all(&dir).ok();
             let store_path = dir.join("store.json");
             let mut store: Store = std::fs::read_to_string(&store_path)
                 .ok()
@@ -356,30 +411,38 @@ async fn main() {
                 .ok()
                 .and_then(|p| p.parse().ok())
                 .unwrap_or(DEFAULT_PORT);
+            // Dev binds loopback; a container (Fly) sets LICENCE_BIND=0.0.0.0.
+            let bind = std::env::var("LICENCE_BIND").unwrap_or_else(|_| "127.0.0.1".to_string());
+            let prod = std::env::var("LICENCE_SIGNING_KEY").is_ok();
             let relay_shared_key = std::env::var("RELAY_SHARED_KEY")
                 .unwrap_or_else(|_| DEV_RELAY_SHARED_KEY.to_string())
                 .into_bytes();
+            std::fs::create_dir_all(data_dir()).ok();
             let state = AppState {
                 signing: Arc::new(signing),
-                store_path: keys_dir().join("store.json"),
+                store_path: data_dir().join("store.json"),
                 lock: Arc::new(Mutex::new(())),
                 relay_shared_key: Arc::new(relay_shared_key),
             };
-            println!("Vidya dev licence service (dev mode)");
-            println!("  listening on http://127.0.0.1:{port}");
-            println!("  licence_public_key (paste into src-tauri/build-config/dev.json):");
+            println!(
+                "Vidya licence service ({})",
+                if prod { "production" } else { "dev mode" }
+            );
+            println!("  listening on http://{bind}:{port}");
+            println!("  licence_public_key:");
             println!("    {}", public_key_b64(&state.signing));
-            println!("  mint a code with:  cargo run -- gen-code");
-            let listener = tokio::net::TcpListener::bind(("127.0.0.1", port))
+            let listener = tokio::net::TcpListener::bind((bind.as_str(), port))
                 .await
                 .expect("bind licence service");
             axum::serve(listener, router(state)).await.expect("serve licence service");
         }
         _ => {
             eprintln!(
-                "usage:\n  cargo run -- gen-code     mint + store a VIDYA-XXXX-XXXX-XXXX code\n  \
-                 cargo run -- --dev        start the dev service on 127.0.0.1:{DEFAULT_PORT}\n  \
-                 cargo run -- print-key    print the dev ed25519 public key (base64)"
+                "usage:\n  cargo run -- gen-code       mint + store a VIDYA-XXXX-XXXX-XXXX code\n  \
+                 cargo run -- --dev          start the dev service on 127.0.0.1:{DEFAULT_PORT}\n  \
+                 cargo run -- print-key      print the current ed25519 public key (base64)\n  \
+                 cargo run -- gen-prod-key   generate a PRODUCTION keypair (public to stdout,\n                              private to ./vidya-licence-signing.key for a Fly secret)\n\n\
+                 production env: LICENCE_SIGNING_KEY (base64 seed), LICENCE_DATA_DIR (volume),\n                 RELAY_SHARED_KEY, LICENCE_PORT"
             );
             std::process::exit(2);
         }

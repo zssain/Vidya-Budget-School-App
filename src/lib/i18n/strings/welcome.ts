@@ -41,7 +41,7 @@ const en: Record<string, string> = {
   'welcome.signin.prompt': 'Already set up on this device? ',
   'welcome.signin.link': 'Sign in',
   // Footer
-  'welcome.footer.copyright': '© 2026 [Your company]',
+  'welcome.footer.copyright': '© 2026 Zuhair Hussain',
   'welcome.footer.privacy': 'Privacy',
   'welcome.footer.terms': 'Terms',
   // Right panel (navy)
@@ -85,7 +85,7 @@ const hi: Record<string, string> = {
   'welcome.cta.recover': 'पुनर्प्राप्ति शुरू करें',
   'welcome.signin.prompt': 'इस डिवाइस पर पहले से सेट है? ',
   'welcome.signin.link': 'साइन इन करें',
-  'welcome.footer.copyright': '© 2026 [Your company]',
+  'welcome.footer.copyright': '© 2026 Zuhair Hussain',
   'welcome.footer.privacy': 'गोपनीयता',
   'welcome.footer.terms': 'शर्तें',
   'welcome.right.eyebrow': 'भारतीय स्कूलों के लिए स्कूल प्रबंधन',

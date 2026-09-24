@@ -424,6 +424,8 @@ them after re-joining (ops keep op_id + HLC; server treats them as normal ops, a
 - `rcgen` (`default-features = false`, `ring, pem`)
 - `reqwest` (`default-features = false`, `json, rustls-tls`) — no http2, gzip, cookies
 - `tokio-tungstenite` (rustls with ring) — relay tunnel only
+- `futures-util` (`default-features = false`, `std, sink`) — `Sink`/`Stream`
+  helpers the relay tunnel needs to drive `tokio-tungstenite` (owner-approved P09)
 - `rusqlite` (`bundled-sqlcipher-vendored-openssl`)
 - `uuid` (`v7`), `argon2`, `rand`, `sha2`, `hmac`, `base64`, `chacha20poly1305`,
   `ed25519-dalek`, `thiserror`, `time` (`formatting, parsing, macros`)
@@ -447,7 +449,9 @@ ask first.)
 
 **JS dev**: `vite`, `@vitejs/plugin-react`, `typescript`, `tailwindcss`,
 `@tailwindcss/vite`, `vitest`, `@playwright/test`, `@tauri-apps/cli`, `@types/react`,
-`@types/react-dom`.
+`@types/react-dom`, `@types/node` (types-only dev dependency for `vite.config.ts`
+and the `scripts/*.mjs` build tools — never bundled into the shipped frontend;
+owner-approved P09).
 
 **Fonts** (bundled, never loaded from the web; exact package names verified on npm in
 Phase 1): Geist 400/500/600/700 (Fontsource static), **Newsreader variable with the

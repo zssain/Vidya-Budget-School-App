@@ -1,0 +1,33 @@
+# Fly.io config for the Vidya relay (prompts/P09 §5, docs/DEPLOY-FLY.md).
+# The owner runs `fly launch --no-deploy` in this directory (it has a Dockerfile),
+# keeping/adjusting this file. Rename `app` if the name is taken. Deploy is an
+# OWNER action — nothing here deploys automatically.
+
+app = "vidya-relay"
+primary_region = "bom"   # Mumbai (closest to India; fall back to "sin" if unavailable)
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  RELAY_BIND = "0.0.0.0:8788"
+  # RELAY_SHARED_KEY is set as a Fly secret (same value as the licence service):
+  #   fly secrets set RELAY_SHARED_KEY=...
+
+[http_service]
+  internal_port = 8788
+  force_https = true           # clients connect over wss://
+  auto_stop_machines = "off"   # always on during school hours
+  auto_start_machines = true
+  min_machines_running = 1
+
+  [[http_service.checks]]
+    interval = "15s"
+    timeout = "2s"
+    grace_period = "5s"
+    method = "GET"
+    path = "/healthz"
+
+[[vm]]
+  size = "shared-cpu-1x"       # smallest shared-CPU machine
+  memory = "256mb"

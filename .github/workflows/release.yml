@@ -2,11 +2,19 @@ name: Release
 
 # Cut a release (prompts/P09 §9). Pushing a tag `v1.2.3` builds every platform,
 # renames artifacts to the §2 names, measures installed size, attaches them to a
-# DRAFT GitHub Release, then adds SHA256SUMS.txt. Signing happens only when the
-# matching secrets exist; otherwise the artifact ships UNSIGNED and its filename
-# + the notes say so (rule 6 — never fake a signature). Only §4 allow-listed
-# actions are used (no download-artifact — cross-job assembly uses the preinstalled
-# `gh` CLI). Artifacts are attached to the draft by each job via action-gh-release.
+# DRAFT GitHub Release, then adds SHA256SUMS.txt.
+#
+# SIGNING (owner decision, P09 follow-up): Windows and macOS ship UNSIGNED for
+# v1.0.0 — the WINDOWS_*/APPLE_* secrets are optional and, when absent, the signing
+# steps are skipped cleanly, the artifact filename gets a `-UNSIGNED` suffix and the
+# release notes carry an "Unsigned build" banner (rule 6 — never fake a signature).
+# Android is debug-signed `-UNSIGNED-TEST` until the owner adds the keystore secrets.
+#
+# BUILD-CONFIG (required): the five non-secret build-config values are read from
+# repo Variables and written to build-config/release.json before each build; a
+# missing value fails the job with a clear message (build.rs is the backstop and
+# also refuses the dev licence key). Only §4 allow-listed actions are used; the
+# cross-job SHA256SUMS uses the preinstalled `gh` CLI (no download-artifact).
 
 on:
   push:
@@ -33,7 +41,18 @@ jobs:
       - run: npm ci
       - name: Sync version from the tag
         run: node scripts/set-version.mjs "${GITHUB_REF_NAME#v}"
-      - name: Build universal DMG (signed + notarized only if Apple secrets exist)
+      - name: Write build-config/release.json (fail if any value is missing)
+        shell: bash
+        env:
+          LICENCE_API: ${{ vars.LICENCE_API }}
+          LICENCE_PUBLIC_KEY: ${{ vars.LICENCE_PUBLIC_KEY }}
+          RELAY_URL: ${{ vars.RELAY_URL }}
+          GOOGLE_CLIENT_ID_DESKTOP: ${{ vars.GOOGLE_CLIENT_ID_DESKTOP }}
+          GOOGLE_CLIENT_ID_ANDROID: ${{ vars.GOOGLE_CLIENT_ID_ANDROID }}
+        run: bash scripts/write-release-config.sh
+      # Signing + notarization run ONLY if the Apple secrets are present; absent →
+      # unsigned build, no error.
+      - name: Build universal DMG
         env:
           APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
@@ -56,7 +75,6 @@ jobs:
           draft: true
           tag_name: ${{ github.ref_name }}
           name: Vidya ${{ github.ref_name }}
-          body_path: CHANGELOG.md
           files: out/*
 
   # ---- Windows: NSIS setup -------------------------------------------------
@@ -74,7 +92,22 @@ jobs:
       - name: Sync version from the tag
         shell: bash
         run: node scripts/set-version.mjs "${GITHUB_REF_NAME#v}"
-      - name: Build NSIS installer (signtool runs only if the cert secrets exist)
+      - name: Write build-config/release.json (fail if any value is missing)
+        shell: bash
+        env:
+          LICENCE_API: ${{ vars.LICENCE_API }}
+          LICENCE_PUBLIC_KEY: ${{ vars.LICENCE_PUBLIC_KEY }}
+          RELAY_URL: ${{ vars.RELAY_URL }}
+          GOOGLE_CLIENT_ID_DESKTOP: ${{ vars.GOOGLE_CLIENT_ID_DESKTOP }}
+          GOOGLE_CLIENT_ID_ANDROID: ${{ vars.GOOGLE_CLIENT_ID_ANDROID }}
+        run: bash scripts/write-release-config.sh
+      # NOTE (cloud signing): the classic PFX-in-a-secret approach used by these
+      # env vars only works for older certificates. Windows code-signing certs
+      # issued from mid-2023 onward keep the private key on a hardware token or a
+      # cloud signing service (Azure Trusted Signing / a CA's cloud HSM), so
+      # signtool must call that service instead of a local .pfx. Revisit this step
+      # with a cloud-signing integration when the owner buys a certificate.
+      - name: Build NSIS installer
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.WINDOWS_CERTIFICATE }}
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
@@ -100,7 +133,6 @@ jobs:
           draft: true
           tag_name: ${{ github.ref_name }}
           name: Vidya ${{ github.ref_name }}
-          body_path: CHANGELOG.md
           files: out/*
 
   # ---- Android: split APKs per ABI ----------------------------------------
@@ -124,6 +156,14 @@ jobs:
       - run: npm ci
       - name: Sync version from the tag
         run: node scripts/set-version.mjs "${GITHUB_REF_NAME#v}"
+      - name: Write build-config/release.json (fail if any value is missing)
+        env:
+          LICENCE_API: ${{ vars.LICENCE_API }}
+          LICENCE_PUBLIC_KEY: ${{ vars.LICENCE_PUBLIC_KEY }}
+          RELAY_URL: ${{ vars.RELAY_URL }}
+          GOOGLE_CLIENT_ID_DESKTOP: ${{ vars.GOOGLE_CLIENT_ID_DESKTOP }}
+          GOOGLE_CLIENT_ID_ANDROID: ${{ vars.GOOGLE_CLIENT_ID_ANDROID }}
+        run: bash scripts/write-release-config.sh
       - name: Write keystore.properties if the keystore secret exists
         id: ks
         run: |
@@ -159,26 +199,42 @@ jobs:
           draft: true
           tag_name: ${{ github.ref_name }}
           name: Vidya ${{ github.ref_name }}
-          body_path: CHANGELOG.md
           files: out/*
 
-  # ---- SHA256SUMS.txt over every attached asset ---------------------------
+  # ---- SHA256SUMS.txt + release notes over every attached asset -----------
   checksums:
-    name: SHA256SUMS.txt
+    name: SHA256SUMS + notes
     needs: [macos, windows, android]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Hash the draft's assets and attach the sums
+      - name: Hash the draft's assets
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           mkdir -p release
           gh release download "$GITHUB_REF_NAME" -D release --clobber
           ( cd release && sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt )
-      - name: Attach SHA256SUMS.txt to the DRAFT release
+      - name: Compose release notes (unsigned banner + CHANGELOG)
+        run: |
+          {
+            echo "> **Unsigned build** — Windows and macOS are not code-signed for this"
+            echo "> release. See INSTALL.md for the one-time security prompt (Windows:"
+            echo "> \"More info → Run anyway\"; macOS: right-click → Open / Privacy &"
+            echo "> Security → Open Anyway). Android APKs suffixed \`-UNSIGNED-TEST\` are"
+            echo "> debug-signed test builds."
+            echo ""
+            echo "Published by Zuhair Hussain · support: mohammedzuhairhussain28@gmail.com · zuhairhussain.com"
+            echo ""
+            echo "---"
+            echo ""
+            cat CHANGELOG.md
+          } > release-notes.md
+      - name: Attach SHA256SUMS.txt + set notes on the DRAFT release
         uses: softprops/action-gh-release@v2
         with:
           draft: true
           tag_name: ${{ github.ref_name }}
+          name: Vidya ${{ github.ref_name }}
+          body_path: release-notes.md
           files: release/SHA256SUMS.txt

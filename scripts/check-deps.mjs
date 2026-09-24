@@ -8,14 +8,9 @@
 // pull in. The cloud/* services are separate Cargo workspaces (excluded from the
 // root workspace) and are not part of the shipped app, so they are out of scope.
 //
-// Two direct deps are on the allowlist as EXPLICIT, documented exceptions that
-// are pending owner sign-off (they warn, they do not fail):
-//   * futures-util — the Sink/Stream companion tokio-tungstenite needs for the
-//     relay tunnel; flagged in docs/phase-notes/phase-5.md ("trivially swappable").
-//   * @types/node   — types-only dev dependency (zero shipped bytes) needed by
-//     vite.config.ts / the Node build scripts; sibling of the §13-listed
-//     @types/react / @types/react-dom.
-// Both are recorded in docs/phase-notes/phase-9.md for the owner to fold into §13.
+// STRICT: any direct dependency not on the §13 allowlist FAILS the build. The two
+// P09 owner-approved additions (futures-util, @types/node) are now IN §13 and in
+// the allowlists below — there are no warn-only exceptions.
 import { readFileSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
@@ -25,7 +20,8 @@ const ROOT = fileURLToPath(new URL('..', import.meta.url))
 // ---- §13 allowlists (verbatim from docs/00-SYSTEM-CONTEXT.md §13) -----------
 const RUST_ALLOWED = new Set([
   'tauri', 'tauri-build', 'serde', 'serde_json', 'tokio', 'axum', 'hyper', 'hyper-util',
-  'tokio-rustls', 'rustls', 'rcgen', 'reqwest', 'tokio-tungstenite', 'rusqlite', 'uuid',
+  'tokio-rustls', 'rustls', 'rcgen', 'reqwest', 'tokio-tungstenite', 'futures-util',
+  'rusqlite', 'uuid',
   'argon2', 'rand', 'sha2', 'hmac', 'base64', 'chacha20poly1305', 'ed25519-dalek',
   'thiserror', 'time', 'mdns-sd', 'keyring', 'tracing', 'tracing-subscriber', 'qrcode',
   'tauri-plugin-dialog', 'tauri-plugin-opener', 'tauri-plugin-deep-link',
@@ -47,10 +43,8 @@ const JS_ALLOWED = new Set([
   // JS dev
   'vite', '@vitejs/plugin-react', 'typescript', 'tailwindcss', '@tailwindcss/vite',
   'vitest', '@playwright/test', '@tauri-apps/cli', '@types/react', '@types/react-dom',
+  '@types/node', // types-only dev dep for vite.config.ts + scripts/*.mjs; never bundled
 ])
-
-// Explicit, documented exceptions (warn, don't fail) — see the header note.
-const PENDING_OWNER = new Set(['futures-util', '@types/node'])
 
 // Named §13 "NOT allowed" list — anything here gets an especially loud error.
 const BANNED = new Set([
@@ -60,15 +54,10 @@ const BANNED = new Set([
   'zod', 'i18next', 'react-i18next', 'electron', 'axum-server', 'aws-lc-rs',
 ])
 
-const warnings = []
 const errors = []
 
 function check(name, allowed, ecosystem) {
   if (allowed.has(name)) return
-  if (PENDING_OWNER.has(name)) {
-    warnings.push(`${ecosystem}: "${name}" is not enumerated in §13 — allowed as a documented, owner-pending exception (see phase-9 notes).`)
-    return
-  }
   if (BANNED.has(name)) {
     errors.push(`${ecosystem}: "${name}" is on §13's explicit NOT-allowed list.`)
     return
@@ -101,15 +90,10 @@ for (const p of meta.packages ?? []) {
 for (const d of [...rustDeps].sort()) check(d, RUST_ALLOWED, 'cargo')
 
 // ---- report -----------------------------------------------------------------
-for (const w of warnings) console.warn('  warn  ' + w)
 if (errors.length) {
   console.error('\ncheck-deps: FAIL — dependencies outside §13:\n')
   for (const e of errors) console.error('  • ' + e)
   console.error('')
   process.exit(1)
 }
-console.log(
-  `check-deps: OK — ${npmDeps.length} npm + ${rustDeps.size} cargo direct deps all within §13` +
-    (warnings.length ? ` (${warnings.length} documented owner-pending exception${warnings.length > 1 ? 's' : ''})` : '') +
-    '.',
-)
+console.log(`check-deps: OK — ${npmDeps.length} npm + ${rustDeps.size} cargo direct deps all within §13.`)

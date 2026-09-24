@@ -42,4 +42,16 @@ fn check_release_config() {
             );
         }
     }
+
+    // A release must NEVER ship the DEV licence key (prompts/P09 §5). Generate a
+    // production keypair (`cargo run -p vidya-licence -- gen-prod-key`) and use
+    // its public key in build-config/release.json.
+    const DEV_LICENCE_PUBLIC_KEY: &str = "yLQ8lt26cM/ZdKnfaYGS/VgV6DT6CrAyLHS1br28XJs=";
+    if json.get("licence_public_key").and_then(|v| v.as_str()) == Some(DEV_LICENCE_PUBLIC_KEY) {
+        panic!(
+            "release build config uses the DEV licence public key — generate a production \
+             keypair (cloud/licence gen-prod-key) and set its public key in \
+             build-config/release.json (prompts/P09 §5, docs/DEPLOY-FLY.md)"
+        );
+    }
 }

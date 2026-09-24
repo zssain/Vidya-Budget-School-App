@@ -340,3 +340,126 @@ relay hosting + `RELAY_SHARED_KEY` rollout; server port 47650 confirmation.
 - `cargo audit` 0 vulns · `npm audit --omit=dev` 0 vulns.
 - `node scripts/size-report.mjs` (no artifacts yet → reports, exits 0).
 - `node scripts/check-release-clean.mjs` — clean after the dev-route fix.
+
+---
+
+# P09 Follow-up — owner answers (branch `rebuild/p09`; no push/tag/deploy)
+
+Addresses the owner's follow-up decisions. Everything below is committed on
+`rebuild/p09`; nothing was pushed, tagged, released or deployed.
+
+## 1. Dependencies — both approved, now IN §13, check-deps is STRICT
+- `docs/00-SYSTEM-CONTEXT.md §13`: added **`futures-util`** (`default-features = false`,
+  `std, sink` — already trimmed; relay-tunnel Sink/Stream helpers) and **`@types/node`**
+  (types-only dev dep for `vite.config.ts` + `scripts/*.mjs`; never bundled).
+- `scripts/check-deps.mjs`: removed the warn-only exception path — **any** dep not on
+  the §13 allowlist now FAILS. `node scripts/check-deps.mjs` →
+  `OK — 30 npm + 34 cargo direct deps all within §13.` (no warnings).
+- `cargo tree -i aws-lc-rs` → *did not match any packages* (still empty ✓).
+
+## 2. Code signing — NO certificates for v1 (unsigned, labelled)
+- `.github/workflows/release.yml` builds cleanly with **no** `WINDOWS_*`/`APPLE_*`
+  secrets: signing env is passed through but empty → Tauri builds unsigned; artifacts
+  get a `-UNSIGNED` suffix; the `checksums` job prepends an **"Unsigned build"** banner
+  (+ publisher line) to the release notes. Android → `-UNSIGNED-TEST` until the keystore
+  secrets exist.
+- Kept the signing steps for later; added a comment on the Windows step that modern
+  code-signing certs keep the key on a hardware token / cloud signing service, so the
+  plain-PFX approach may not work — revisit with cloud signing when a cert is bought.
+- `INSTALL.md`: Windows SmartScreen (*More info → Run anyway*) and **verified** macOS
+  wording — on Sonoma/Sequoia the reliable path is **System Settings → Privacy &
+  Security → Open Anyway** (the Control-click shortcut was removed in Sequoia 15;
+  kept as the older-macOS alternative). Verified against Apple support
+  (support.apple.com/en-us/102445, .../guide/mac-help/mh40616).
+- Publisher identity **"Zuhair Hussain"** / support `mohammedzuhairhussain28@gmail.com`
+  / `zuhairhussain.com`: set in `tauri.conf.json` (`bundle.publisher`, `copyright`,
+  `homepage`), the app's welcome footer copyright, INSTALL.md, and the release notes.
+  (There is no in-app Settings → About screen yet — P08 Part E React was not built —
+  so About-screen placement is a P08 follow-up; recorded here.)
+
+## 3. Android signing — owner creates the keystore; everything else is ready
+- `.gitignore` already covered `*.jks`/`*.keystore`/`keystore.properties`; added
+  `*.p8`, `*.mobileprovision`, `vidya-licence-signing.key`, `*-signing.key`,
+  `*.private-key`, `google-services.json`, `GoogleService-Info.plist`.
+- `docs/ANDROID-SIGNING.md`: exact `keytool` genkey, SHA-1 read, base64 (macOS +
+  Windows PowerShell), the four GitHub secrets, and a bold back-up-or-you-can-never-
+  update warning. `release.yml` already emits `-UNSIGNED-TEST` APKs until the secrets
+  exist.
+
+## 4. App identifier — DECISION NEEDED (not changed)
+- **Current (unchanged): `in.vidyabudget.app`** — `tauri.conf.json` `identifier`,
+  and the Android `namespace` + `applicationId` in `gen/android/app/build.gradle.kts`.
+- Owner is considering **`com.zuhairhussain.vidya`** (owns zuhairhussain.com).
+- Consequences (identifier can NEVER change after the first public release):
+  - **Keep `in.vidyabudget.app`** — matches the icons/config already generated; but it
+    encodes a "vidyabudget" org you don't own the domain for (harmless, just cosmetic
+    in the reverse-DNS sense).
+  - **Switch to `com.zuhairhussain.vidya`** — cleanly under your own domain; requires
+    regenerating the Android project id (`tauri android init` picks up
+    `tauri.conf.json`), and the macOS bundle id changes too. Must be done **before**
+    the first release and **before** creating the Android OAuth client (its package
+    name is fixed to this value).
+- The Google Android OAuth client (GOOGLE-OAUTH-SETUP.md) must use whichever is final.
+  **I did not change it — waiting on the owner's decision.**
+
+## 5. Build-config / hosting — prepared, not deployed
+- `cloud/relay/fly.toml` + `cloud/licence/fly.toml` + `cloud/licence/Dockerfile`
+  (relay already had a Dockerfile): smallest `shared-cpu-1x`/256mb, always-on
+  (`auto_stop_machines="off"`, `min_machines_running=1`), region `bom` (Mumbai;
+  fallback `sin`), `/healthz` checks. Licence gets a **Fly volume** at `/data`
+  (`LICENCE_DATA_DIR`) for its store; added a `/healthz` route + env-driven bind
+  (`LICENCE_BIND=0.0.0.0`) so it runs in a container.
+- Production licence key: `cargo run -p vidya-licence -- gen-prod-key` generates a
+  fresh ed25519 pair, prints the PUBLIC key (for build-config), and writes the PRIVATE
+  seed to `vidya-licence-signing.key` (gitignored) for `fly secrets set
+  LICENCE_SIGNING_KEY=...`. Never reuses/commits the dev key.
+- **Release builds refuse the dev key**: `src-tauri/build.rs` panics if
+  `licence_public_key` equals the dev key; `scripts/write-release-config.sh` refuses it
+  too and fails naming any missing value.
+- `.github/workflows/release.yml` writes `build-config/release.json` from five repo
+  **Variables** (`LICENCE_API`, `LICENCE_PUBLIC_KEY`, `RELAY_URL`,
+  `GOOGLE_CLIENT_ID_DESKTOP`, `GOOGLE_CLIENT_ID_ANDROID`) via `write-release-config.sh`
+  and fails clearly if any is missing (build.rs is the backstop). Signing secrets stay
+  optional.
+- `docs/DEPLOY-FLY.md` (Fly install → launch → volume/secrets → deploy → `fly certs
+  add` DNS → cost link) and `docs/GOOGLE-OAUTH-SETUP.md` (project, consent screen,
+  `drive.file`, Desktop + Android clients) — both verified against live Fly/Google docs.
+
+## 6. Owner checklist
+`docs/RELEASE-CHECKLIST.md` — 11 ordered checkboxes (confirm identifier → keystore →
+Android secrets → Fly deploy + DNS → prod licence key → OAuth clients → merge → tag →
+review draft → clean-machine runs → publish), each linking to the guide, plus the
+five build-config Variables table.
+
+## Files added / changed (this follow-up)
+- Added: `docs/ANDROID-SIGNING.md`, `docs/DEPLOY-FLY.md`, `docs/GOOGLE-OAUTH-SETUP.md`,
+  `docs/RELEASE-CHECKLIST.md`, `scripts/write-release-config.sh`,
+  `cloud/licence/Dockerfile`, `cloud/licence/fly.toml`, `cloud/relay/fly.toml`.
+- Changed: `docs/00-SYSTEM-CONTEXT.md` (§13), `scripts/check-deps.mjs` (strict),
+  `.github/workflows/release.yml`, `src-tauri/tauri.conf.json` (publisher/copyright/
+  homepage), `src-tauri/build.rs` (dev-key refusal), `src/lib/i18n/strings/welcome.ts`
+  (copyright), `INSTALL.md`, `.gitignore`, `cloud/licence/src/main.rs` (gen-prod-key,
+  prod env, /healthz, bind).
+
+## Verification (real output)
+- `npm run verify` → hex OK · i18n OK (17 modules, 716 keys) · **check-deps STRICT OK
+  (30 npm + 34 cargo)** · version 1.0.0 · contrast OK · logs OK · 38 vitest passed.
+- `cargo clippy --workspace --all-targets -- -D warnings` → clean. `cargo clippy` in
+  `cloud/licence` → clean.
+- release.yml build-config simulation (`write-release-config.sh`): no vars → fails
+  naming all 5; dev key → refused; real values → writes `release.json` (gitignored).
+- `cargo run -p vidya-licence -- gen-prod-key` → prints a fresh public key, writes the
+  gitignored private file.
+- Secret hygiene: `git ls-files` has no `.jks/.keystore/.pem/.p12/signing.key`;
+  `git log -p main..rebuild/p09` has no private keys/passwords; no key files in the repo.
+- **Could NOT run** the GitHub Actions workflows themselves (no `act`/runners here) or
+  `docker build` (daemon down) — the workflow logic is exercised via the scripts above
+  and by reading the YAML; real execution happens on GitHub/Fly at the owner's hand.
+
+## Things only the owner can do (from RELEASE-CHECKLIST.md)
+Confirm the app identifier · create + back up the Android keystore · add the four
+Android secrets · deploy licence+relay on Fly + add DNS · generate the production
+licence key (private → Fly secret, public → GitHub Variable) · create the two Google
+OAuth clients + add the five build-config Variables · merge to main · `git tag v1.0.0
+&& git push --tags` · review the DRAFT release · run the six clean-machine tests ·
+publish.

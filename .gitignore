@@ -18,10 +18,18 @@ size-report.json
 .env.*
 *.p12
 *.pem
+*.p8
 *.jks
 *.keystore
+*.mobileprovision
 provider-keys/
 keystore.properties
+# Signing / service keys (never commit)
+vidya-licence-signing.key
+*-signing.key
+*.private-key
+google-services.json
+GoogleService-Info.plist
 
 # Real release build config (only build-config/release.json.example is committed)
 src-tauri/build-config/release.json

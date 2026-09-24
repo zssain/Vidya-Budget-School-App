@@ -116,17 +116,22 @@ v1.0.0). If you double-click Vidya the first time, macOS may say:
 
 > "Vidya" cannot be opened because Apple could not verify it is free of malware.
 
-To open it anyway:
+To open it anyway (this is the reliable way on macOS Sonoma/Sequoia and later):
 
-1. In **Applications**, **right-click** (or Control-click) **Vidya**.
-2. Choose **Open** from the menu.
-3. In the dialog, click **Open** again.
+1. Double-click **Vidya** once and dismiss the warning.
+2. Open **System Settings → Privacy & Security**.
+3. Scroll down to the **Security** section — you'll see a line about "Vidya"
+   being blocked. Click **Open Anyway** (it appears for about an hour after
+   step 1).
+4. Confirm with your Mac password / Touch ID, then click **Open** on the final
+   prompt.
 
 You only need to do this **once**. After that, launch Vidya normally.
 
-> On newer macOS versions the wording may differ, or you may instead go to
-> **System Settings → Privacy & Security**, scroll down, and click **Open
-> Anyway** next to the Vidya message.
+> On older macOS (Ventura 13 / Sonoma 14) you can instead **right-click** (or
+> Control-click) **Vidya** in Applications → **Open** → **Open**. On macOS
+> Sequoia (15) that shortcut was removed, so use the Privacy & Security steps
+> above.
 
 ### 3. "Local network" permission on first run
 
@@ -221,3 +226,15 @@ their own PCs (Windows/macOS) and Android phones.
 
 For everything after install — activation, recovery key, inviting staff, Google
 Drive, approvals, backups, moving to a new PC — see **ADMIN-GUIDE.md**.
+
+---
+
+## Publisher & support
+
+- **Published by:** Zuhair Hussain
+- **Support:** mohammedzuhairhussain28@gmail.com
+- **Website:** https://zuhairhussain.com
+
+Because v1.0.0 is unsigned, Windows shows the publisher as "Unknown" and macOS
+cannot verify the developer — the one-time steps above are expected and safe for
+a build you downloaded from the official release page.
