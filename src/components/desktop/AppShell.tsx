@@ -6,8 +6,9 @@ import { navigate } from '@/lib/router'
 import { useStore } from '@/lib/store'
 import * as api from '@/lib/api'
 import type { SchoolDto } from '@/lib/api'
-import { t } from '@/lib/i18n'
+import { t, getLang } from '@/lib/i18n'
 import logoDark from '@/assets/vidya-horizontal-on-dark.svg'
+import logoDarkHi from '@/assets/vidya-horizontal-hindi-on-dark.svg'
 
 // The single desktop chrome (docs §6.2): the mock sidebar (Main.dc.html /
 // FeeCollection.dc.html) + the mock header, with REAL navigation, an active
@@ -158,7 +159,7 @@ export default function AppShell({ role, active, children }: AppShellProps) {
         }}
       >
         <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', padding: '0 10px' }}>
-          <img src={logoDark} alt={schoolName} width={160} height={52} style={{ width: '160px', height: '52px', display: 'block' }} />
+          <img src={getLang() === 'hi' ? logoDarkHi : logoDark} alt={schoolName} width={160} height={52} style={{ width: '160px', height: '52px', display: 'block' }} />
           <span style={{ fontSize: '12px', color: 'var(--on-navy-muted)' }}>{schoolName}</span>
         </div>
 

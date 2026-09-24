@@ -113,7 +113,7 @@ const EYEBROW: CSSProperties = {
 }
 
 const SERIF: CSSProperties = {
-  fontFamily: "'Newsreader', Georgia, serif",
+  fontFamily: 'var(--font-serif)',
   color: 'var(--ink)',
 }
 

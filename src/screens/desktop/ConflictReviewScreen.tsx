@@ -17,7 +17,7 @@ import type { ConflictDto, ReviewFlagDto } from '@/lib/api'
 // --- Static styles ---------------------------------------------------------
 
 const SERIF: CSSProperties = {
-  fontFamily: "'Newsreader', Georgia, serif",
+  fontFamily: 'var(--font-serif)',
   color: 'var(--ink)',
 }
 

@@ -50,7 +50,7 @@ export default function AccountantHomeScreen() {
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', background: 'var(--panel)', borderRadius: '16px' }}>
         {stats.map((s, i) => (
           <div key={s.label} style={statCell(i)}>
-            <span style={{ fontFamily: "'Newsreader', Georgia, serif", fontSize: '34px', lineHeight: 1, letterSpacing: '-0.02em', color: 'var(--ink)', fontVariantNumeric: 'tabular-nums' }}>{s.value}</span>
+            <span style={{ fontFamily: 'var(--font-serif)', fontSize: '34px', lineHeight: 1, letterSpacing: '-0.02em', color: 'var(--ink)', fontVariantNumeric: 'tabular-nums' }}>{s.value}</span>
             <span style={{ fontSize: '13px', color: 'var(--muted)' }}>{s.label}</span>
           </div>
         ))}

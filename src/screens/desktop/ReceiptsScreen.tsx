@@ -117,11 +117,11 @@ export default function ReceiptsScreen({ role }: { role: string }) {
           {selected ? (
             <div style={{ background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: '16px', padding: '24px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <div style={{ fontFamily: "'Newsreader', Georgia, serif", fontSize: '24px' }}>{selected.receipt_no}</div>
+                <div style={{ fontFamily: 'var(--font-serif)', fontSize: '24px' }}>{selected.receipt_no}</div>
                 {selected.reversed ? <Pill variant="reversal">{t('receipts.reversed')}</Pill> : selected.confirmed ? <Pill variant="paid">✓</Pill> : <Pill variant="partpaid">…</Pill>}
               </div>
               <div style={{ fontSize: '14px' }}>{selected.student_name} · {selected.class_display ?? '—'}</div>
-              <div style={{ fontFamily: "'Newsreader', Georgia, serif", fontSize: '34px', fontVariantNumeric: 'tabular-nums' }}>{formatMoney(selected.amount_paise)}</div>
+              <div style={{ fontFamily: 'var(--font-serif)', fontSize: '34px', fontVariantNumeric: 'tabular-nums' }}>{formatMoney(selected.amount_paise)}</div>
               <div style={{ fontSize: '12px', color: 'var(--muted)' }}>{selected.mode.toUpperCase()}{selected.reference ? ` · ${selected.reference}` : ''} · {selected.collected_at}</div>
 
               <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', marginTop: '4px' }}>
@@ -143,7 +143,7 @@ export default function ReceiptsScreen({ role }: { role: string }) {
       {reverseOpen && selected ? (
         <div onClick={() => setReverseOpen(false)} style={{ position: 'fixed', inset: 0, background: 'rgba(11,26,51,0.45)', display: 'grid', placeItems: 'center', zIndex: 40 }}>
           <div onClick={(e) => e.stopPropagation()} style={{ width: '420px', background: 'var(--surface)', borderRadius: '20px', boxShadow: '0 30px 60px rgba(11,26,51,0.3)', padding: '20px 24px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
-            <div style={{ fontFamily: "'Newsreader', Georgia, serif", fontSize: '22px' }}>{isPrincipal ? t('receipts.reverse') : t('receipts.requestReversal')}</div>
+            <div style={{ fontFamily: 'var(--font-serif)', fontSize: '22px' }}>{isPrincipal ? t('receipts.reverse') : t('receipts.requestReversal')}</div>
             <label style={{ display: 'flex', flexDirection: 'column', gap: '6px', fontSize: '12px', color: 'var(--muted)' }}>
               {t('receipts.reverseReason')}
               <input value={reason} onChange={(e) => setReason(e.target.value)} style={field()} />

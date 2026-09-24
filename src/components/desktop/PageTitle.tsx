@@ -20,7 +20,7 @@ const DOT: CSSProperties = { width: '5px', height: '5px', borderRadius: '3px', b
 
 const H1: CSSProperties = {
   margin: 0,
-  fontFamily: "'Newsreader', Georgia, serif",
+  fontFamily: 'var(--font-serif)',
   fontWeight: 400,
   fontSize: '46px',
   lineHeight: 1.05,
@@ -29,7 +29,7 @@ const H1: CSSProperties = {
 }
 
 const SUB: CSSProperties = {
-  fontFamily: "'Newsreader', Georgia, serif",
+  fontFamily: 'var(--font-serif)',
   fontStyle: 'italic',
   fontSize: '46px',
   lineHeight: 1.1,

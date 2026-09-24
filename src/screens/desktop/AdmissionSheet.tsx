@@ -80,8 +80,8 @@ export default function AdmissionSheet({ role }: { role: string }) {
         <div style={{ padding: '24px 24px 0', display: 'flex', flexDirection: 'column', gap: '4px' }}>
           <span style={{ fontSize: '11px', fontWeight: 600, letterSpacing: '0.14em', textTransform: 'uppercase', color: 'var(--accent)' }}>{t('students.eyebrow')}</span>
           <div style={{ display: 'flex', flexDirection: 'column' }}>
-            <span style={{ fontFamily: "'Newsreader', Georgia, serif", fontSize: '30px', color: 'var(--ink)', letterSpacing: '-0.02em' }}>{t('students.admission.title')}</span>
-            <span style={{ fontFamily: "'Newsreader', Georgia, serif", fontStyle: 'italic', fontSize: '22px', color: 'var(--accent)' }}>{t('students.admission.sub')}</span>
+            <span style={{ fontFamily: 'var(--font-serif)', fontSize: '30px', color: 'var(--ink)', letterSpacing: '-0.02em' }}>{t('students.admission.title')}</span>
+            <span style={{ fontFamily: 'var(--font-serif)', fontStyle: 'italic', fontSize: '22px', color: 'var(--accent)' }}>{t('students.admission.sub')}</span>
           </div>
         </div>
 

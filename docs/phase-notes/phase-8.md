@@ -231,17 +231,36 @@ was modified.
 - Fixed mock date strings translated (e.g. `बुधवार, 23 सितंबर`); live dates come
   from `format.ts`, not these keys.
 
-## Part F remainders (small, documented — not done this session)
+## Part F — font swap + logo lockups (done, "fix all")
 
-- **`.v-serif` class not yet attached to the inline headings.** Components apply
-  the serif via inline `fontFamily: "'Newsreader', Georgia, serif"`, so the
-  existing `:root[lang='hi'] .v-serif` swap does not reach them yet. Under Hindi
-  those Devanagari headings currently fall back through the stack rather than to
-  Noto 500. Fix = add `className="v-serif"` (or `var(--font-serif)`) to the serif
-  headings across ~30 screen files — **mechanical and English-baseline-neutral**
-  (the rule only applies under `[lang='hi']`). Left as a focused follow-up.
-- **Report-language** (receipts/report cards/reports in the chosen *report*
-  language, independent of UI language) needs the Settings → Report language
-  control (Part E, deferred) + the print docs reading it. Not wired this session.
-- Hindi logo lockups (`design/brand-kit/svg/vidya-horizontal-hindi-on-*.svg`)
-  swap when language = Hindi — belongs with the shell/welcome UI wiring.
+After the translation, the two font/logo remainders were fixed and verified:
+
+- **Serif font swap now actually reaches every heading.** All 48 inline serif
+  usages across the UI screens (desktop + phone + shell + welcome) were routed
+  through the existing `var(--font-serif)` CSS variable, and `app.css` now swaps
+  that variable under Hindi:
+  `:root[lang='hi'] { --font-serif: 'Noto Sans Devanagari', sans-serif;
+  font-synthesis: none; }` — so Hindi headings render in Noto Sans Devanagari with
+  **no synthetic italics** (mock-spec §3). `var(--font-serif)` resolves to the
+  identical Newsreader stack in English. **Proven byte-identical in English:**
+  welcome-setup (41377 px) and principal-home (104225 px) diff ratios are
+  unchanged from before the edit. `CollectFeeScreen` keeps its `.v-serif` class
+  (Noto **500** per §3); the `.v-serif` rule is retained, so applying that class
+  to the other screens' headings is the (optional) way to get the exact 500 weight
+  there too — otherwise they render Noto at the heading's own weight.
+- **Hindi logo lockups wired.** `vidya-horizontal-hindi-on-{dark,light}.svg` copied
+  into `src/assets/`; `AppShell` (sidebar), `TeacherHomeScreen` (header) and
+  `WelcomeScreen` (left panel) now pick the Hindi lockup when `getLang() === 'hi'`,
+  the English lockup otherwise. **Byte-identical in English** (welcome-setup +
+  teacher-home ratios unchanged).
+
+Still deferred (needs Part E / report-language, not a Part F loose end):
+
+- **Report-language** — receipts / report cards / reports in the chosen *report*
+  language (independent of the UI language) needs the Settings → Report language
+  control (Part E) + the print docs reading it. The 3 print docs
+  (`ReceiptDoc`/`ReportCardDoc`/`DayBookDoc`) were deliberately **left on the
+  Newsreader stack** (not routed to the UI-language var) so print follows report
+  language, not UI language, once that is wired.
+- Exact **Noto 500** weight on non-CollectFee Hindi headings (apply `.v-serif`) —
+  a cosmetic refinement; flagged for owner.

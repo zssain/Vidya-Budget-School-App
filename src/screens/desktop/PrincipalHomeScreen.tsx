@@ -670,7 +670,7 @@ export default function PrincipalHomeScreen({ data, chrome = true }: { data: Pri
                   className="v-serif"
                   style={{
                     margin: 0,
-                    fontFamily: "'Newsreader', Georgia, serif",
+                    fontFamily: 'var(--font-serif)',
                     fontWeight: 400,
                     fontSize: '46px',
                     lineHeight: 1.05,
@@ -682,7 +682,7 @@ export default function PrincipalHomeScreen({ data, chrome = true }: { data: Pri
                 <span
                   className="v-serif"
                   style={{
-                    fontFamily: "'Newsreader', Georgia, serif",
+                    fontFamily: 'var(--font-serif)',
                     fontStyle: 'italic',
                     fontSize: '46px',
                     lineHeight: 1.1,
@@ -758,7 +758,7 @@ export default function PrincipalHomeScreen({ data, chrome = true }: { data: Pri
                   <span
                     className="v-serif"
                     style={{
-                      fontFamily: "'Newsreader', Georgia, serif",
+                      fontFamily: 'var(--font-serif)',
                       fontSize: '40px',
                       lineHeight: 1,
                       letterSpacing: '-0.02em',
@@ -819,7 +819,7 @@ export default function PrincipalHomeScreen({ data, chrome = true }: { data: Pri
                     className="v-serif"
                     style={{
                       margin: 0,
-                      fontFamily: "'Newsreader', Georgia, serif",
+                      fontFamily: 'var(--font-serif)',
                       fontWeight: 400,
                       fontSize: '26px',
                       letterSpacing: '-0.015em',
@@ -932,7 +932,7 @@ export default function PrincipalHomeScreen({ data, chrome = true }: { data: Pri
                   className="v-serif"
                   style={{
                     margin: 0,
-                    fontFamily: "'Newsreader', Georgia, serif",
+                    fontFamily: 'var(--font-serif)',
                     fontWeight: 400,
                     fontSize: '26px',
                     letterSpacing: '-0.015em',
@@ -1052,7 +1052,7 @@ export default function PrincipalHomeScreen({ data, chrome = true }: { data: Pri
                   className="v-serif"
                   style={{
                     margin: 0,
-                    fontFamily: "'Newsreader', Georgia, serif",
+                    fontFamily: 'var(--font-serif)',
                     fontWeight: 400,
                     fontSize: '22px',
                   }}
@@ -1127,7 +1127,7 @@ export default function PrincipalHomeScreen({ data, chrome = true }: { data: Pri
                   className="v-serif"
                   style={{
                     margin: 0,
-                    fontFamily: "'Newsreader', Georgia, serif",
+                    fontFamily: 'var(--font-serif)',
                     fontWeight: 400,
                     fontSize: '22px',
                   }}
@@ -1139,7 +1139,7 @@ export default function PrincipalHomeScreen({ data, chrome = true }: { data: Pri
               <span
                 className="v-serif"
                 style={{
-                  fontFamily: "'Newsreader', Georgia, serif",
+                  fontFamily: 'var(--font-serif)',
                   fontStyle: 'italic',
                   fontSize: '28px',
                   color: '#C5AB7A',

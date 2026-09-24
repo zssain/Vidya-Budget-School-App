@@ -32,7 +32,7 @@ function ago(iso: string | null): string {
 // --- Static styles ---------------------------------------------------------
 
 const SERIF: CSSProperties = {
-  fontFamily: "'Newsreader', Georgia, serif",
+  fontFamily: 'var(--font-serif)',
   color: 'var(--ink)',
 }
 

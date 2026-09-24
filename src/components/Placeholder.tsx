@@ -20,7 +20,7 @@ export default function Placeholder({ title }: { title?: string }) {
         {title ? (
           <span
             className="v-serif"
-            style={{ fontFamily: "'Newsreader', Georgia, serif", fontSize: 26, color: 'var(--ink)' }}
+            style={{ fontFamily: 'var(--font-serif)', fontSize: 26, color: 'var(--ink)' }}
           >
             {title}
           </span>

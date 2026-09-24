@@ -16,9 +16,10 @@
 //   - links/tiles navigate via @/lib/router; :active scale(.96) via .v-active-96.
 import type { ReactNode } from 'react'
 import { Icon } from '@/components/Icon'
-import { t } from '@/lib/i18n'
+import { t, getLang } from '@/lib/i18n'
 import { navigate } from '@/lib/router'
 import logo from '@/assets/vidya-horizontal-on-dark.svg'
+import logoHi from '@/assets/vidya-horizontal-hindi-on-dark.svg'
 import type { TeacherHomeData, TeacherTileIcon } from '@/dev/fixtures/teacherHome'
 
 // The four two-tone tile SVGs whose icons.ts entry is the mono sidebar geometry.
@@ -145,7 +146,7 @@ export default function TeacherHomeScreen({ data }: { data: TeacherHomeData }) {
         {/* Header: logo + bell (gold dot) + "MI" account button. */}
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <img
-            src={logo}
+            src={getLang() === 'hi' ? logoHi : logo}
             alt="Vidya Budget School"
             width={132}
             height={43}
@@ -231,7 +232,7 @@ export default function TeacherHomeScreen({ data }: { data: TeacherHomeData }) {
               className="v-serif"
               style={{
                 margin: 0,
-                fontFamily: "'Newsreader', Georgia, serif",
+                fontFamily: 'var(--font-serif)',
                 fontWeight: 400,
                 fontSize: '34px',
                 lineHeight: 1.05,
@@ -243,7 +244,7 @@ export default function TeacherHomeScreen({ data }: { data: TeacherHomeData }) {
             <span
               className="v-serif"
               style={{
-                fontFamily: "'Newsreader', Georgia, serif",
+                fontFamily: 'var(--font-serif)',
                 fontStyle: 'italic',
                 fontSize: '34px',
                 lineHeight: 1.1,

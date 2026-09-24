@@ -70,8 +70,17 @@ body {
   text-rendering: optimizeLegibility;
 }
 
-/* Hindi: serif headings (marked .v-serif) swap to Noto Sans Devanagari 500,
-   no italics for Devanagari (docs/01-MOCK-SPEC.md §3). */
+/* Hindi (docs/01-MOCK-SPEC.md §3): every serif (Newsreader) heading swaps to
+   Noto Sans Devanagari and drops italics for Devanagari. Screens set the serif
+   via `var(--font-serif)`, so overriding the variable here swaps them all at once;
+   `font-synthesis: none` stops the browser faking an italic (or bold) Devanagari
+   face. `var(--font-serif)` resolves to the identical Newsreader stack in English,
+   so English rendering (and the fidelity baselines) is unchanged. */
+:root[lang='hi'] {
+  --font-serif: 'Noto Sans Devanagari', sans-serif;
+  font-synthesis: none;
+}
+/* Headings marked .v-serif additionally get the mock's Noto 500 weight. */
 :root[lang='hi'] .v-serif {
   font-family: 'Noto Sans Devanagari', sans-serif !important;
   font-weight: 500 !important;

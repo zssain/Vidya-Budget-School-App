@@ -65,7 +65,7 @@ export default function MarksScreen() {
         exams.map((ex) => (
           <div key={ex.id} style={{ background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: '16px', overflow: 'hidden' }}>
             <div style={{ padding: '16px 24px', borderBottom: '1px solid var(--track)', display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
-              <span style={{ fontFamily: "'Newsreader', Georgia, serif", fontSize: '22px' }}>{ex.name}</span>
+              <span style={{ fontFamily: 'var(--font-serif)', fontSize: '22px' }}>{ex.name}</span>
               <span style={{ fontSize: '12px', color: 'var(--muted)' }}>{ex.term_name ?? ''}{ex.starts_on ? ` · ${ex.starts_on}` : ''}</span>
             </div>
             {ex.subjects.length === 0 ? (
@@ -129,7 +129,7 @@ function MarksEntry({ examSubject, onBack, onFlash }: { examSubject: ExamSubject
     <div style={{ padding: '32px 40px', display: 'flex', flexDirection: 'column', gap: '20px', minHeight: '100%', boxSizing: 'border-box' }}>
       <button type="button" onClick={onBack} style={{ alignSelf: 'flex-start', border: 'none', background: 'transparent', color: 'var(--muted)', fontSize: '13px', cursor: 'pointer' }}>← {t('marks.back')}</button>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
-        <h1 style={{ margin: 0, fontFamily: "'Newsreader', Georgia, serif", fontWeight: 400, fontSize: '34px', letterSpacing: '-0.02em' }}>{examSubject.class_display} · {examSubject.subject_name}</h1>
+        <h1 style={{ margin: 0, fontFamily: 'var(--font-serif)', fontWeight: 400, fontSize: '34px', letterSpacing: '-0.02em' }}>{examSubject.class_display} · {examSubject.subject_name}</h1>
         {locked ? <Pill variant="paid">{t('marks.submitted')}</Pill> : null}
       </div>
 
@@ -221,7 +221,7 @@ function NewExamDialog({ onClose, onCreated }: { onClose: () => void; onCreated:
   return (
     <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(11,26,51,0.45)', display: 'grid', placeItems: 'center', zIndex: 40 }}>
       <div onClick={(e) => e.stopPropagation()} style={{ width: '480px', maxHeight: '80vh', overflowY: 'auto', background: 'var(--surface)', borderRadius: '20px', boxShadow: '0 30px 60px rgba(11,26,51,0.3)', padding: '20px 24px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
-        <div style={{ fontFamily: "'Newsreader', Georgia, serif", fontSize: '24px' }}>{t('marks.newExam')}</div>
+        <div style={{ fontFamily: 'var(--font-serif)', fontSize: '24px' }}>{t('marks.newExam')}</div>
         <label style={label}>{t('exam.name')}<input value={name} onChange={(e) => setName(e.target.value)} style={field()} /></label>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
           <label style={label}>{t('exam.starts')}<input type="date" value={starts} onChange={(e) => setStarts(e.target.value)} style={field()} /></label>

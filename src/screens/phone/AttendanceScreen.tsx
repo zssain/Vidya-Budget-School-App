@@ -211,7 +211,7 @@ export default function AttendanceScreen({
             className="v-serif"
             style={{
               margin: 0,
-              fontFamily: "'Newsreader', Georgia, serif",
+              fontFamily: 'var(--font-serif)',
               fontWeight: 400,
               fontSize: '32px',
               lineHeight: 1.05,
@@ -223,7 +223,7 @@ export default function AttendanceScreen({
           <span
             className="v-serif"
             style={{
-              fontFamily: "'Newsreader', Georgia, serif",
+              fontFamily: 'var(--font-serif)',
               fontStyle: 'italic',
               fontSize: '22px',
               lineHeight: 1.25,
@@ -245,7 +245,7 @@ export default function AttendanceScreen({
             <span
               className="v-serif"
               style={{
-                fontFamily: "'Newsreader', Georgia, serif",
+                fontFamily: 'var(--font-serif)',
                 fontSize: '26px',
                 lineHeight: 1,
                 fontVariantNumeric: 'lining-nums tabular-nums',
@@ -267,7 +267,7 @@ export default function AttendanceScreen({
             <span
               className="v-serif"
               style={{
-                fontFamily: "'Newsreader', Georgia, serif",
+                fontFamily: 'var(--font-serif)',
                 fontSize: '26px',
                 lineHeight: 1,
                 fontVariantNumeric: 'lining-nums tabular-nums',
@@ -289,7 +289,7 @@ export default function AttendanceScreen({
             <span
               className="v-serif"
               style={{
-                fontFamily: "'Newsreader', Georgia, serif",
+                fontFamily: 'var(--font-serif)',
                 fontSize: '26px',
                 lineHeight: 1,
                 fontVariantNumeric: 'lining-nums tabular-nums',
@@ -311,7 +311,7 @@ export default function AttendanceScreen({
             <span
               className="v-serif"
               style={{
-                fontFamily: "'Newsreader', Georgia, serif",
+                fontFamily: 'var(--font-serif)',
                 fontSize: '26px',
                 lineHeight: 1,
                 color: '#C5AB7A',
@@ -428,7 +428,7 @@ export default function AttendanceScreen({
                   className="v-serif"
                   style={{
                     width: '26px',
-                    fontFamily: "'Newsreader', Georgia, serif",
+                    fontFamily: 'var(--font-serif)',
                     fontSize: '16px',
                     color: '#56657A',
                     fontVariantNumeric: 'lining-nums tabular-nums',
@@ -559,7 +559,7 @@ export default function AttendanceScreen({
           <div style={{ display: 'flex', flexDirection: 'column', gap: '2px' }}>
             <span
               className="v-serif"
-              style={{ fontFamily: "'Newsreader', Georgia, serif", fontSize: '19px' }}
+              style={{ fontFamily: 'var(--font-serif)', fontSize: '19px' }}
             >
               {t('att.submittedTitle')}
             </span>

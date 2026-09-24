@@ -159,7 +159,7 @@ function HeadEditor({ head, onClose, onSaved }: { head: FeeHeadDto | null; onClo
   return (
     <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(11,26,51,0.45)', display: 'grid', placeItems: 'center', zIndex: 40 }}>
       <div onClick={(e) => e.stopPropagation()} style={{ width: '460px', background: 'var(--surface)', borderRadius: '20px', boxShadow: '0 30px 60px rgba(11,26,51,0.3)', overflow: 'hidden' }}>
-        <div style={{ padding: '20px 24px 8px', fontFamily: "'Newsreader', Georgia, serif", fontSize: '24px', color: 'var(--ink)' }}>{head ? t('fees.editHead') : t('fees.newHead')}</div>
+        <div style={{ padding: '20px 24px 8px', fontFamily: 'var(--font-serif)', fontSize: '24px', color: 'var(--ink)' }}>{head ? t('fees.editHead') : t('fees.newHead')}</div>
         <div style={{ padding: '8px 24px 20px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
           <label style={label}>{t('fees.head.name')}<input value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} style={field()} /></label>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>

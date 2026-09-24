@@ -24,7 +24,7 @@ interface CollectFeeState {
   receiptNo: string | null
 }
 
-const SERIF = "'Newsreader', Georgia, serif"
+const SERIF = 'var(--font-serif)'
 
 /** Pill styles by variant — from renderVals()'s `pill(bg, fg)` helper. */
 const pillStyle = (bg: string, fg: string): CSSProperties => ({

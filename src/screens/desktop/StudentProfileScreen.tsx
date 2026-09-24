@@ -38,7 +38,7 @@ function Modal({ title, children, onClose }: { title: string; children: ReactNod
   return (
     <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(11,26,51,0.45)', display: 'grid', placeItems: 'center', zIndex: 40 }}>
       <div onClick={(e) => e.stopPropagation()} style={{ width: '420px', background: 'var(--surface)', borderRadius: '20px', boxShadow: '0 30px 60px rgba(11,26,51,0.3)', overflow: 'hidden' }}>
-        <div style={{ padding: '20px 24px 12px', fontFamily: "'Newsreader', Georgia, serif", fontSize: '22px', color: 'var(--ink)' }}>{title}</div>
+        <div style={{ padding: '20px 24px 12px', fontFamily: 'var(--font-serif)', fontSize: '22px', color: 'var(--ink)' }}>{title}</div>
         <div style={{ padding: '0 24px 20px', display: 'flex', flexDirection: 'column', gap: '14px' }}>{children}</div>
       </div>
     </div>
@@ -86,7 +86,7 @@ export default function StudentProfileScreen({ id, role }: { id: string; role: s
       <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', gap: '24px', flexWrap: 'wrap' }}>
         <div>
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-            <h1 style={{ margin: 0, fontFamily: "'Newsreader', Georgia, serif", fontWeight: 400, fontSize: '40px', letterSpacing: '-0.02em', color: 'var(--ink)' }}>{p.name}</h1>
+            <h1 style={{ margin: 0, fontFamily: 'var(--font-serif)', fontWeight: 400, fontSize: '40px', letterSpacing: '-0.02em', color: 'var(--ink)' }}>{p.name}</h1>
             <Pill variant={p.status === 'left' ? 'unpaid' : 'paid'}>{p.status === 'left' ? t('students.pill.left') : t('students.pill.active')}</Pill>
           </div>
           <div style={{ fontSize: '13px', color: p.admission_no ? 'var(--muted)' : 'var(--gold-text)', marginTop: '4px' }}>
@@ -127,7 +127,7 @@ export default function StudentProfileScreen({ id, role }: { id: string; role: s
           <div style={{ padding: '20px 24px' }}>
             {p.attendance.marked > 0 ? (
               <>
-                <div style={{ fontFamily: "'Newsreader', Georgia, serif", fontSize: '40px', color: 'var(--ink)', lineHeight: 1 }}>{attPct}%</div>
+                <div style={{ fontFamily: 'var(--font-serif)', fontSize: '40px', color: 'var(--ink)', lineHeight: 1 }}>{attPct}%</div>
                 <div style={{ fontSize: '13px', color: 'var(--muted)', marginTop: '8px' }}>
                   {t('students.attendanceRange', { marked: p.attendance.marked, from: p.attendance.from_date ?? '', to: p.attendance.to_date ?? '' })}
                 </div>
@@ -163,7 +163,7 @@ export default function StudentProfileScreen({ id, role }: { id: string; role: s
             <div style={{ padding: '16px 24px', display: 'flex', flexDirection: 'column', gap: '12px' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
                 <span style={{ fontSize: '13px', color: 'var(--muted)' }}>{t('students.ledgerOutstanding')}</span>
-                <span style={{ fontFamily: "'Newsreader', Georgia, serif", fontSize: '26px', color: 'var(--ink)', fontVariantNumeric: 'tabular-nums' }}>{formatMoney(dues?.total_due_paise ?? 0)}</span>
+                <span style={{ fontFamily: 'var(--font-serif)', fontSize: '26px', color: 'var(--ink)', fontVariantNumeric: 'tabular-nums' }}>{formatMoney(dues?.total_due_paise ?? 0)}</span>
               </div>
               {dues && dues.lines.length > 0 ? (
                 dues.lines.map((l) => (

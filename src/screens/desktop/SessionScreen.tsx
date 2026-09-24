@@ -21,7 +21,7 @@ export default function SessionScreen() {
       <div style={{ background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: '16px', padding: '20px 24px', display: 'flex', alignItems: 'center', gap: '16px' }}>
         <div style={{ flex: 1 }}>
           <div style={{ fontSize: '11px', color: 'var(--muted)' }}>{t('session.current')}</div>
-          <div style={{ fontFamily: "'Newsreader', Georgia, serif", fontSize: '26px', color: 'var(--ink)' }}>{school?.session_label ?? '—'}</div>
+          <div style={{ fontFamily: 'var(--font-serif)', fontSize: '26px', color: 'var(--ink)' }}>{school?.session_label ?? '—'}</div>
         </div>
         {school?.session_read_only ? <Pill variant="neutral">{t('session.readOnly')}</Pill> : null}
       </div>

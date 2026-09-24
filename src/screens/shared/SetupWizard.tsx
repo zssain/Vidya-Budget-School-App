@@ -268,7 +268,7 @@ export default function SetupWizard({ startStep }: { startStep: number }) {
         }}
       >
         <img src={wordmark} alt={t('app.name')} width={190} height={62} />
-        <h1 style={{ fontFamily: "'Newsreader', Georgia, serif", fontSize: 40, letterSpacing: '-0.025em', margin: '24px 0 8px' }}>
+        <h1 style={{ fontFamily: 'var(--font-serif)', fontSize: 40, letterSpacing: '-0.025em', margin: '24px 0 8px' }}>
           {t(STEP_KEYS[step - 1])}
         </h1>
         <div style={{ marginTop: 20 }}>{stepBody()}</div>

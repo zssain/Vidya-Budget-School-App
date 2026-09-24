@@ -10,10 +10,11 @@
 //   - no hard-coded visible text: every string comes from t('welcome.*').
 import { useState } from 'react'
 import { Icon } from '@/components/Icon'
-import { t } from '@/lib/i18n'
+import { t, getLang } from '@/lib/i18n'
 import { navigate } from '@/lib/router'
 import { isPhone } from '@/lib/platform'
 import wordmark from '@/assets/vidya-horizontal-on-light.svg'
+import wordmarkHi from '@/assets/vidya-horizontal-hindi-on-light.svg'
 import doorMark from '@/assets/dwaar-mark-on-dark.svg'
 import type { WelcomeData } from '@/dev/fixtures/welcome'
 
@@ -61,7 +62,7 @@ export default function WelcomeScreen({
     >
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
         <img
-          src={wordmark}
+          src={getLang() === 'hi' ? wordmarkHi : wordmark}
           alt="Vidya Budget School"
           style={{ width: '190px', height: '62px', display: 'block' }}
         />
@@ -132,7 +133,7 @@ export default function WelcomeScreen({
             className="v-serif"
             style={{
               margin: 0,
-              fontFamily: "'Newsreader', Georgia, serif",
+              fontFamily: 'var(--font-serif)',
               fontWeight: 400,
               fontSize: '60px',
               lineHeight: 1,
@@ -383,7 +384,7 @@ export default function WelcomeScreen({
           className="v-serif"
           style={{
             margin: 0,
-            fontFamily: "'Newsreader', Georgia, serif",
+            fontFamily: 'var(--font-serif)',
             fontWeight: 400,
             fontSize: '64px',
             lineHeight: 1.02,
@@ -395,7 +396,7 @@ export default function WelcomeScreen({
         <span
           className="v-serif"
           style={{
-            fontFamily: "'Newsreader', Georgia, serif",
+            fontFamily: 'var(--font-serif)',
             fontStyle: 'italic',
             fontWeight: 400,
             fontSize: '64px',
@@ -446,7 +447,7 @@ export default function WelcomeScreen({
           <span
             className="v-serif"
             style={{
-              fontFamily: "'Newsreader', Georgia, serif",
+              fontFamily: 'var(--font-serif)',
               fontStyle: 'italic',
               fontSize: '22px',
               color: '#C5AB7A',

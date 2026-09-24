@@ -161,7 +161,7 @@ export default function AttendanceRegisterScreen() {
               const cur = marks[r.student_id]
               return (
                 <div key={r.student_id} style={{ display: 'flex', alignItems: 'center', gap: '14px', padding: '7px 7px 7px 14px', borderTop: i > 0 ? '1px solid var(--track)' : 'none', background: !cur && !submitted ? 'var(--unmarked)' : 'transparent' }}>
-                  <span style={{ fontFamily: "'Newsreader', Georgia, serif", fontSize: '16px', color: 'var(--muted)', width: '32px' }}>{r.roll_no ?? ''}</span>
+                  <span style={{ fontFamily: 'var(--font-serif)', fontSize: '16px', color: 'var(--muted)', width: '32px' }}>{r.roll_no ?? ''}</span>
                   <span style={{ flex: 1, fontSize: '15px' }}>{r.name}</span>
                   {(['P', 'A', 'L'] as Mark[]).map((m) => (
                     <button key={m} type="button" aria-pressed={cur === m} aria-label={`${r.name} ${m}`} style={markBtn(cur === m, m)} onClick={() => toggle(r.student_id, m)}>
@@ -220,7 +220,7 @@ export default function AttendanceRegisterScreen() {
       {correct ? (
         <div onClick={() => setCorrect(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(11,26,51,0.45)', display: 'grid', placeItems: 'center', zIndex: 40 }}>
           <div onClick={(e) => e.stopPropagation()} style={{ width: '400px', background: 'var(--surface)', borderRadius: '20px', boxShadow: '0 30px 60px rgba(11,26,51,0.3)', padding: '20px 24px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
-            <div style={{ fontFamily: "'Newsreader', Georgia, serif", fontSize: '22px' }}>{t('areg.correctTitle')} → {correct.mark}</div>
+            <div style={{ fontFamily: 'var(--font-serif)', fontSize: '22px' }}>{t('areg.correctTitle')} → {correct.mark}</div>
             <label style={{ display: 'flex', flexDirection: 'column', gap: '6px', fontSize: '12px', color: 'var(--muted)' }}>
               {t('areg.correctReason')}
               <input value={reason} onChange={(e) => setReason(e.target.value)} style={field()} />
