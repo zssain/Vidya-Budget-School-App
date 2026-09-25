@@ -13,6 +13,7 @@ pub const MIGRATIONS: &[(i64, &str)] = &[
     (4, include_str!("migrations/0004_p08.sql")),
     (5, include_str!("migrations/0005_v2_attendance_pa.sql")),
     (6, include_str!("migrations/0006_v2_modules.sql")),
+    (7, include_str!("migrations/0007_v2_drive_accounts.sql")),
 ];
 
 // A per-thread frozen clock for deterministic tests. Compiled ONLY in debug
@@ -135,6 +136,58 @@ mod tests {
             .query_row("SELECT count(*) FROM schema_version", [], |r| r.get(0))
             .unwrap();
         assert_eq!(n, MIGRATIONS.len() as i64);
+    }
+
+    /// P12 upgrade test (DONE-MEANS #4): a v1 database (P01–P08 migrations only)
+    /// with a v1 licence upgrades cleanly and the v2 app opens straight to PIN —
+    /// no re-activation, no re-setup — while Home now asks to connect the sync
+    /// account. Proves the v2 migrations are additive over real v1 data.
+    #[test]
+    fn v1_database_upgrades_and_app_starts_without_prompts() {
+        let mut conn = open_in_memory(KEY).unwrap();
+        // Simulate a v1 install: only migrations 1..=4 (through P08) applied.
+        for (v, sql) in MIGRATIONS.iter().filter(|(v, _)| *v <= 4) {
+            let tx = conn.transaction().unwrap();
+            tx.execute_batch(sql).unwrap();
+            tx.execute(
+                "INSERT INTO schema_version(version, applied_at) VALUES (?1, 't')",
+                rusqlite::params![v],
+            )
+            .unwrap();
+            tx.commit().unwrap();
+        }
+        // A finished v1 setup: school + perpetual v1 licence (active) + setup done.
+        conn.execute(
+            "INSERT INTO school(id,name,backup_salt,created_at,updated_at) VALUES ('sch','S',x'00','t','t')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO licence(licence_id,school_id,plan,issued_at,signature,raw_json,status) \
+             VALUES ('lic','sch','perpetual','t','sig','{}','active')",
+            [],
+        )
+        .unwrap();
+        crate::kv::set(&conn, crate::state::KV_SETUP_STEP, &crate::state::SETUP_STEPS).unwrap();
+
+        // Upgrade: the v2 migrations (5,6,7) apply on top of the v1 data.
+        let latest = MIGRATIONS.last().map(|(v, _)| *v).unwrap();
+        assert_eq!(run_migrations(&mut conn).unwrap(), latest);
+
+        // v1 data survived; the 0007 objects now exist.
+        let name: String = conn.query_row("SELECT name FROM school", [], |r| r.get(0)).unwrap();
+        assert_eq!(name, "S");
+        let status: String = conn.query_row("SELECT status FROM licence", [], |r| r.get(0)).unwrap();
+        assert_eq!(status, "active");
+        assert!(conn.query_row("SELECT count(*) FROM drive_account", [], |r| r.get::<_, i64>(0)).is_ok());
+        let _pub: Option<Vec<u8>> = conn.query_row("SELECT server_key_pub FROM school", [], |r| r.get(0)).unwrap();
+
+        // The app opens to PIN (Locked) with the licence still active — no prompt.
+        let resp = crate::state::compute(&conn, None).unwrap();
+        assert_eq!(resp.state, crate::state::AppState::Locked);
+        assert_eq!(resp.licence_status.as_deref(), Some("active"));
+        // Home now asks to connect the school sync account (no sync row yet).
+        assert!(crate::drive_account::needs_sync_account(&conn).unwrap());
     }
 
     #[test]

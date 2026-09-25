@@ -9,6 +9,7 @@ pub mod config;
 pub mod ctx;
 pub mod dash;
 pub mod db;
+pub mod drive_account;
 pub mod error;
 pub mod kv;
 pub mod licence;

@@ -48,6 +48,8 @@ pub enum CoreError {
     LeaseExpired,
     #[error("server epoch is old")]
     EpochOld,
+    #[error("epoch marker could not be verified")]
+    EpochInvalid,
     #[error("module off: {module}")]
     ModuleOff { module: String },
     #[error("internal error: {id}")]
@@ -79,6 +81,7 @@ impl CoreError {
             CoreError::SessionReadOnly => "SESSION_READ_ONLY",
             CoreError::LeaseExpired => "LEASE_EXPIRED",
             CoreError::EpochOld => "EPOCH_OLD",
+            CoreError::EpochInvalid => "EPOCH_INVALID",
             CoreError::ModuleOff { .. } => "MODULE_OFF",
             CoreError::Internal { .. } => "INTERNAL",
         }

@@ -20,6 +20,11 @@ use std::sync::{Arc, Mutex};
 /// Actor id for the Principal / school server (owner of the whole tree).
 pub const PRINCIPAL: &str = "principal";
 
+/// Actor id for the v2 **one shared account** (prompts/P12 §11): every staff device
+/// signs into the SAME Google sync account, so they all act with this one identity
+/// and share full access — there is no per-staff folder sharing.
+pub const SYNC_ACCOUNT: &str = "sync-account";
+
 /// Drive access levels (least → most).
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub enum Access {
@@ -129,6 +134,30 @@ impl FakeDrive {
             let folder = g.mk_folder(&exchange, &format!("ops-{device}"));
             g.grants.push(Grant { actor: actor.to_string(), folder_id: folder.clone(), access: Access::Writer });
             ops.insert((*device).to_string(), folder);
+        }
+        SchoolLayout { root, backups, exchange, acks, ops }
+    }
+
+    /// Provision the v2 **one shared account** layout (prompts/P12 §11, Step 1):
+    /// a single Google account owns the whole `Vidya/<school>/` tree and every
+    /// device signs into that SAME account (act as [`SYNC_ACCOUNT`]), so there is
+    /// **no per-staff folder sharing** — one identity with full access. Each device
+    /// still gets its own `exchange/ops-<device>/` folder for its bundles.
+    ///
+    /// (In production `backups/` lives in a SEPARATE private backup account; the
+    /// harness keeps a `backups` folder in the one tree only so the backup-upload
+    /// tests have a target.)
+    pub fn provision_shared_account(&self, devices: &[&str]) -> SchoolLayout {
+        let mut g = self.inner.lock().unwrap();
+        let root = g.root.clone();
+        // The sync account owns the entire tree (one identity, full access).
+        g.grants.push(Grant { actor: SYNC_ACCOUNT.to_string(), folder_id: root.clone(), access: Access::Owner });
+        let exchange = g.mk_folder(&root, "exchange");
+        let acks = g.mk_folder(&exchange, "acks");
+        let backups = g.mk_folder(&root, "backups");
+        let mut ops = BTreeMap::new();
+        for device in devices {
+            ops.insert((*device).to_string(), g.mk_folder(&exchange, &format!("ops-{device}")));
         }
         SchoolLayout { root, backups, exchange, acks, ops }
     }
@@ -509,5 +538,62 @@ mod tests {
             a.create(&l.ops["devA"], "same.vop", b"one", &props()),
             Err(DriveError::NameConflict)
         );
+    }
+
+    // ----- v2: one shared account (prompts/P12 §11, Step 11) -----
+
+    #[test]
+    fn shared_account_devices_read_and_write_each_others_bundles() {
+        // Two phones signed into the SAME sync account → one identity, full access,
+        // NO per-staff sharing. Each writes into its own ops folder and can read the
+        // other's (this is the cross-device behaviour the Step 0 spike must confirm
+        // on real Google; here it is proven against the fake shared account).
+        let d = FakeDrive::new();
+        let l = d.provision_shared_account(&["devA", "devB"]);
+        let acc = d.as_actor(SYNC_ACCOUNT);
+
+        acc.create(&l.ops["devA"], "a.vop", b"from-A", &props()).unwrap();
+        let fb = acc.create(&l.ops["devB"], "b.vop", b"from-B", &props()).unwrap();
+        // Device A (same account) lists + downloads device B's bundle.
+        assert!(acc.list(&l.ops["devB"]).unwrap().iter().any(|x| x.id == fb.id));
+        assert_eq!(acc.download(&fb.id).unwrap(), b"from-B");
+        // The server writes an ack + the epoch marker at the exchange root.
+        acc.create(&l.acks, "devA.json", b"{}", &props()).unwrap();
+        acc.create(&l.exchange, "epoch.json", b"{}", &props()).unwrap();
+    }
+
+    #[test]
+    fn epoch_json_through_drive_fences_the_old_server() {
+        // Full path: the new server signs epoch.json (epoch 2), writes it to the
+        // shared account's exchange/, the old server (epoch 1) reads + verifies it
+        // and is fenced to read-only. Combines vidya-core crypto with the fake Drive.
+        use vidya_core::epoch::{fence_outcome, sign_epoch, verify_epoch, EpochFile, FenceOutcome, SignedEpoch};
+
+        let seed = [9u8; 32];
+        let public = ed25519_dalek::SigningKey::from_bytes(&seed).verifying_key().to_bytes();
+
+        let d = FakeDrive::new();
+        let l = d.provision_shared_account(&["srv"]);
+        let acc = d.as_actor(SYNC_ACCOUNT);
+
+        let marker = sign_epoch(
+            &EpochFile {
+                school_id: "s".into(),
+                server_epoch: 2,
+                server_machine_code: "7KQ2-M9XD-4TRA-P".into(),
+                at: "2026-09-25T00:00:00Z".into(),
+            },
+            &seed,
+        );
+        acc.create(&l.exchange, "epoch.json", &serde_json::to_vec(&marker).unwrap(), &props()).unwrap();
+
+        // Old server reads it on import.
+        let ef = acc.list(&l.exchange).unwrap().into_iter().find(|f| f.name == "epoch.json").unwrap();
+        let raw = acc.download(&ef.id).unwrap();
+        let signed: SignedEpoch = serde_json::from_slice(&raw).unwrap();
+        let verified = verify_epoch(&signed, &public).unwrap();
+        assert_eq!(verified.server_epoch, 2);
+        // Own epoch is 1 → the file's epoch is higher → this PC is fenced.
+        assert_eq!(fence_outcome(1, verified.server_epoch), FenceOutcome::Fenced);
     }
 }

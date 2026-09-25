@@ -77,6 +77,9 @@ pub struct PrincipalDashboard {
     pub open_conflicts: i64,
     /// The most recent completed backup run, or None if none has run.
     pub last_backup: Option<LastBackupInfo>,
+    /// Home "Needs attention": no school **sync** account is connected yet (P12
+    /// Step 1.2) — "Connect the school sync account".
+    pub needs_sync_account: bool,
 }
 
 /// The latest completed backup, for the "Last backup" line (honest status §3.13).
@@ -390,5 +393,6 @@ pub fn principal_dashboard(conn: &Connection, today: &str) -> rusqlite::Result<P
         term_label: current_term(conn, today)?,
         open_conflicts: open_conflicts(conn)?,
         last_backup: last_backup(conn)?,
+        needs_sync_account: crate::drive_account::needs_sync_account(conn)?,
     })
 }
