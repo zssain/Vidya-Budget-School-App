@@ -585,6 +585,35 @@ export interface PaymentSettingsInput {
   on_reminders: boolean
   on_dues_list: boolean
 }
+
+// Messaging outbox (P14 §10.1). wa_tap → 'tapped'; email/wa_auto → 'queued'.
+export interface MessageDto {
+  id: string
+  channel: string
+  kind: string | null
+  language: string
+  to_guardian_id: string | null
+  to_address: string | null
+  subject: string | null
+  body: string | null
+  status: string
+  error: string | null
+  related_table: string | null
+  related_id: string | null
+  created_at: string
+}
+export interface RecordMessageInput {
+  channel: string
+  kind: string
+  language: string
+  to_guardian_id?: string | null
+  to_staff_id?: string | null
+  to_address?: string | null
+  subject?: string | null
+  body?: string | null
+  related_table?: string | null
+  related_id?: string | null
+}
 export interface SessionInput {
   label: string
   starts_on: string
@@ -740,6 +769,9 @@ export const set_module = (key: string, enabled: boolean) => invoke<void>('set_m
 export const get_payment_settings = () => invoke<PaymentSettings>('get_payment_settings')
 export const set_payment_settings = (input: PaymentSettingsInput) => invoke<void>('set_payment_settings', { input })
 export const qr_svg = (data: string) => invoke<string>('qr_svg', { data })
+export const record_message = (input: RecordMessageInput) => invoke<MessageDto>('record_message', { input })
+export const list_messages = (status?: string | null, relatedId?: string | null) =>
+  invoke<MessageDto[]>('list_messages', { status: status ?? null, relatedId: relatedId ?? null })
 
 // ---- Phase 13: school calendar (weekly offs + holidays/exams/events) --------
 export interface CalendarEventDto {

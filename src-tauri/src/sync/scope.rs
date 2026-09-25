@@ -116,6 +116,18 @@ pub fn visible_row(conn: &Connection, actor: &Actor, table: &str, id: &str) -> r
     if table == "school_week" || table == "calendar_event" {
         return Ok(mk(row, None));
     }
+    // Message templates (P14) are Core reference data every role reads to compose.
+    if table == "message_template" {
+        return Ok(mk(row, None));
+    }
+    // A message-outbox row (P14) is visible to its creator and the Principal only,
+    // so a teacher/accountant never receives another role's messages.
+    if table == "message" && actor.role != Role::Principal {
+        let by: Option<String> = conn
+            .query_row("SELECT created_by FROM message WHERE id=?1", [id], |r| r.get(0))
+            .optional()?;
+        return Ok(if by.as_deref() == Some(actor.staff_id.as_str()) { mk(row, None) } else { None });
+    }
     match actor.role {
         Role::Principal => Ok(mk(row, None)),
         Role::Accountant => {
@@ -240,6 +252,16 @@ pub fn snapshot(conn: &Connection, actor: &Actor) -> rusqlite::Result<Vec<Change
         let f: Option<&dyn Fn(&mut serde_json::Value)> = if actor.role == Role::Principal { None } else { Some(&staff_filter) };
         push(conn, "staff", &id, f)?;
     }
+
+    // Messaging (P14): templates are Core reference data every role reads; message
+    // outbox rows are Principal-all / creator-own (see `visible_row`).
+    for id in ids_of(conn, "SELECT id FROM message_template", &[])? { push(conn, "message_template", &id, None)?; }
+    let msg_ids = if actor.role == Role::Principal {
+        ids_of(conn, "SELECT id FROM message", &[])?
+    } else {
+        ids_of(conn, "SELECT id FROM message WHERE created_by=?1", &[&actor.staff_id])?
+    };
+    for id in msg_ids { push(conn, "message", &id, None)?; }
 
     match actor.role {
         Role::Principal => {

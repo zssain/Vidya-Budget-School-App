@@ -57,6 +57,10 @@ export default function ReceiptsScreen({ role }: { role: string }) {
     const cls = r.class_display ?? ''
     const school = '' // school name is fetched in the doc; keep the message concise
     const msg = `${school ? school + ' — ' : ''}${t('receipt.doc.title')} ${r.receipt_no} · ${formatMoney(r.amount_paise)} · ${r.student_name}${cls ? ` (${cls})` : ''}. ${t('receipt.doc.balanceAfter')}: ${formatMoney(r.balance_after_paise)}.`
+    // Record the tap in the outbox (status 'tapped', never 'sent') — honest status.
+    void api
+      .record_message({ channel: 'wa_tap', kind: 'receipt_share', language: 'en', to_address: r.guardian_mobile, body: msg, related_table: 'payment', related_id: r.id })
+      .catch(() => {})
     void shareWhatsApp(r.guardian_mobile, msg)
   }
 

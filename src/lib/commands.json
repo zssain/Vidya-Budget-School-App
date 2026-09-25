@@ -77,6 +77,8 @@
     "get_payment_settings",
     "set_payment_settings",
     "qr_svg",
+    "record_message",
+    "list_messages",
     "get_calendar",
     "set_weekly_offs",
     "add_calendar_event",

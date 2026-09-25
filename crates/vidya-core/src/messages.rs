@@ -151,6 +151,36 @@ pub fn can_message(has_messages_consent: bool) -> bool {
     has_messages_consent
 }
 
+/// Percent-encode `s` for a URL query value (RFC 3986 unreserved set; space→`%20`,
+/// non-ASCII as UTF-8 bytes). Shared by the `wa.me` and future link builders.
+pub fn urlencode(s: &str) -> String {
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+    let mut out = String::with_capacity(s.len());
+    for &b in s.as_bytes() {
+        if b.is_ascii_alphanumeric() || b == b'-' || b == b'.' || b == b'_' || b == b'~' {
+            out.push(b as char);
+        } else {
+            out.push('%');
+            out.push(HEX[(b >> 4) as usize] as char);
+            out.push(HEX[(b & 0x0f) as usize] as char);
+        }
+    }
+    out
+}
+
+/// Build a `wa.me` click-to-chat link (§10.1). With a valid 10-digit Indian mobile
+/// → `https://wa.me/91<mobile>?text=…` (one guardian); otherwise
+/// `https://wa.me/?text=…` (the user picks a chat/group). `text` is URL-encoded.
+/// A non-10-digit or non-`[6-9]…`-mobile is treated as "no number" (group form),
+/// so a malformed number never produces a broken direct link.
+pub fn wa_me_url(mobile: Option<&str>, text: &str) -> String {
+    let digits = mobile.filter(|m| crate::validation::validate_mobile(m).is_ok());
+    match digits {
+        Some(m) => format!("https://wa.me/91{}?text={}", m, urlencode(text)),
+        None => format!("https://wa.me/?text={}", urlencode(text)),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -203,6 +233,27 @@ mod tests {
     fn can_message_requires_consent() {
         assert!(can_message(true));
         assert!(!can_message(false));
+    }
+
+    #[test]
+    fn wa_me_url_direct_and_group() {
+        assert_eq!(
+            wa_me_url(Some("9876543210"), "Hi there"),
+            "https://wa.me/919876543210?text=Hi%20there"
+        );
+        // No mobile → group form (user picks the chat).
+        assert_eq!(wa_me_url(None, "Hello"), "https://wa.me/?text=Hello");
+        // A malformed mobile falls back to the group form (never a broken link).
+        assert_eq!(wa_me_url(Some("123"), "x"), "https://wa.me/?text=x");
+        assert_eq!(wa_me_url(Some("5876543210"), "x"), "https://wa.me/?text=x");
+    }
+
+    #[test]
+    fn urlencode_reserved_and_unicode() {
+        assert_eq!(urlencode("a & b = c"), "a%20%26%20b%20%3D%20c");
+        // Devanagari → UTF-8 percent bytes; unreserved kept.
+        assert_eq!(urlencode("a-b.c_d~"), "a-b.c_d~");
+        assert!(urlencode("फीस").starts_with('%'));
     }
 
     #[test]

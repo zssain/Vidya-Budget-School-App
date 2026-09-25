@@ -101,6 +101,8 @@ pub const COMMANDS: &[&str] = &[
     "get_payment_settings",
     "set_payment_settings",
     "qr_svg",
+    "record_message",
+    "list_messages",
     "get_calendar",
     "set_weekly_offs",
     "add_calendar_event",
@@ -477,6 +479,22 @@ pub fn set_payment_settings(state: State<RtCtx>, input: PaymentSettingsInput) ->
 pub fn qr_svg(state: State<RtCtx>, data: String) -> CmdResult<String> {
     state.require_session()?;
     qr_svg_logic(&data)
+}
+
+// --------------------------------------------------------------- messages -----
+
+#[tauri::command]
+pub fn record_message(state: State<RtCtx>, input: RecordMessageInput) -> CmdResult<MessageDto> {
+    let actor = state.require_session()?;
+    let device_id = state.device_id.lock().map_err(|_| crate::error::CmdError::internal("lock"))?.clone();
+    let mode = state.device_mode;
+    state.with_db(|conn| record_message_logic(conn, &actor, device_id.as_deref(), mode, &input))
+}
+
+#[tauri::command]
+pub fn list_messages(state: State<RtCtx>, status: Option<String>, related_id: Option<String>) -> CmdResult<Vec<MessageDto>> {
+    let actor = state.require_session()?;
+    state.with_db(|conn| list_messages_logic(conn, &actor, status.as_deref(), related_id.as_deref()))
 }
 
 // --------------------------------------------------------------- calendar -----

@@ -3741,6 +3741,183 @@ pub fn qr_svg_logic(data: &str) -> CmdResult<String> {
     crate::upi::qr_svg(data).map_err(|e| CmdError::internal(format!("qr: {e}")))
 }
 
+// ============================================================= messages ======
+
+/// A message-outbox row for the UI (share status, absence/reminder lists, logs).
+#[derive(Debug, Serialize)]
+pub struct MessageDto {
+    pub id: String,
+    pub channel: String,
+    pub kind: Option<String>,
+    pub language: String,
+    pub to_guardian_id: Option<String>,
+    pub to_address: Option<String>,
+    pub subject: Option<String>,
+    pub body: Option<String>,
+    pub status: String,
+    pub error: Option<String>,
+    pub related_table: Option<String>,
+    pub related_id: Option<String>,
+    pub created_at: String,
+}
+
+fn map_message(r: &rusqlite::Row) -> rusqlite::Result<MessageDto> {
+    Ok(MessageDto {
+        id: r.get("id")?,
+        channel: r.get("channel")?,
+        kind: r.get("kind")?,
+        language: r.get("language")?,
+        to_guardian_id: r.get("to_guardian_id")?,
+        to_address: r.get("to_address")?,
+        subject: r.get("subject")?,
+        body: r.get("body")?,
+        status: r.get("status")?,
+        error: r.get("error")?,
+        related_table: r.get("related_table")?,
+        related_id: r.get("related_id")?,
+        created_at: r.get("created_at")?,
+    })
+}
+
+#[derive(Debug, Deserialize)]
+pub struct RecordMessageInput {
+    /// `email | wa_tap | wa_auto | app`.
+    pub channel: String,
+    /// The purpose / template key (`receipt_share`, later `fee_reminder`,
+    /// `absence_alert`, `circular`, …).
+    pub kind: String,
+    pub language: String,
+    pub to_guardian_id: Option<String>,
+    pub to_staff_id: Option<String>,
+    /// Mobile (wa_tap) or email address (email).
+    pub to_address: Option<String>,
+    pub subject: Option<String>,
+    pub body: Option<String>,
+    pub related_table: Option<String>,
+    pub related_id: Option<String>,
+}
+
+/// The permission a message purpose (`kind`) requires. Extended as P14 steps land
+/// (fee_reminder → SendFeeReminder in Step 5, absence_alert → SendAbsenceAlert in
+/// Step 4, circular → ManageCirculars in Step 6). Unknown kinds are rejected so a
+/// new purpose can never sneak past a permission check.
+fn action_for_message_kind(kind: &str) -> CmdResult<Action> {
+    match kind {
+        "receipt_share" => Ok(Action::PrintShareReceipt),
+        _ => Err(CmdError::validation("kind", "unsupported")),
+    }
+}
+
+/// Record a message in the outbox (P14, §10.1). `wa_tap` → status **`tapped`**
+/// (never "sent" — Vidya can't know it was actually sent, §3 rule 13);
+/// `email`/`wa_auto` → **`queued`** (the school PC sends later). One transaction
+/// (row + audit + op). The channel/purpose gate is enforced here; the UI enforces
+/// `can_message` consent before offering the action.
+pub fn record_message_logic(
+    conn: &mut Connection,
+    actor_s: &SessionStaff,
+    device_id: Option<&str>,
+    device_mode: DeviceMode,
+    input: &RecordMessageInput,
+) -> CmdResult<MessageDto> {
+    let actor = actor_from(conn, actor_s)?;
+    require_allow(&actor, action_for_message_kind(&input.kind)?, &Target::of(TargetKind::Fee))?;
+
+    let channel = vidya_core::messages::Channel::parse(&input.channel)
+        .ok_or_else(|| CmdError::validation("channel", "unknown"))?;
+    use vidya_core::messages::{Channel, MessageStatus};
+    let status = match channel {
+        Channel::WaTap => MessageStatus::Tapped,
+        Channel::Email | Channel::WaAuto | Channel::App => MessageStatus::Queued,
+    };
+    if !matches!(input.language.as_str(), "en" | "hi" | "te") {
+        return Err(CmdError::validation("language", "unknown"));
+    }
+
+    let id = new_id("msg");
+    let now = now_iso();
+    let confirmed = device_mode == DeviceMode::Server;
+    let sync_state = if confirmed { "confirmed" } else { "on_device" };
+    let school_id = single_school_id(conn)?;
+    let ctx = WriteCtx { mode: device_mode };
+    let dev = device_id.map(str::to_string);
+
+    // Clone the fields the closure needs (input is borrowed).
+    let (kind, lang, to_g, to_s, to_a, subj, body, rel_t, rel_i) = (
+        input.kind.clone(), input.language.clone(), input.to_guardian_id.clone(),
+        input.to_staff_id.clone(), input.to_address.clone(), input.subject.clone(),
+        input.body.clone(), input.related_table.clone(), input.related_id.clone(),
+    );
+    let id2 = id.clone();
+    let now2 = now.clone();
+    let staff = actor_s.id.clone();
+    with_write(conn, &ctx, move |tx| {
+        tx.execute(
+            "INSERT INTO message(id,kind,channel,language,to_guardian_id,to_staff_id,to_address,subject,body,status,related_table,related_id,created_by,school_id,created_at,updated_at,updated_by_staff,updated_by_device,sync_state) \
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?15,?13,?16,?17)",
+            params![id2, kind, channel.as_str(), lang, to_g, to_s, to_a, subj, body,
+                status.as_str(), rel_t, rel_i, staff, school_id, now2, dev, sync_state],
+        )?;
+        let audit = AuditEntry {
+            at: now2.clone(),
+            staff_id: Some(staff.clone()),
+            action: "record_message".into(),
+            table: Some("message".into()),
+            record_id: Some(id2.clone()),
+            after_json: Some(serde_json::json!({ "channel": channel.as_str(), "kind": kind, "status": status.as_str() }).to_string()),
+            ..Default::default()
+        };
+        let op = Op {
+            op_id: new_id("op"),
+            hlc: now2.clone(),
+            device_id: dev.clone().unwrap_or_default(),
+            staff_id: staff.clone(),
+            audience: "admin".into(),
+            table: "message".into(),
+            record_id: id2.clone(),
+            kind: "insert".into(),
+            payload: "{}".into(),
+            base_version: None,
+            server_epoch: 1,
+        };
+        Ok(Effect { value: (), audit, op })
+    })?;
+
+    conn.query_row("SELECT * FROM message WHERE id=?1", params![id], map_message).map_err(Into::into)
+}
+
+/// List outbox messages (Principal sees all; others see only what they created).
+/// Optional filters by status and by related record. For Settings → message logs
+/// and the absence/reminder status views.
+pub fn list_messages_logic(
+    conn: &mut Connection,
+    actor_s: &SessionStaff,
+    status: Option<&str>,
+    related_id: Option<&str>,
+) -> CmdResult<Vec<MessageDto>> {
+    let actor = actor_from(conn, actor_s)?;
+    let mut sql = String::from("SELECT * FROM message WHERE 1=1");
+    let mut args: Vec<rusqlite::types::Value> = Vec::new();
+    if actor.role != vidya_core::types::Role::Principal {
+        sql.push_str(" AND created_by=?");
+        args.push(actor_s.id.clone().into());
+    }
+    if let Some(s) = status {
+        sql.push_str(" AND status=?");
+        args.push(s.to_string().into());
+    }
+    if let Some(r) = related_id {
+        sql.push_str(" AND related_id=?");
+        args.push(r.to_string().into());
+    }
+    sql.push_str(" ORDER BY created_at DESC LIMIT 500");
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt
+        .query_map(rusqlite::params_from_iter(args.iter()), map_message)?
+        .collect::<rusqlite::Result<_>>()?;
+    Ok(rows)
+}
+
 // ============================================================ calendar =======
 
 /// A calendar event row (holiday / exam / event) for the UI.
@@ -4920,6 +5097,57 @@ mod tests {
         let mut c = seeded();
         let e = set_weekly_offs_logic(&mut c, &principal(), None, DeviceMode::Server, &[true, false]).unwrap_err();
         assert_eq!(e.code, "VALIDATION");
+    }
+
+    // ---- Phase 14: messaging outbox ---------------------------------------
+    fn wa_tap_input() -> RecordMessageInput {
+        RecordMessageInput {
+            channel: "wa_tap".into(),
+            kind: "receipt_share".into(),
+            language: "en".into(),
+            to_guardian_id: None,
+            to_staff_id: None,
+            to_address: Some("9876543210".into()),
+            subject: None,
+            body: Some("Fee receipt R-A2-0419 · ₹1,000 · Kavya".into()),
+            related_table: Some("payment".into()),
+            related_id: Some("pay-1".into()),
+        }
+    }
+
+    #[test]
+    fn record_wa_tap_writes_a_tapped_message() {
+        let mut c = seeded();
+        let dto = record_message_logic(&mut c, &accountant(), None, DeviceMode::Server, &wa_tap_input()).unwrap();
+        assert_eq!(dto.channel, "wa_tap");
+        assert_eq!(dto.status, "tapped"); // never "sent" — honest status (§3 rule 13)
+        // Row persisted with the creator; op logged (Server mode).
+        let n: i64 = c.query_row("SELECT count(*) FROM message WHERE status='tapped' AND created_by='stf-suresh'", [], |r| r.get(0)).unwrap();
+        assert_eq!(n, 1);
+        let ops: i64 = c.query_row("SELECT count(*) FROM op_log WHERE \"table\"='message'", [], |r| r.get(0)).unwrap();
+        assert_eq!(ops, 1);
+        // Listed for its creator, filtered by the related payment.
+        let list = list_messages_logic(&mut c, &accountant(), None, Some("pay-1")).unwrap();
+        assert_eq!(list.len(), 1);
+    }
+
+    #[test]
+    fn teacher_cannot_share_a_receipt() {
+        let mut c = seeded();
+        let teacher = SessionStaff { id: "stf-meena".into(), name: "Meena".into(), role: "teacher".into() };
+        let e = record_message_logic(&mut c, &teacher, None, DeviceMode::Server, &wa_tap_input()).unwrap_err();
+        assert_eq!(e.code, "FORBIDDEN");
+    }
+
+    #[test]
+    fn unknown_message_kind_and_channel_are_rejected() {
+        let mut c = seeded();
+        let mut bad = wa_tap_input();
+        bad.kind = "spam".into();
+        assert_eq!(record_message_logic(&mut c, &accountant(), None, DeviceMode::Server, &bad).unwrap_err().code, "VALIDATION");
+        let mut bad2 = wa_tap_input();
+        bad2.channel = "sms".into();
+        assert_eq!(record_message_logic(&mut c, &accountant(), None, DeviceMode::Server, &bad2).unwrap_err().code, "VALIDATION");
     }
 
     #[test]
