@@ -110,7 +110,10 @@ pub fn audience_for(table: &str, class_id: Option<&str>) -> CoreResult<Audience>
         // `admin` is the pusher-consistent audience.
         "school" | "academic_session" | "term" | "subject" | "class" | "class_subject"
         | "staff" | "device" | "invite" | "conflict" | "review_flag" | "notification"
-        | "licence" | "grade_scale" | "grade_band" | "school_week" | "calendar_event" => {
+        // message/message_template (P13 foundation) are Principal-managed for now;
+        // P14 refines message audience per recipient when sending lands.
+        | "licence" | "grade_scale" | "grade_band" | "school_week" | "calendar_event"
+        | "message" | "message_template" => {
             Ok(Audience::Admin)
         }
         // ---- request: audience follows the requester's own domain ----------

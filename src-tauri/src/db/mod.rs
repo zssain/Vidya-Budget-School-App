@@ -19,6 +19,7 @@ pub const MIGRATIONS: &[(i64, &str)] = &[
     (10, include_str!("migrations/0010_v2_ledger.sql")),
     (11, include_str!("migrations/0011_v2_numbering.sql")),
     (12, include_str!("migrations/0012_v2_request_types.sql")),
+    (13, include_str!("migrations/0013_v2_messaging.sql")),
 ];
 
 // A per-thread frozen clock for deterministic tests. Compiled ONLY in debug
@@ -298,6 +299,25 @@ mod tests {
                 [],
             )
             .is_err());
+    }
+
+    /// P13 Step 6: every seeded message template exists in all three languages and
+    /// its body validates against the vidya-core placeholder allow-list.
+    #[test]
+    fn seeded_message_templates_validate() {
+        let mut conn = open_in_memory(KEY).unwrap();
+        run_migrations(&mut conn).unwrap();
+        for key in vidya_core::messages::TEMPLATE_KEYS {
+            for lang in ["en", "hi", "te"] {
+                let body: String = conn
+                    .query_row("SELECT body FROM message_template WHERE key=?1 AND language=?2", rusqlite::params![key, lang], |r| r.get(0))
+                    .unwrap_or_else(|_| panic!("template {key}/{lang} missing"));
+                vidya_core::messages::validate_template(key, &body)
+                    .unwrap_or_else(|e| panic!("template {key}/{lang} invalid: {e:?}"));
+            }
+        }
+        let n: i64 = conn.query_row("SELECT COUNT(*) FROM message_template", [], |r| r.get(0)).unwrap();
+        assert_eq!(n, 15, "5 templates × 3 languages");
     }
 
     #[test]

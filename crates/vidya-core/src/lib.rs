@@ -24,6 +24,7 @@ pub mod lease;
 pub mod ledger;
 pub mod licence;
 pub mod marks;
+pub mod messages;
 pub mod modules;
 pub mod numbering;
 pub mod permissions;
