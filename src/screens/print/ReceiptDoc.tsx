@@ -5,19 +5,14 @@ import { formatMoney } from '@/lib/format'
 import { printCurrentWindow } from '@/lib/print'
 import * as api from '@/lib/api'
 import type { ReceiptDto, SchoolDto } from '@/lib/api'
-import logoLight from '@/assets/vidya-horizontal-on-light.svg'
+import { pageCss, PrintLogo, PrintSchoolName, PrintAddress, PrintToolbar } from './printKit'
 
 // Printable fee receipt (docs/00 §PRINTING). A hidden print route renders ONLY
-// this document with @page print CSS (A5 or 80mm thermal, per the size param).
-// Reprints are marked "Duplicate copy". No invented legal text.
+// this document via the shared print engine (printKit): @page print CSS (A5 or
+// 80mm thermal, per the size param) + the letterhead. Reprints are marked
+// "Duplicate copy". No invented legal text.
 
 type Size = 'a5' | '80mm'
-
-function pageCss(size: Size): string {
-  const page = size === '80mm' ? '@page { size: 80mm auto; margin: 4mm; }' : '@page { size: A5; margin: 10mm; }'
-  return `${page}
-@media print { .no-print { display: none !important; } body { background: #ffffff; } }`
-}
 
 const label: CSSProperties = { color: 'var(--muted)', fontSize: '12px' }
 const value: CSSProperties = { color: 'var(--ink)', fontSize: '13px', fontWeight: 500, textAlign: 'right' }
@@ -61,17 +56,14 @@ export default function ReceiptDoc({ id, size = 'a5', lang = 'en', duplicate = f
       <style>{pageCss(size)}</style>
 
       {/* toolbar (never printed) */}
-      <div className="no-print" style={{ display: 'flex', gap: '10px', marginBottom: '16px' }}>
-        <button type="button" onClick={() => window.history.back()} style={{ height: '38px', padding: '0 16px', borderRadius: '6px', border: '1px solid var(--line-strong)', background: 'var(--surface)', color: 'var(--ink)', fontSize: '13px', cursor: 'pointer' }}>{t('students.back')}</button>
-        <button type="button" onClick={() => void printCurrentWindow()} style={{ height: '38px', padding: '0 18px', borderRadius: '6px', border: '1px solid var(--accent)', background: 'var(--accent)', color: 'var(--white)', fontSize: '13px', fontWeight: 500, cursor: 'pointer' }}>{t('receipts.print')}</button>
-      </div>
+      <PrintToolbar backLabel={t('students.back')} printLabel={t('receipts.print')} onBack={() => window.history.back()} onPrint={() => void printCurrentWindow()} />
 
       {/* the document */}
       <div style={{ width, background: 'var(--white)', border: '1px solid var(--line)', borderRadius: '6px', padding: '18px 20px', color: 'var(--ink)', boxSizing: 'border-box' }}>
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '4px', textAlign: 'center', borderBottom: '1px solid var(--track)', paddingBottom: '10px' }}>
-          <img src={logoLight} alt={school?.name ?? ''} width={140} height={46} style={{ width: '140px', height: '46px' }} />
-          <div style={{ fontWeight: 600, fontSize: '15px' }}>{school?.name ?? ''}</div>
-          {school?.address ? <div style={{ fontSize: '11px', color: 'var(--muted)' }}>{school.address}</div> : null}
+          <PrintLogo width={140} height={46} alt={school?.name ?? ''} />
+          <PrintSchoolName name={school?.name ?? ''} size={15} />
+          <PrintAddress address={school?.address} />
         </div>
 
         {duplicate ? <div style={{ textAlign: 'center', fontSize: '11px', fontWeight: 600, letterSpacing: '0.1em', textTransform: 'uppercase', color: 'var(--gold-text)', marginTop: '8px' }}>{t('receipt.doc.duplicate')}</div> : null}

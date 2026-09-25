@@ -4,7 +4,7 @@ import { t } from '@/lib/i18n'
 import { printCurrentWindow } from '@/lib/print'
 import * as api from '@/lib/api'
 import type { ReportCardDto, SchoolDto } from '@/lib/api'
-import logoLight from '@/assets/vidya-horizontal-on-light.svg'
+import { pageCss, PrintLogo, PrintSchoolName, PrintAddress, PrintToolbar } from './printKit'
 
 // Report card(s) (prompts/P07 §8): A4, one student per page (page-break-after).
 // Single student (mode='student') or a whole class batch (mode='class'). Logo +
@@ -19,10 +19,10 @@ function Card({ card, school }: { card: ReportCardDto; school: SchoolDto | null 
   return (
     <div style={{ width: '190mm', minHeight: '260mm', pageBreakAfter: 'always', background: 'var(--white)', border: '1px solid var(--line)', borderRadius: '6px', padding: '20px 24px', margin: '0 auto 16px', color: 'var(--ink)', boxSizing: 'border-box' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: '16px', borderBottom: '2px solid var(--navy)', paddingBottom: '10px' }}>
-        <img src={logoLight} alt={school?.name ?? ''} width={120} height={40} style={{ width: '120px', height: '40px' }} />
+        <PrintLogo width={120} height={40} alt={school?.name ?? ''} />
         <div style={{ flex: 1, textAlign: 'center' }}>
-          <div style={{ fontWeight: 600, fontSize: '18px' }}>{school?.name ?? ''}</div>
-          {school?.address ? <div style={{ fontSize: '11px', color: 'var(--muted)' }}>{school.address}</div> : null}
+          <PrintSchoolName name={school?.name ?? ''} size={18} />
+          <PrintAddress address={school?.address} />
           <div style={{ fontFamily: "'Newsreader', Georgia, serif", fontSize: '18px', marginTop: '4px' }}>{t('rc.title')} — {card.exam_name}</div>
         </div>
         <div style={{ width: '120px', textAlign: 'right', fontSize: '11px', color: 'var(--muted)' }}>
@@ -108,11 +108,8 @@ export default function ReportCardDoc({ mode, id, examId, auto = false }: { mode
 
   return (
     <div style={{ minHeight: '100vh', background: 'var(--bg)', padding: '24px', fontFamily: "'Geist', 'Noto Sans Devanagari', system-ui, sans-serif" }}>
-      <style>{'@page { size: A4; margin: 10mm; } @media print { .no-print { display: none !important; } }'}</style>
-      <div className="no-print" style={{ display: 'flex', gap: '10px', marginBottom: '16px', maxWidth: '190mm', margin: '0 auto 16px' }}>
-        <button type="button" onClick={() => window.history.back()} style={{ height: '38px', padding: '0 16px', borderRadius: '6px', border: '1px solid var(--line-strong)', background: 'var(--surface)', color: 'var(--ink)', fontSize: '13px', cursor: 'pointer' }}>{t('marks.back')}</button>
-        <button type="button" onClick={() => void printCurrentWindow()} style={{ height: '38px', padding: '0 18px', borderRadius: '6px', border: '1px solid var(--accent)', background: 'var(--accent)', color: 'var(--white)', fontSize: '13px', fontWeight: 500, cursor: 'pointer' }}>{t('rc.print')}</button>
-      </div>
+      <style>{pageCss('a4')}</style>
+      <PrintToolbar backLabel={t('marks.back')} printLabel={t('rc.print')} onBack={() => window.history.back()} onPrint={() => void printCurrentWindow()} style={{ maxWidth: '190mm', margin: '0 auto 16px' }} />
       {cards.map((c) => (
         <Card key={c.student_id} card={c} school={school} />
       ))}
