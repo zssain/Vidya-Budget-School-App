@@ -614,6 +614,53 @@ export interface RecordMessageInput {
   related_table?: string | null
   related_id?: string | null
 }
+
+// Dues + fee reminders (P14 Step 5, prototype feesadmin 2-3).
+export interface DuesStripDto {
+  total_due_paise: number
+  students_with_dues: number
+  unpaid_dues: number
+  collected_today_paise: number
+}
+export interface DuesRowDto {
+  due_id: string
+  student_id: string
+  student_name: string
+  class_display: string | null
+  fee_head: string
+  balance_paise: number
+  guardian_id: string | null
+  guardian_name: string | null
+  guardian_mobile: string | null
+  guardian_email: string | null
+  guardian_language: string | null
+  has_messages_consent: boolean
+  emailable: boolean
+}
+export interface DuesListDto {
+  strip: DuesStripDto
+  rows: DuesRowDto[]
+  emailable_students: number
+  skipped_no_email: number
+  skipped_no_consent: number
+}
+export interface ReminderPreviewDto {
+  student_id: string
+  subject: string | null
+  body: string
+  upi_link: string | null
+  guardian_name: string | null
+  guardian_mobile: string | null
+  guardian_email: string | null
+  has_email: boolean
+  has_consent: boolean
+  language: string
+}
+export interface BulkReminderDto {
+  queued: number
+  skipped_no_email: number
+  skipped_no_consent: number
+}
 export interface SessionInput {
   label: string
   starts_on: string
@@ -772,6 +819,11 @@ export const qr_svg = (data: string) => invoke<string>('qr_svg', { data })
 export const record_message = (input: RecordMessageInput) => invoke<MessageDto>('record_message', { input })
 export const list_messages = (status?: string | null, relatedId?: string | null) =>
   invoke<MessageDto[]>('list_messages', { status: status ?? null, relatedId: relatedId ?? null })
+export const list_dues = (classId?: string | null) => invoke<DuesListDto>('list_dues', { classId: classId ?? null })
+export const preview_fee_reminder = (studentId: string, language?: string | null) =>
+  invoke<ReminderPreviewDto>('preview_fee_reminder', { studentId, language: language ?? null })
+export const queue_fee_reminders = (studentIds: string[], language?: string | null) =>
+  invoke<BulkReminderDto>('queue_fee_reminders', { studentIds, language: language ?? null })
 
 // ---- Phase 13: school calendar (weekly offs + holidays/exams/events) --------
 export interface CalendarEventDto {

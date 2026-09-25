@@ -68,7 +68,7 @@ pub fn module_for(action: Action) -> Module {
         CreateStudent | EnrollStudent | TransferSection | MarkStudentLeft
         | EditStudentDetails | ViewStudent | ViewGuardianAddress | StudentCsvImport
         | StudentCsvExport | ViewFees | RecordPayment | PrintShareReceipt
-        | PaymentReversal | DayBook | FeeReports | TakeAttendance
+        | PaymentReversal | DayBook | FeeReports | SendFeeReminder | TakeAttendance
         | EditSubmittedAttendance | ViewAttendance | EnterMarks | EditSubmittedMarks
         | ViewMarks | ViewReportCard | ManageStaff | InviteStaff | SuspendStaff
         | RemoveStaff | ManageDevices | Settings | Licence | Drive | Backups

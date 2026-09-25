@@ -103,6 +103,9 @@ pub const COMMANDS: &[&str] = &[
     "qr_svg",
     "record_message",
     "list_messages",
+    "list_dues",
+    "preview_fee_reminder",
+    "queue_fee_reminders",
     "get_calendar",
     "set_weekly_offs",
     "add_calendar_event",
@@ -495,6 +498,28 @@ pub fn record_message(state: State<RtCtx>, input: RecordMessageInput) -> CmdResu
 pub fn list_messages(state: State<RtCtx>, status: Option<String>, related_id: Option<String>) -> CmdResult<Vec<MessageDto>> {
     let actor = state.require_session()?;
     state.with_db(|conn| list_messages_logic(conn, &actor, status.as_deref(), related_id.as_deref()))
+}
+
+// ---------------------------------------------------------- dues + reminders --
+
+#[tauri::command]
+pub fn list_dues(state: State<RtCtx>, class_id: Option<String>) -> CmdResult<DuesListDto> {
+    let actor = state.require_session()?;
+    state.with_db(|conn| list_dues_logic(conn, &actor, class_id.as_deref()))
+}
+
+#[tauri::command]
+pub fn preview_fee_reminder(state: State<RtCtx>, student_id: String, language: Option<String>) -> CmdResult<ReminderPreviewDto> {
+    let actor = state.require_session()?;
+    state.with_db(|conn| preview_fee_reminder_logic(conn, &actor, &student_id, language.as_deref()))
+}
+
+#[tauri::command]
+pub fn queue_fee_reminders(state: State<RtCtx>, student_ids: Vec<String>, language: Option<String>) -> CmdResult<BulkReminderDto> {
+    let actor = state.require_session()?;
+    let device_id = state.device_id.lock().map_err(|_| crate::error::CmdError::internal("lock"))?.clone();
+    let mode = state.device_mode;
+    state.with_db(|conn| queue_fee_reminders_logic(conn, &actor, device_id.as_deref(), mode, &student_ids, language.as_deref()))
 }
 
 // --------------------------------------------------------------- calendar -----

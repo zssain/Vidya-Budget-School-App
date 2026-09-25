@@ -7,12 +7,13 @@ import { t } from '@/lib/i18n'
 import { formatMoney } from '@/lib/format'
 import * as api from '@/lib/api'
 import type { FeeHeadDto, FeeHeadInput, FeeOverviewRow } from '@/lib/api'
+import FeesDues from './FeesDues'
 
-// Fees (prompts/P07 §9): overview by class + fee-structure heads CRUD. Structure
-// edits are Principal-only; a head in use can only be deactivated; an amount
-// change previews the affected unpaid dues before applying.
+// Fees (prompts/P07 §9): overview by class + fee-structure heads CRUD + Dues (P14).
+// Structure edits are Principal-only; a head in use can only be deactivated; an
+// amount change previews the affected unpaid dues before applying.
 
-type Tab = 'overview' | 'structure'
+type Tab = 'overview' | 'dues' | 'structure'
 
 function seg(sel: boolean): CSSProperties {
   return { minWidth: '64px', padding: '0 16px', height: '38px', fontSize: '13px', fontWeight: 500, border: 'none', borderRight: '1px solid var(--line-strong)', background: sel ? 'var(--accent)' : 'transparent', color: sel ? 'var(--white)' : 'var(--ink)', cursor: 'pointer' }
@@ -63,10 +64,13 @@ export default function FeesScreen() {
 
       <div style={{ display: 'inline-flex', alignSelf: 'flex-start', border: '1px solid var(--line-strong)', borderRadius: '6px', overflow: 'hidden' }}>
         <button type="button" style={seg(tab === 'overview')} onClick={() => setTab('overview')}>{t('fees.tab.overview')}</button>
+        <button type="button" style={seg(tab === 'dues')} onClick={() => setTab('dues')}>{t('fees.tab.dues')}</button>
         <button type="button" style={seg(tab === 'structure')} onClick={() => setTab('structure')}>{t('fees.tab.structure')}</button>
       </div>
 
-      {tab === 'overview' ? (
+      {tab === 'dues' ? (
+        <FeesDues />
+      ) : tab === 'overview' ? (
         <div style={CARD}>
           <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr 1fr', gap: '16px', padding: '12px 24px', fontSize: '10px', fontWeight: 600, letterSpacing: '0.16em', textTransform: 'uppercase', color: 'var(--muted)', borderBottom: '1px solid var(--track)' }}>
             <span>{t('fees.col.class')}</span>

@@ -192,6 +192,9 @@ pub enum Action {
     DayBook,
     /// View fee reports. Accountant + Principal.
     FeeReports,
+    /// Send a fee reminder to a guardian (email queued / WhatsApp tap), P14.
+    /// Accountant + Principal. **Teacher: never** (no fee data).
+    SendFeeReminder,
 
     // ---- Attendance (Teacher for own classes + Principal) ----
     /// Take (create / fill / submit) an attendance sheet for a class. Teacher
@@ -387,7 +390,8 @@ fn accountant(action: Action, _target: &Target) -> Decision {
         | Action::RecordPayment
         | Action::PrintShareReceipt
         | Action::DayBook
-        | Action::FeeReports => Decision::allow(),
+        | Action::FeeReports
+        | Action::SendFeeReminder => Decision::allow(),
 
         // A reversal goes through a request.
         Action::PaymentReversal => Decision::NeedsRequest(RequestType::PaymentReversal),
@@ -503,7 +507,8 @@ fn teacher(actor: &Actor, action: Action, target: &Target) -> Decision {
         | Action::PrintShareReceipt
         | Action::PaymentReversal
         | Action::DayBook
-        | Action::FeeReports => Decision::deny("teacher_no_fees"),
+        | Action::FeeReports
+        | Action::SendFeeReminder => Decision::deny("teacher_no_fees"),
 
         // ---- No admissions / student management. ----
         Action::CreateStudent
@@ -567,12 +572,12 @@ fn class_subject_owned(actor: &Actor, target: &Target) -> bool {
 
 impl Action {
     /// Every action variant (for the matrix-as-data seed and exhaustive checks).
-    pub const ALL: [Action; 40] = [
+    pub const ALL: [Action; 41] = [
         Action::CreateStudent, Action::EnrollStudent, Action::TransferSection, Action::MarkStudentLeft,
         Action::EditStudentDetails, Action::ViewStudent, Action::ViewGuardianAddress,
         Action::StudentCsvImport, Action::StudentCsvExport,
         Action::ViewFees, Action::RecordPayment, Action::PrintShareReceipt, Action::PaymentReversal,
-        Action::DayBook, Action::FeeReports,
+        Action::DayBook, Action::FeeReports, Action::SendFeeReminder,
         Action::TakeAttendance, Action::EditSubmittedAttendance, Action::ViewAttendance,
         Action::EnterMarks, Action::EditSubmittedMarks, Action::ViewMarks, Action::ViewReportCard,
         Action::ManageStaff, Action::InviteStaff, Action::SuspendStaff, Action::RemoveStaff,
@@ -624,7 +629,7 @@ fn target_kind_for(action: Action) -> TargetKind {
     match action {
         CreateStudent | EnrollStudent | TransferSection | MarkStudentLeft | EditStudentDetails
         | ViewStudent | ViewGuardianAddress | StudentCsvImport | StudentCsvExport => TargetKind::Student,
-        ViewFees | RecordPayment | PrintShareReceipt | PaymentReversal | DayBook | FeeReports => TargetKind::Fee,
+        ViewFees | RecordPayment | PrintShareReceipt | PaymentReversal | DayBook | FeeReports | SendFeeReminder => TargetKind::Fee,
         TakeAttendance | EditSubmittedAttendance | ViewAttendance => TargetKind::Attendance,
         EnterMarks | EditSubmittedMarks | ViewMarks | ViewReportCard => TargetKind::Marks,
         ManageStaff | InviteStaff | SuspendStaff | RemoveStaff | ManageDevices => TargetKind::Staff,
@@ -1238,7 +1243,8 @@ mod tests {
 
     #[test]
     fn action_all_covers_every_variant_and_keys_round_trip() {
-        assert_eq!(Action::ALL.len(), 40);
+        assert_eq!(Action::ALL.len(), 41); // P14 added SendFeeReminder
+
         for a in Action::ALL {
             assert_eq!(Action::from_key(&a.as_key()), Some(a), "{a:?}");
         }

@@ -2339,6 +2339,324 @@ pub fn list_fee_dues_logic(conn: &mut Connection, student_id: &str) -> CmdResult
     Ok(FeeDuesDto { student_id: student_id.to_string(), total_due_paise: total, lines })
 }
 
+// ---- Dues screen + fee reminders (P14 Step 5, prototype feesadmin 2-3) -------
+
+/// Format paise as an Indian-grouped rupee string, e.g. `684200` → `"₹6,842"`,
+/// `210050` → `"₹2,100.50"`. Paise are shown only when non-zero.
+fn inr(paise: i64) -> String {
+    let neg = paise < 0;
+    let p = paise.abs();
+    let (rupees, ps) = (p / 100, p % 100);
+    let digits = rupees.to_string();
+    let n = digits.len();
+    let mut grouped = String::new();
+    for (i, ch) in digits.chars().enumerate() {
+        let from_end = n - i;
+        // Indian grouping: a comma before the last 3 digits, then every 2.
+        if i != 0 && (from_end == 3 || (from_end > 3 && (from_end - 3) % 2 == 0)) {
+            grouped.push(',');
+        }
+        grouped.push(ch);
+    }
+    let mut out = format!("₹{grouped}");
+    if ps != 0 {
+        out.push_str(&format!(".{ps:02}"));
+    }
+    if neg { format!("-{out}") } else { out }
+}
+
+#[derive(Debug, Serialize)]
+pub struct DuesStripDto {
+    pub total_due_paise: i64,
+    pub students_with_dues: i64,
+    pub unpaid_dues: i64,
+    pub collected_today_paise: i64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct DuesRowDto {
+    pub due_id: String,
+    pub student_id: String,
+    pub student_name: String,
+    pub class_display: Option<String>,
+    /// Until per-instalment dues arrive (P15) this is the fee head (§Step 5).
+    pub fee_head: String,
+    pub balance_paise: i64,
+    pub guardian_id: Option<String>,
+    pub guardian_name: Option<String>,
+    pub guardian_mobile: Option<String>,
+    pub guardian_email: Option<String>,
+    pub guardian_language: Option<String>,
+    pub has_messages_consent: bool,
+    /// Guardian can be emailed a reminder: has an email AND `messages` consent.
+    pub emailable: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct DuesListDto {
+    pub strip: DuesStripDto,
+    pub rows: Vec<DuesRowDto>,
+    /// Distinct guardians who can be emailed (for the "Email all N parents" button).
+    pub emailable_students: i64,
+    pub skipped_no_email: i64,
+    pub skipped_no_consent: i64,
+}
+
+/// The Dues screen (prototype `feesadmin` state 2): a strip + one row per
+/// outstanding fee due, with the student's primary guardian and consent, optionally
+/// filtered by class. Accountant + Principal (`ViewFees`).
+pub fn list_dues_logic(conn: &mut Connection, actor_s: &SessionStaff, class_id: Option<&str>) -> CmdResult<DuesListDto> {
+    let actor = actor_from(conn, actor_s)?;
+    require_allow(&actor, Action::ViewFees, &Target::of(TargetKind::Fee))?;
+    let mut sql = String::from(
+        "SELECT d.id, d.student_id, s.name, c.display, COALESCE(h.name, d.period, 'Fee'), d.amount_paise, \
+           COALESCE((SELECT SUM(pa.amount_paise) FROM payment_allocation pa WHERE pa.fee_due_id=d.id AND pa.kind='due'),0), \
+           g.id, g.name, g.mobile, g.email, g.language \
+         FROM fee_due d JOIN student s ON s.id=d.student_id \
+           LEFT JOIN enrollment e ON e.student_id=s.id AND e.to_date IS NULL \
+           LEFT JOIN class c ON c.id=e.class_id \
+           LEFT JOIN fee_head h ON h.id=d.fee_head_id \
+           LEFT JOIN student_guardian sg ON sg.student_id=s.id AND sg.is_primary=1 \
+           LEFT JOIN guardian g ON g.id=sg.guardian_id \
+         WHERE d.cancelled_at IS NULL AND s.status='active'",
+    );
+    let mut args: Vec<rusqlite::types::Value> = Vec::new();
+    if let Some(cf) = class_id.filter(|s| !s.is_empty()) {
+        sql.push_str(" AND c.id=?");
+        args.push(cf.to_string().into());
+    }
+    sql.push_str(" ORDER BY s.name, d.created_at");
+
+    #[allow(clippy::type_complexity)]
+    let raw: Vec<(String, String, String, Option<String>, String, i64, i64, Option<String>, Option<String>, Option<String>, Option<String>, Option<String>)> = {
+        let mut stmt = conn.prepare(&sql)?;
+        let out = stmt.query_map(rusqlite::params_from_iter(args.iter()), |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?, r.get(7)?, r.get(8)?, r.get(9)?, r.get(10)?, r.get(11)?))
+        })?.collect::<rusqlite::Result<_>>()?;
+        out
+    };
+
+    let mut rows: Vec<DuesRowDto> = Vec::new();
+    let mut students: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    let mut emailable: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    let mut no_email: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    let mut no_consent: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    let mut consent_cache: std::collections::HashMap<String, bool> = std::collections::HashMap::new();
+    let mut total_due: i64 = 0;
+    for (due_id, sid, name, cls, head, amount, allocated, gid, gname, gmobile, gemail, glang) in raw {
+        let bal = amount - allocated;
+        if bal <= 0 {
+            continue;
+        }
+        total_due += bal;
+        students.insert(sid.clone());
+        let consent = *consent_cache.entry(sid.clone()).or_insert_with(|| messages_consent_logic(conn, &sid).unwrap_or(false));
+        let has_email = gemail.as_deref().map(|e| !e.trim().is_empty()).unwrap_or(false);
+        let can_email = has_email && consent;
+        if can_email {
+            emailable.insert(sid.clone());
+        } else if !has_email {
+            no_email.insert(sid.clone());
+        } else {
+            no_consent.insert(sid.clone());
+        }
+        rows.push(DuesRowDto {
+            due_id, student_id: sid, student_name: name, class_display: cls, fee_head: head, balance_paise: bal,
+            guardian_id: gid, guardian_name: gname, guardian_mobile: gmobile, guardian_email: gemail,
+            guardian_language: glang, has_messages_consent: consent, emailable: can_email,
+        });
+    }
+    let today = now_iso()[..10].to_string();
+    let collected_today_paise: i64 = conn.query_row(
+        "SELECT COALESCE(SUM(amount_paise),0) FROM payment WHERE substr(collected_at,1,10)=?1",
+        params![today], |r| r.get(0),
+    )?;
+    Ok(DuesListDto {
+        strip: DuesStripDto {
+            total_due_paise: total_due,
+            students_with_dues: students.len() as i64,
+            unpaid_dues: rows.len() as i64,
+            collected_today_paise,
+        },
+        rows,
+        emailable_students: emailable.len() as i64,
+        skipped_no_email: no_email.len() as i64,
+        skipped_no_consent: no_consent.len() as i64,
+    })
+}
+
+/// Load a message template's (subject, body) for a language, falling back to
+/// English (the authoritative body, P13).
+fn load_message_template(conn: &Connection, key: &str, lang: &str) -> CmdResult<(Option<String>, String)> {
+    let by = |l: &str| -> rusqlite::Result<Option<(Option<String>, String)>> {
+        conn.query_row(
+            "SELECT subject, body FROM message_template WHERE key=?1 AND language=?2",
+            params![key, l], |r| Ok((r.get(0)?, r.get(1)?)),
+        ).optional()
+    };
+    if let Some(t) = by(lang)? {
+        return Ok(t);
+    }
+    by("en")?.ok_or_else(CmdError::not_found)
+}
+
+struct ReminderRender {
+    subject: Option<String>,
+    body: String,
+    upi_link: Option<String>,
+    guardian_id: Option<String>,
+    guardian_name: Option<String>,
+    guardian_mobile: Option<String>,
+    guardian_email: Option<String>,
+    language: String,
+    has_consent: bool,
+}
+
+/// Render the `fee_reminder` template for one student in the guardian's language
+/// (or `lang_override`), filling `{student_name} {amount} {instalment} {due_date}
+/// {school_name} {upi_link}`. `due_date` is blank until per-instalment dues (P15).
+fn render_fee_reminder(conn: &Connection, student_id: &str, lang_override: Option<&str>) -> CmdResult<ReminderRender> {
+    let name: String = conn
+        .query_row("SELECT name FROM student WHERE id=?1", params![student_id], |r| r.get(0))
+        .optional()?
+        .ok_or_else(CmdError::not_found)?;
+    #[allow(clippy::type_complexity)]
+    let guardian: Option<(String, String, Option<String>, Option<String>, String)> = conn
+        .query_row(
+            "SELECT g.id, g.name, g.mobile, g.email, g.language FROM student_guardian sg \
+             JOIN guardian g ON g.id=sg.guardian_id WHERE sg.student_id=?1 AND sg.is_primary=1 LIMIT 1",
+            params![student_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)),
+        )
+        .optional()?;
+    let lines = student_dues(conn, student_id)?;
+    let total: i64 = lines.iter().map(|l| l.balance_paise.max(0)).sum();
+    let mut heads: Vec<String> = Vec::new();
+    for l in &lines {
+        if l.balance_paise > 0 && !heads.contains(&l.label) {
+            heads.push(l.label.clone());
+        }
+    }
+    let instalment = if heads.is_empty() { "Fees".to_string() } else { heads.join(", ") };
+    let school_name: String = conn
+        .query_row("SELECT name FROM school LIMIT 1", [], |r| r.get(0))
+        .optional()?
+        .unwrap_or_default();
+    let guardian_language = lang_override
+        .map(str::to_string)
+        .or_else(|| guardian.as_ref().map(|g| g.4.clone()))
+        .unwrap_or_else(|| "en".into());
+    let lang = if matches!(guardian_language.as_str(), "en" | "hi" | "te") { guardian_language } else { "en".into() };
+
+    let (subject_tmpl, body_tmpl) = load_message_template(conn, "fee_reminder", &lang)?;
+    let pay = crate::upi::PaymentSettings::read(conn)?;
+    let upi_link = if pay.on_reminders { pay.link(total, &format!("Fees {name}")) } else { None };
+
+    let mut vars: std::collections::BTreeMap<String, String> = std::collections::BTreeMap::new();
+    vars.insert("student_name".into(), name);
+    vars.insert("amount".into(), inr(total));
+    vars.insert("instalment".into(), instalment);
+    vars.insert("due_date".into(), String::new());
+    vars.insert("school_name".into(), school_name);
+    vars.insert("upi_link".into(), upi_link.clone().unwrap_or_default());
+    let body = vidya_core::messages::render(&body_tmpl, &vars);
+    let subject = subject_tmpl.map(|s| vidya_core::messages::render(&s, &vars));
+
+    Ok(ReminderRender {
+        subject,
+        body,
+        upi_link,
+        guardian_id: guardian.as_ref().map(|g| g.0.clone()),
+        guardian_name: guardian.as_ref().map(|g| g.1.clone()),
+        guardian_mobile: guardian.as_ref().and_then(|g| g.2.clone()),
+        guardian_email: guardian.as_ref().and_then(|g| g.3.clone()),
+        language: lang.clone(),
+        has_consent: messages_consent_logic(conn, student_id)?,
+    })
+}
+
+#[derive(Debug, Serialize)]
+pub struct ReminderPreviewDto {
+    pub student_id: String,
+    pub subject: Option<String>,
+    pub body: String,
+    pub upi_link: Option<String>,
+    pub guardian_name: Option<String>,
+    pub guardian_mobile: Option<String>,
+    pub guardian_email: Option<String>,
+    pub has_email: bool,
+    pub has_consent: bool,
+    pub language: String,
+}
+
+/// Preview a fee reminder for one student (the reminder sheet, prototype `feesadmin`
+/// state 3). Returns the rendered subject/body + the UPI link so the sheet can show
+/// the QR and (for WhatsApp) pass the text to `wa.me`.
+pub fn preview_fee_reminder_logic(conn: &mut Connection, actor_s: &SessionStaff, student_id: &str, language: Option<&str>) -> CmdResult<ReminderPreviewDto> {
+    let actor = actor_from(conn, actor_s)?;
+    require_allow(&actor, Action::SendFeeReminder, &Target::of(TargetKind::Fee))?;
+    let r = render_fee_reminder(conn, student_id, language)?;
+    let has_email = r.guardian_email.as_deref().map(|e| !e.trim().is_empty()).unwrap_or(false);
+    Ok(ReminderPreviewDto {
+        student_id: student_id.to_string(),
+        subject: r.subject,
+        body: r.body,
+        upi_link: r.upi_link,
+        guardian_name: r.guardian_name,
+        guardian_mobile: r.guardian_mobile,
+        guardian_email: r.guardian_email,
+        has_email,
+        has_consent: r.has_consent,
+        language: r.language,
+    })
+}
+
+#[derive(Debug, Serialize)]
+pub struct BulkReminderDto {
+    pub queued: i64,
+    pub skipped_no_email: i64,
+    pub skipped_no_consent: i64,
+}
+
+/// Bulk "Email all N parents" (prototype `feesadmin` state 2). Queues one `email`
+/// message per student whose primary guardian has an email AND `messages` consent;
+/// others are skipped with a counted reason. One transaction. The school PC sends
+/// the queued rows later (Step 3). Accountant + Principal (`SendFeeReminder`).
+pub fn queue_fee_reminders_logic(
+    conn: &mut Connection,
+    actor_s: &SessionStaff,
+    device_id: Option<&str>,
+    device_mode: DeviceMode,
+    student_ids: &[String],
+    language: Option<&str>,
+) -> CmdResult<BulkReminderDto> {
+    let actor = actor_from(conn, actor_s)?;
+    require_allow(&actor, Action::SendFeeReminder, &Target::of(TargetKind::Fee))?;
+    let now = now_iso();
+    let school_id = single_school_id(conn)?;
+    let (mut queued, mut skip_email, mut skip_consent) = (0i64, 0i64, 0i64);
+    let tx = conn.transaction()?;
+    for sid in student_ids {
+        let r = render_fee_reminder(&tx, sid, language)?;
+        let has_email = r.guardian_email.as_deref().map(|e| !e.trim().is_empty()).unwrap_or(false);
+        if !has_email {
+            skip_email += 1;
+            continue;
+        }
+        if !r.has_consent {
+            skip_consent += 1;
+            continue;
+        }
+        insert_message_in_tx(
+            &tx, device_mode, &actor_s.id, device_id, "email", "fee_reminder", &r.language,
+            r.guardian_id.as_deref(), None, r.guardian_email.as_deref(), r.subject.as_deref(), Some(&r.body),
+            Some("student"), Some(sid), "queued", school_id.as_deref(), &now,
+        )?;
+        queued += 1;
+    }
+    tx.commit()?;
+    Ok(BulkReminderDto { queued, skipped_no_email: skip_email, skipped_no_consent: skip_consent })
+}
+
 #[derive(Debug, Deserialize)]
 pub struct PaymentInput {
     pub student_id: String,
@@ -3804,15 +4122,81 @@ pub struct RecordMessageInput {
 fn action_for_message_kind(kind: &str) -> CmdResult<Action> {
     match kind {
         "receipt_share" => Ok(Action::PrintShareReceipt),
+        "fee_reminder" => Ok(Action::SendFeeReminder),
         _ => Err(CmdError::validation("kind", "unsupported")),
     }
 }
 
-/// Record a message in the outbox (P14, §10.1). `wa_tap` → status **`tapped`**
-/// (never "sent" — Vidya can't know it was actually sent, §3 rule 13);
-/// `email`/`wa_auto` → **`queued`** (the school PC sends later). One transaction
-/// (row + audit + op). The channel/purpose gate is enforced here; the UI enforces
-/// `can_message` consent before offering the action.
+/// Insert one message row + its audit entry + its op on an OPEN transaction, and
+/// return the new id. Shared by `record_message_logic` (single) and the bulk
+/// fee-reminder queueing (many rows, one transaction). No consent/permission check
+/// here — the caller does that once.
+#[allow(clippy::too_many_arguments)]
+fn insert_message_in_tx(
+    tx: &rusqlite::Transaction,
+    mode: DeviceMode,
+    staff_id: &str,
+    device_id: Option<&str>,
+    channel: &str,
+    kind: &str,
+    language: &str,
+    to_guardian_id: Option<&str>,
+    to_staff_id: Option<&str>,
+    to_address: Option<&str>,
+    subject: Option<&str>,
+    body: Option<&str>,
+    related_table: Option<&str>,
+    related_id: Option<&str>,
+    status: &str,
+    school_id: Option<&str>,
+    now: &str,
+) -> rusqlite::Result<String> {
+    let sync_state = if mode == DeviceMode::Server { "confirmed" } else { "on_device" };
+    let id = new_id("msg");
+    tx.execute(
+        "INSERT INTO message(id,kind,channel,language,to_guardian_id,to_staff_id,to_address,subject,body,status,related_table,related_id,created_by,school_id,created_at,updated_at,updated_by_staff,updated_by_device,sync_state) \
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?15,?13,?16,?17)",
+        params![id, kind, channel, language, to_guardian_id, to_staff_id, to_address, subject, body,
+            status, related_table, related_id, staff_id, school_id, now, device_id, sync_state],
+    )?;
+    crate::security::audit::append(tx, &AuditEntry {
+        at: now.to_string(),
+        staff_id: Some(staff_id.to_string()),
+        action: "record_message".into(),
+        table: Some("message".into()),
+        record_id: Some(id.clone()),
+        after_json: Some(serde_json::json!({ "channel": channel, "kind": kind, "status": status }).to_string()),
+        ..Default::default()
+    })?;
+    crate::write::append_op(tx, mode, &Op {
+        op_id: new_id("op"),
+        hlc: now.to_string(),
+        device_id: device_id.unwrap_or_default().to_string(),
+        staff_id: staff_id.to_string(),
+        audience: "admin".into(),
+        table: "message".into(),
+        record_id: id.clone(),
+        kind: "insert".into(),
+        payload: "{}".into(),
+        base_version: None,
+        server_epoch: 1,
+    })?;
+    Ok(id)
+}
+
+/// The honest initial status for a channel: `wa_tap` → **`tapped`** (Vidya can't
+/// know it was actually sent, §3 rule 13); everything else → **`queued`**.
+fn initial_status_for(channel: vidya_core::messages::Channel) -> vidya_core::messages::MessageStatus {
+    use vidya_core::messages::{Channel, MessageStatus};
+    match channel {
+        Channel::WaTap => MessageStatus::Tapped,
+        Channel::Email | Channel::WaAuto | Channel::App => MessageStatus::Queued,
+    }
+}
+
+/// Record a message in the outbox (P14, §10.1). One transaction (row + audit + op).
+/// The channel/purpose gate is enforced here; the UI enforces `can_message` consent
+/// before offering the action.
 pub fn record_message_logic(
     conn: &mut Connection,
     actor_s: &SessionStaff,
@@ -3825,63 +4209,21 @@ pub fn record_message_logic(
 
     let channel = vidya_core::messages::Channel::parse(&input.channel)
         .ok_or_else(|| CmdError::validation("channel", "unknown"))?;
-    use vidya_core::messages::{Channel, MessageStatus};
-    let status = match channel {
-        Channel::WaTap => MessageStatus::Tapped,
-        Channel::Email | Channel::WaAuto | Channel::App => MessageStatus::Queued,
-    };
+    let status = initial_status_for(channel);
     if !matches!(input.language.as_str(), "en" | "hi" | "te") {
         return Err(CmdError::validation("language", "unknown"));
     }
 
-    let id = new_id("msg");
     let now = now_iso();
-    let confirmed = device_mode == DeviceMode::Server;
-    let sync_state = if confirmed { "confirmed" } else { "on_device" };
     let school_id = single_school_id(conn)?;
-    let ctx = WriteCtx { mode: device_mode };
-    let dev = device_id.map(str::to_string);
-
-    // Clone the fields the closure needs (input is borrowed).
-    let (kind, lang, to_g, to_s, to_a, subj, body, rel_t, rel_i) = (
-        input.kind.clone(), input.language.clone(), input.to_guardian_id.clone(),
-        input.to_staff_id.clone(), input.to_address.clone(), input.subject.clone(),
-        input.body.clone(), input.related_table.clone(), input.related_id.clone(),
-    );
-    let id2 = id.clone();
-    let now2 = now.clone();
-    let staff = actor_s.id.clone();
-    with_write(conn, &ctx, move |tx| {
-        tx.execute(
-            "INSERT INTO message(id,kind,channel,language,to_guardian_id,to_staff_id,to_address,subject,body,status,related_table,related_id,created_by,school_id,created_at,updated_at,updated_by_staff,updated_by_device,sync_state) \
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?15,?13,?16,?17)",
-            params![id2, kind, channel.as_str(), lang, to_g, to_s, to_a, subj, body,
-                status.as_str(), rel_t, rel_i, staff, school_id, now2, dev, sync_state],
-        )?;
-        let audit = AuditEntry {
-            at: now2.clone(),
-            staff_id: Some(staff.clone()),
-            action: "record_message".into(),
-            table: Some("message".into()),
-            record_id: Some(id2.clone()),
-            after_json: Some(serde_json::json!({ "channel": channel.as_str(), "kind": kind, "status": status.as_str() }).to_string()),
-            ..Default::default()
-        };
-        let op = Op {
-            op_id: new_id("op"),
-            hlc: now2.clone(),
-            device_id: dev.clone().unwrap_or_default(),
-            staff_id: staff.clone(),
-            audience: "admin".into(),
-            table: "message".into(),
-            record_id: id2.clone(),
-            kind: "insert".into(),
-            payload: "{}".into(),
-            base_version: None,
-            server_epoch: 1,
-        };
-        Ok(Effect { value: (), audit, op })
-    })?;
+    let tx = conn.transaction()?;
+    let id = insert_message_in_tx(
+        &tx, device_mode, &actor_s.id, device_id, channel.as_str(), &input.kind, &input.language,
+        input.to_guardian_id.as_deref(), input.to_staff_id.as_deref(), input.to_address.as_deref(),
+        input.subject.as_deref(), input.body.as_deref(), input.related_table.as_deref(),
+        input.related_id.as_deref(), status.as_str(), school_id.as_deref(), &now,
+    )?;
+    tx.commit()?;
 
     conn.query_row("SELECT * FROM message WHERE id=?1", params![id], map_message).map_err(Into::into)
 }
@@ -5148,6 +5490,79 @@ mod tests {
         let mut bad2 = wa_tap_input();
         bad2.channel = "sms".into();
         assert_eq!(record_message_logic(&mut c, &accountant(), None, DeviceMode::Server, &bad2).unwrap_err().code, "VALIDATION");
+    }
+
+    // ---- Phase 14 Step 5: dues + fee reminders ----------------------------
+    #[test]
+    fn inr_indian_grouping() {
+        assert_eq!(inr(210000), "₹2,100");
+        assert_eq!(inr(68420000), "₹6,84,200");
+        assert_eq!(inr(210050), "₹2,100.50");
+        assert_eq!(inr(0), "₹0");
+    }
+
+    fn pay_input(on: bool) -> PaymentSettingsInput {
+        PaymentSettingsInput { upi_id: Some("school@okhdfcbank".into()), upi_name: Some("Green Valley".into()), on_receipts: true, on_reminders: on, on_dues_list: false }
+    }
+
+    #[test]
+    fn dues_list_and_fee_reminder_queue() {
+        let mut c = seeded();
+        set_payment_settings_logic(&mut c, &principal(), &pay_input(true)).unwrap();
+        let dues = list_dues_logic(&mut c, &accountant(), None).unwrap();
+        assert!(dues.strip.total_due_paise > 0, "seed has outstanding dues");
+        assert!(!dues.rows.is_empty());
+        assert_eq!(dues.strip.unpaid_dues, dues.rows.len() as i64);
+        let sid = dues.rows[0].student_id.clone();
+        // The demo seed has no guardian rows (real schools create them via
+        // create_student); give this student a primary guardian with email +
+        // `messages` consent so the emailable path is exercised.
+        let school_id: String = c.query_row("SELECT id FROM school LIMIT 1", [], |r| r.get(0)).unwrap();
+        c.execute(
+            "INSERT INTO guardian(id,name,relation,mobile,email,language,whatsapp_ok,school_id,created_at,updated_at,sync_state) \
+             VALUES('g-test','Test Parent','father','9876543210','parent@example.com','en',1,?1,'t','t','confirmed')",
+            params![school_id],
+        ).unwrap();
+        c.execute(
+            "INSERT INTO student_guardian(id,student_id,guardian_id,is_primary,school_id,created_at,updated_at,sync_state) \
+             VALUES('sg-test',?1,'g-test',1,?2,'t','t','confirmed')",
+            params![sid, school_id],
+        ).unwrap();
+        record_consent_logic(&mut c, &principal(), None, DeviceMode::Server, &sid, None, "messages", "in_person").unwrap();
+
+        let prev = preview_fee_reminder_logic(&mut c, &accountant(), &sid, Some("en")).unwrap();
+        assert!(prev.body.contains('₹'), "reminder body carries the amount");
+        assert!(prev.upi_link.as_deref().unwrap().starts_with("upi://pay"), "reminder carries a UPI link");
+        assert!(prev.has_email && prev.has_consent);
+
+        let bulk = queue_fee_reminders_logic(&mut c, &accountant(), None, DeviceMode::Server, &[sid.clone()], Some("en")).unwrap();
+        assert_eq!(bulk.queued, 1);
+        let n: i64 = c.query_row("SELECT count(*) FROM message WHERE channel='email' AND kind='fee_reminder' AND status='queued'", [], |r| r.get(0)).unwrap();
+        assert_eq!(n, 1);
+
+        // A different student (no email / no consent) is skipped, not queued.
+        if let Some(other) = dues.rows.iter().map(|r| r.student_id.clone()).find(|s| s != &sid) {
+            let bulk2 = queue_fee_reminders_logic(&mut c, &accountant(), None, DeviceMode::Server, &[other], Some("en")).unwrap();
+            assert_eq!(bulk2.queued, 0);
+            assert_eq!(bulk2.skipped_no_email + bulk2.skipped_no_consent, 1);
+        }
+    }
+
+    #[test]
+    fn reminder_without_upi_toggle_has_no_link() {
+        let mut c = seeded();
+        set_payment_settings_logic(&mut c, &principal(), &pay_input(false)).unwrap(); // reminders toggle OFF
+        let sid = list_dues_logic(&mut c, &accountant(), None).unwrap().rows[0].student_id.clone();
+        let prev = preview_fee_reminder_logic(&mut c, &accountant(), &sid, Some("en")).unwrap();
+        assert!(prev.upi_link.is_none());
+    }
+
+    #[test]
+    fn teacher_cannot_view_dues_or_send_reminders() {
+        let mut c = seeded();
+        let teacher = SessionStaff { id: "stf-meena".into(), name: "Meena".into(), role: "teacher".into() };
+        assert_eq!(list_dues_logic(&mut c, &teacher, None).unwrap_err().code, "FORBIDDEN");
+        assert_eq!(queue_fee_reminders_logic(&mut c, &teacher, None, DeviceMode::Server, &[], None).unwrap_err().code, "FORBIDDEN");
     }
 
     #[test]
