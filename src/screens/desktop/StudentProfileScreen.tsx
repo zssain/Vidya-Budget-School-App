@@ -8,6 +8,7 @@ import { formatMoney } from '@/lib/format'
 import * as api from '@/lib/api'
 import type { ClassDto, FeeDuesDto, GuardianDto, PaymentDto, RequestDto, StudentProfileDto } from '@/lib/api'
 import GuardiansCard from './GuardiansCard'
+import CustomValuesCard from './CustomValuesCard'
 
 // Student profile (prompts/P07 §1): details, enrollment history, attendance %
 // this term, fees/ledger (Principal + Accountant), requests, audit. Actions:
@@ -129,6 +130,9 @@ export default function StudentProfileScreen({ id, role }: { id: string; role: s
           canEdit={role === 'principal'}
           onChanged={(list: GuardianDto[]) => setP({ ...p, guardians: list })}
         />
+
+        {/* Custom fields (P13): school-defined "More details". Principal edits. */}
+        <CustomValuesCard entity="student" entityId={p.id} canEdit={role === 'principal'} />
 
         {/* Attendance this term */}
         <div style={CARD}>

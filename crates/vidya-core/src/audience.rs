@@ -113,7 +113,9 @@ pub fn audience_for(table: &str, class_id: Option<&str>) -> CoreResult<Audience>
         // message/message_template (P13 foundation) are Principal-managed for now;
         // P14 refines message audience per recipient when sending lands.
         | "licence" | "grade_scale" | "grade_band" | "school_week" | "calendar_event"
-        | "message" | "message_template" => {
+        | "message" | "message_template"
+        // custom fields (P13): Principal-defined config + values.
+        | "custom_field" | "custom_value" => {
             Ok(Audience::Admin)
         }
         // ---- request: audience follows the requester's own domain ----------

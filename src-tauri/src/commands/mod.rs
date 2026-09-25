@@ -107,6 +107,12 @@ pub const COMMANDS: &[&str] = &[
     "update_guardian",
     "set_primary_guardian",
     "remove_guardian",
+    "list_custom_fields",
+    "create_custom_field",
+    "update_custom_field",
+    "set_custom_field_active",
+    "get_custom_values",
+    "set_custom_values",
     "verify_audit_chain",
     "backup_status",
     "backup_now",
@@ -516,6 +522,52 @@ pub fn remove_guardian(state: State<RtCtx>, student_id: String, guardian_id: Str
     let device_id = cur_device(&state)?;
     let mode = state.device_mode;
     state.with_db(|conn| remove_guardian_logic(conn, &actor, device_id.as_deref(), mode, &student_id, &guardian_id))
+}
+
+// ----------------------------------------------------------- custom fields ----
+
+#[tauri::command]
+pub fn list_custom_fields(state: State<RtCtx>, entity: String, include_inactive: Option<bool>) -> CmdResult<Vec<CustomFieldDto>> {
+    let _ = state.require_session()?;
+    state.with_db(|conn| list_custom_fields_logic(conn, &entity, include_inactive.unwrap_or(false)))
+}
+
+#[tauri::command]
+pub fn create_custom_field(state: State<RtCtx>, input: CustomFieldInput) -> CmdResult<CustomFieldDto> {
+    let actor = state.require_session()?;
+    let device_id = cur_device(&state)?;
+    let mode = state.device_mode;
+    state.with_db(|conn| create_custom_field_logic(conn, &actor, device_id.as_deref(), mode, &input))
+}
+
+#[tauri::command]
+pub fn update_custom_field(state: State<RtCtx>, id: String, input: CustomFieldInput) -> CmdResult<CustomFieldDto> {
+    let actor = state.require_session()?;
+    let device_id = cur_device(&state)?;
+    let mode = state.device_mode;
+    state.with_db(|conn| update_custom_field_logic(conn, &actor, device_id.as_deref(), mode, &id, &input))
+}
+
+#[tauri::command]
+pub fn set_custom_field_active(state: State<RtCtx>, id: String, active: bool) -> CmdResult<CustomFieldDto> {
+    let actor = state.require_session()?;
+    let device_id = cur_device(&state)?;
+    let mode = state.device_mode;
+    state.with_db(|conn| set_custom_field_active_logic(conn, &actor, device_id.as_deref(), mode, &id, active))
+}
+
+#[tauri::command]
+pub fn get_custom_values(state: State<RtCtx>, entity: String, entity_id: String) -> CmdResult<Vec<CustomFieldValueDto>> {
+    let _ = state.require_session()?;
+    state.with_db(|conn| get_custom_values_logic(conn, &entity, &entity_id))
+}
+
+#[tauri::command]
+pub fn set_custom_values(state: State<RtCtx>, entity: String, entity_id: String, values: Vec<CustomValueSet>) -> CmdResult<Vec<CustomFieldValueDto>> {
+    let actor = state.require_session()?;
+    let device_id = cur_device(&state)?;
+    let mode = state.device_mode;
+    state.with_db(|conn| set_custom_values_logic(conn, &actor, device_id.as_deref(), mode, &entity, &entity_id, &values))
 }
 
 // ------------------------------------------------------------- academics ------

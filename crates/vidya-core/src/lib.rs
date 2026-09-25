@@ -15,6 +15,7 @@ pub mod backup;
 pub mod calendar;
 pub mod conflicts;
 pub mod csv;
+pub mod custom_fields;
 pub mod epoch;
 pub mod fees;
 pub mod grades;

@@ -11,6 +11,7 @@ import { getLang, setLang, t, useLang } from '@/lib/i18n'
 import { navigate } from '@/lib/router'
 import { ACCENT_OPTIONS, loadAccent, setAccent } from '@/lib/theme'
 import { useStore } from '@/lib/store'
+import CustomFieldsSettings from './CustomFieldsSettings'
 
 declare const __APP_VERSION__: string
 
@@ -173,6 +174,9 @@ export default function SettingsScreen() {
             )
           })}
         </div>
+
+        {/* Custom fields (P13): Principal-defined student/staff fields. */}
+        <CustomFieldsSettings />
 
         {/* Academics */}
         <div style={CARD}>

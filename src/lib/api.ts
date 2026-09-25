@@ -780,6 +780,48 @@ export const set_primary_guardian = (studentId: string, guardianId: string) =>
 export const remove_guardian = (studentId: string, guardianId: string) =>
   invoke<GuardianDto[]>('remove_guardian', { studentId, guardianId })
 
+// ---- Phase 13: custom fields (student/staff, text|number|date|choice) --------
+export interface CustomFieldDto {
+  id: string
+  entity: string
+  key: string
+  label: string
+  label_hi: string | null
+  label_te: string | null
+  field_type: string
+  options: string[]
+  required: boolean
+  active: boolean
+  sort_order: number
+}
+export interface CustomFieldInput {
+  entity: string
+  key: string
+  label: string
+  label_hi?: string | null
+  label_te?: string | null
+  field_type: string
+  options?: string[]
+  required?: boolean
+}
+export interface CustomFieldValueDto {
+  field: CustomFieldDto
+  value: string | null
+}
+export interface CustomValueSet {
+  field_id: string
+  value: string
+}
+export const list_custom_fields = (entity: string, includeInactive?: boolean) =>
+  invoke<CustomFieldDto[]>('list_custom_fields', { entity, includeInactive: includeInactive ?? false })
+export const create_custom_field = (input: CustomFieldInput) => invoke<CustomFieldDto>('create_custom_field', { input })
+export const update_custom_field = (id: string, input: CustomFieldInput) => invoke<CustomFieldDto>('update_custom_field', { id, input })
+export const set_custom_field_active = (id: string, active: boolean) => invoke<CustomFieldDto>('set_custom_field_active', { id, active })
+export const get_custom_values = (entity: string, entityId: string) =>
+  invoke<CustomFieldValueDto[]>('get_custom_values', { entity, entityId })
+export const set_custom_values = (entity: string, entityId: string, values: CustomValueSet[]) =>
+  invoke<CustomFieldValueDto[]>('set_custom_values', { entity, entityId, values })
+
 export const verify_audit_chain = () => invoke<AuditChainDto>('verify_audit_chain')
 export const backup_status = () => invoke<BackupStatusDto>('backup_status')
 export const backup_now = (recoveryKey?: string) =>

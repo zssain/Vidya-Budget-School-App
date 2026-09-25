@@ -4152,6 +4152,299 @@ pub fn remove_guardian_logic(
     crate::guardians::list_for_student(conn, student_id).map_err(Into::into)
 }
 
+// ========================================================= custom fields =====
+
+use vidya_core::custom_fields::{self as cf, Entity, FieldType};
+
+#[derive(Debug, Serialize)]
+pub struct CustomFieldDto {
+    pub id: String,
+    pub entity: String,
+    pub key: String,
+    pub label: String,
+    pub label_hi: Option<String>,
+    pub label_te: Option<String>,
+    pub field_type: String,
+    pub options: Vec<String>,
+    pub required: bool,
+    pub active: bool,
+    pub sort_order: i64,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CustomFieldInput {
+    pub entity: String,
+    pub key: String,
+    pub label: String,
+    #[serde(default)]
+    pub label_hi: Option<String>,
+    #[serde(default)]
+    pub label_te: Option<String>,
+    pub field_type: String,
+    #[serde(default)]
+    pub options: Vec<String>,
+    #[serde(default)]
+    pub required: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct CustomFieldValueDto {
+    pub field: CustomFieldDto,
+    pub value: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CustomValueSet {
+    pub field_id: String,
+    pub value: String,
+}
+
+fn map_custom_field(r: &rusqlite::Row) -> rusqlite::Result<CustomFieldDto> {
+    let options_json: Option<String> = r.get(7)?;
+    let options = options_json
+        .and_then(|s| serde_json::from_str::<Vec<String>>(&s).ok())
+        .unwrap_or_default();
+    Ok(CustomFieldDto {
+        id: r.get(0)?,
+        entity: r.get(1)?,
+        key: r.get(2)?,
+        label: r.get(3)?,
+        label_hi: r.get(4)?,
+        label_te: r.get(5)?,
+        field_type: r.get(6)?,
+        options,
+        required: r.get::<_, i64>(8)? != 0,
+        active: r.get::<_, i64>(9)? != 0,
+        sort_order: r.get(10)?,
+    })
+}
+
+const CF_SELECT: &str = "SELECT id, entity, key, label, label_hi, label_te, type, options_json, required, active, sort_order FROM custom_field";
+
+fn cf_type(input_type: &str) -> CmdResult<FieldType> {
+    FieldType::parse(input_type).ok_or_else(|| CmdError::validation("type", "unknown"))
+}
+fn cf_entity(input_entity: &str) -> CmdResult<Entity> {
+    Entity::parse(input_entity).ok_or_else(|| CmdError::validation("entity", "unknown"))
+}
+
+/// List custom fields for an entity. Any signed-in role may read (to render forms
+/// and CSV headers). `include_inactive` = the Settings management view.
+pub fn list_custom_fields_logic(conn: &mut Connection, entity: &str, include_inactive: bool) -> CmdResult<Vec<CustomFieldDto>> {
+    cf_entity(entity)?;
+    let sql = format!(
+        "{CF_SELECT} WHERE entity=?1{} ORDER BY sort_order, key",
+        if include_inactive { "" } else { " AND active=1" }
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map(params![entity], map_custom_field)?;
+    Ok(rows.collect::<rusqlite::Result<_>>()?)
+}
+
+/// Define a new custom field (Principal, Settings). Audited; synced (admin).
+pub fn create_custom_field_logic(
+    conn: &mut Connection,
+    actor_s: &SessionStaff,
+    device_id: Option<&str>,
+    device_mode: DeviceMode,
+    input: &CustomFieldInput,
+) -> CmdResult<CustomFieldDto> {
+    let actor = actor_from(conn, actor_s)?;
+    require_allow(&actor, Action::Settings, &Target { kind: TargetKind::School, ..Default::default() })?;
+    let entity = cf_entity(&input.entity)?;
+    let ftype = cf_type(&input.field_type)?;
+    cf::validate_field_def(&input.key, &input.label, ftype, &input.options)?;
+    // Unique (entity, key).
+    if conn
+        .query_row("SELECT 1 FROM custom_field WHERE entity=?1 AND key=?2", params![input.entity, input.key], |_| Ok(()))
+        .optional()?
+        .is_some()
+    {
+        return Err(CmdError::validation("key", "duplicate"));
+    }
+    let id = new_id("cf");
+    let now = now_iso();
+    let school_id = single_school_id(conn)?;
+    let sync_state = if device_mode == DeviceMode::Server { "confirmed" } else { "on_device" };
+    let dev = device_id.unwrap_or_default().to_string();
+    let options_json = serde_json::to_string(&input.options).unwrap_or_else(|_| "[]".into());
+    let next_sort: i64 = conn
+        .query_row("SELECT COALESCE(MAX(sort_order),0)+1 FROM custom_field WHERE entity=?1", params![input.entity], |r| r.get(0))
+        .optional()?
+        .unwrap_or(1);
+    let tx = conn.transaction()?;
+    tx.execute(
+        "INSERT INTO custom_field(id,entity,key,label,label_hi,label_te,type,options_json,required,active,sort_order,school_id,created_at,updated_at,updated_by_staff,updated_by_device,sync_state) \
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,1,?10,?11,?12,?12,?13,?14,?15)",
+        params![id, entity.as_str(), input.key, input.label, input.label_hi, input.label_te, ftype.as_str(), options_json, input.required as i64, next_sort, school_id, now, actor_s.id, dev, sync_state],
+    )?;
+    crate::security::audit::append(&tx, &AuditEntry {
+        at: now.clone(), staff_id: Some(actor_s.id.clone()), action: "create_custom_field".into(),
+        table: Some("custom_field".into()), record_id: Some(id.clone()),
+        after_json: Some(serde_json::json!({ "entity": input.entity, "key": input.key, "type": input.field_type }).to_string()),
+        ..Default::default()
+    })?;
+    crate::write::append_op(&tx, device_mode, &Op {
+        op_id: new_id("op"), hlc: now.clone(), device_id: dev.clone(), staff_id: actor_s.id.clone(),
+        audience: "admin".into(), table: "custom_field".into(), record_id: id.clone(), kind: "insert".into(),
+        payload: "{}".into(), base_version: None, server_epoch: 1,
+    })?;
+    tx.commit()?;
+    conn.query_row(&format!("{CF_SELECT} WHERE id=?1"), params![id], map_custom_field).map_err(Into::into)
+}
+
+/// Edit a custom field's label/options/required (not its key/type/entity).
+pub fn update_custom_field_logic(
+    conn: &mut Connection,
+    actor_s: &SessionStaff,
+    device_id: Option<&str>,
+    device_mode: DeviceMode,
+    id: &str,
+    input: &CustomFieldInput,
+) -> CmdResult<CustomFieldDto> {
+    let actor = actor_from(conn, actor_s)?;
+    require_allow(&actor, Action::Settings, &Target { kind: TargetKind::School, ..Default::default() })?;
+    let ftype = cf_type(&input.field_type)?;
+    cf::validate_field_def(&input.key, &input.label, ftype, &input.options)?;
+    if conn.query_row("SELECT 1 FROM custom_field WHERE id=?1", params![id], |_| Ok(())).optional()?.is_none() {
+        return Err(CmdError::not_found());
+    }
+    let now = now_iso();
+    let dev = device_id.unwrap_or_default().to_string();
+    let options_json = serde_json::to_string(&input.options).unwrap_or_else(|_| "[]".into());
+    let tx = conn.transaction()?;
+    // key/type/entity are immutable (stored values keep their meaning).
+    tx.execute(
+        "UPDATE custom_field SET label=?2, label_hi=?3, label_te=?4, options_json=?5, required=?6, updated_at=?7, updated_by_staff=?8, updated_by_device=?9, version=version+1 WHERE id=?1",
+        params![id, input.label, input.label_hi, input.label_te, options_json, input.required as i64, now, actor_s.id, dev],
+    )?;
+    crate::security::audit::append(&tx, &AuditEntry {
+        at: now.clone(), staff_id: Some(actor_s.id.clone()), action: "update_custom_field".into(),
+        table: Some("custom_field".into()), record_id: Some(id.to_string()),
+        after_json: Some(serde_json::json!({ "label": input.label }).to_string()),
+        ..Default::default()
+    })?;
+    crate::write::append_op(&tx, device_mode, &Op {
+        op_id: new_id("op"), hlc: now.clone(), device_id: dev.clone(), staff_id: actor_s.id.clone(),
+        audience: "admin".into(), table: "custom_field".into(), record_id: id.to_string(), kind: "update".into(),
+        payload: "{}".into(), base_version: None, server_epoch: 1,
+    })?;
+    tx.commit()?;
+    conn.query_row(&format!("{CF_SELECT} WHERE id=?1"), params![id], map_custom_field).map_err(Into::into)
+}
+
+/// Activate/deactivate a custom field (never hard-deleted — stored values stay).
+pub fn set_custom_field_active_logic(
+    conn: &mut Connection,
+    actor_s: &SessionStaff,
+    device_id: Option<&str>,
+    device_mode: DeviceMode,
+    id: &str,
+    active: bool,
+) -> CmdResult<CustomFieldDto> {
+    let actor = actor_from(conn, actor_s)?;
+    require_allow(&actor, Action::Settings, &Target { kind: TargetKind::School, ..Default::default() })?;
+    if conn.query_row("SELECT 1 FROM custom_field WHERE id=?1", params![id], |_| Ok(())).optional()?.is_none() {
+        return Err(CmdError::not_found());
+    }
+    let now = now_iso();
+    let dev = device_id.unwrap_or_default().to_string();
+    let tx = conn.transaction()?;
+    tx.execute(
+        "UPDATE custom_field SET active=?2, updated_at=?3, updated_by_staff=?4, updated_by_device=?5, version=version+1 WHERE id=?1",
+        params![id, active as i64, now, actor_s.id, dev],
+    )?;
+    crate::security::audit::append(&tx, &AuditEntry {
+        at: now.clone(), staff_id: Some(actor_s.id.clone()), action: "set_custom_field_active".into(),
+        table: Some("custom_field".into()), record_id: Some(id.to_string()),
+        after_json: Some(serde_json::json!({ "active": active }).to_string()),
+        ..Default::default()
+    })?;
+    crate::write::append_op(&tx, device_mode, &Op {
+        op_id: new_id("op"), hlc: now.clone(), device_id: dev.clone(), staff_id: actor_s.id.clone(),
+        audience: "admin".into(), table: "custom_field".into(), record_id: id.to_string(), kind: "update".into(),
+        payload: "{}".into(), base_version: None, server_epoch: 1,
+    })?;
+    tx.commit()?;
+    conn.query_row(&format!("{CF_SELECT} WHERE id=?1"), params![id], map_custom_field).map_err(Into::into)
+}
+
+/// Active fields for an entity, each with the record's current value (profile form).
+pub fn get_custom_values_logic(conn: &mut Connection, entity: &str, entity_id: &str) -> CmdResult<Vec<CustomFieldValueDto>> {
+    let fields = list_custom_fields_logic(conn, entity, false)?;
+    let mut out = Vec::with_capacity(fields.len());
+    for field in fields {
+        let value: Option<String> = conn
+            .query_row("SELECT value FROM custom_value WHERE entity_id=?1 AND field_id=?2", params![entity_id, field.id], |r| r.get(0))
+            .optional()?
+            .flatten();
+        out.push(CustomFieldValueDto { field, value });
+    }
+    Ok(out)
+}
+
+/// Set custom values on a record (Principal direct; student → EditStudentDetails,
+/// staff → ManageStaff). Each value validated against its field type; audited; synced.
+pub fn set_custom_values_logic(
+    conn: &mut Connection,
+    actor_s: &SessionStaff,
+    device_id: Option<&str>,
+    device_mode: DeviceMode,
+    entity: &str,
+    entity_id: &str,
+    values: &[CustomValueSet],
+) -> CmdResult<Vec<CustomFieldValueDto>> {
+    let actor = actor_from(conn, actor_s)?;
+    let ent = cf_entity(entity)?;
+    let (action, target) = match ent {
+        Entity::Student => (Action::EditStudentDetails, Target::of(TargetKind::Student)),
+        Entity::Staff => (Action::ManageStaff, Target { kind: TargetKind::School, ..Default::default() }),
+    };
+    require_allow(&actor, action, &target)?;
+    // Validate each value against its field definition first (all-or-nothing).
+    let mut prepared: Vec<(String, String, String, String, bool, Vec<String>)> = Vec::new(); // (field_id, value, type, ..)
+    for v in values {
+        let (ftype_s, options_json, required, fentity): (String, Option<String>, i64, String) = conn
+            .query_row("SELECT type, options_json, required, entity FROM custom_field WHERE id=?1 AND active=1", params![v.field_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
+            .optional()?
+            .ok_or_else(CmdError::not_found)?;
+        if fentity != entity {
+            return Err(CmdError::validation("field_id", "wrong_entity"));
+        }
+        let ftype = cf_type(&ftype_s)?;
+        let options: Vec<String> = options_json.and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
+        cf::validate_value(ftype, &v.value, &options, required != 0)?;
+        prepared.push((v.field_id.clone(), v.value.trim().to_string(), ftype_s, String::new(), required != 0, options));
+    }
+    let now = now_iso();
+    let school_id = single_school_id(conn)?;
+    let sync_state = if device_mode == DeviceMode::Server { "confirmed" } else { "on_device" };
+    let dev = device_id.unwrap_or_default().to_string();
+    let tx = conn.transaction()?;
+    for (field_id, value, _ty, _u, _req, _opts) in &prepared {
+        let cvid = format!("cv-{}-{}", entity_id, field_id);
+        tx.execute(
+            "INSERT INTO custom_value(id,entity_id,field_id,value,school_id,created_at,updated_at,updated_by_staff,updated_by_device,sync_state) \
+             VALUES (?1,?2,?3,?4,?5,?6,?6,?7,?8,?9) \
+             ON CONFLICT(entity_id,field_id) DO UPDATE SET value=excluded.value, updated_at=excluded.updated_at, updated_by_staff=excluded.updated_by_staff, updated_by_device=excluded.updated_by_device, version=version+1",
+            params![cvid, entity_id, field_id, value, school_id, now, actor_s.id, dev, sync_state],
+        )?;
+        crate::write::append_op(&tx, device_mode, &Op {
+            op_id: new_id("op"), hlc: now.clone(), device_id: dev.clone(), staff_id: actor_s.id.clone(),
+            audience: "admin".into(), table: "custom_value".into(), record_id: cvid, kind: "update".into(),
+            payload: "{}".into(), base_version: None, server_epoch: 1,
+        })?;
+    }
+    crate::security::audit::append(&tx, &AuditEntry {
+        at: now.clone(), staff_id: Some(actor_s.id.clone()), action: "set_custom_values".into(),
+        table: Some("custom_value".into()), record_id: Some(entity_id.to_string()),
+        after_json: Some(serde_json::json!({ "entity": entity, "count": prepared.len() }).to_string()),
+        ..Default::default()
+    })?;
+    tx.commit()?;
+    get_custom_values_logic(conn, entity, entity_id)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -4351,6 +4644,58 @@ mod tests {
     fn unknown_request_kind_is_rejected() {
         let mut c = seeded();
         let err = create_request_logic(&mut c, &principal(), &req_input("banana", "stf-priya")).unwrap_err();
+        assert_eq!(err.code, "VALIDATION");
+    }
+
+    // ---- Phase 13: custom fields -------------------------------------------
+    fn cf_input(entity: &str, key: &str, ftype: &str, options: &[&str], required: bool) -> CustomFieldInput {
+        CustomFieldInput {
+            entity: entity.into(), key: key.into(), label: format!("{key} label"),
+            label_hi: None, label_te: None, field_type: ftype.into(),
+            options: options.iter().map(|s| s.to_string()).collect(), required,
+        }
+    }
+
+    #[test]
+    fn create_field_set_and_read_values() {
+        let mut c = seeded();
+        let field = create_custom_field_logic(&mut c, &principal(), None, DeviceMode::Server, &cf_input("student", "blood_group", "choice", &["A+", "B+", "O+"], false)).unwrap();
+        assert_eq!(field.field_type, "choice");
+        assert_eq!(field.options, vec!["A+", "B+", "O+"]);
+        // Set a valid value.
+        let vals = set_custom_values_logic(&mut c, &principal(), None, DeviceMode::Server, "student", "stu-kavya-singh", &[CustomValueSet { field_id: field.id.clone(), value: "B+".into() }]).unwrap();
+        assert_eq!(vals.iter().find(|v| v.field.id == field.id).unwrap().value.as_deref(), Some("B+"));
+        // get_custom_values reflects it.
+        let got = get_custom_values_logic(&mut c, "student", "stu-kavya-singh").unwrap();
+        assert_eq!(got.iter().find(|v| v.field.id == field.id).unwrap().value.as_deref(), Some("B+"));
+    }
+
+    #[test]
+    fn set_value_validates_against_type() {
+        let mut c = seeded();
+        let field = create_custom_field_logic(&mut c, &principal(), None, DeviceMode::Server, &cf_input("student", "sibling_count", "number", &[], false)).unwrap();
+        // Not a number → VALIDATION.
+        let err = set_custom_values_logic(&mut c, &principal(), None, DeviceMode::Server, "student", "stu-kavya-singh", &[CustomValueSet { field_id: field.id.clone(), value: "two".into() }]).unwrap_err();
+        assert_eq!(err.code, "VALIDATION");
+        // A choice field created earlier rejects an out-of-list value.
+        let bg = create_custom_field_logic(&mut c, &principal(), None, DeviceMode::Server, &cf_input("student", "bg", "choice", &["A", "B"], false)).unwrap();
+        assert_eq!(set_custom_values_logic(&mut c, &principal(), None, DeviceMode::Server, "student", "stu-kavya-singh", &[CustomValueSet { field_id: bg.id, value: "Z".into() }]).unwrap_err().code, "VALIDATION");
+    }
+
+    #[test]
+    fn only_principal_defines_custom_fields() {
+        let mut c = seeded();
+        let err = create_custom_field_logic(&mut c, &accountant(), None, DeviceMode::Server, &cf_input("student", "x", "text", &[], false)).unwrap_err();
+        assert_eq!(err.code, "FORBIDDEN");
+        // But any role may read the list (to render forms).
+        assert!(list_custom_fields_logic(&mut c, "student", false).is_ok());
+    }
+
+    #[test]
+    fn duplicate_field_key_rejected() {
+        let mut c = seeded();
+        create_custom_field_logic(&mut c, &principal(), None, DeviceMode::Server, &cf_input("student", "route", "text", &[], false)).unwrap();
+        let err = create_custom_field_logic(&mut c, &principal(), None, DeviceMode::Server, &cf_input("student", "route", "text", &[], false)).unwrap_err();
         assert_eq!(err.code, "VALIDATION");
     }
 
