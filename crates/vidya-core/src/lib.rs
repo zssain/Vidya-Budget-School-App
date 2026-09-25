@@ -18,6 +18,7 @@ pub mod csv;
 pub mod epoch;
 pub mod fees;
 pub mod grades;
+pub mod guardians;
 pub mod hlc;
 pub mod lease;
 pub mod licence;

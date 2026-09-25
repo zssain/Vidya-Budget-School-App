@@ -15,6 +15,7 @@ pub const MIGRATIONS: &[(i64, &str)] = &[
     (6, include_str!("migrations/0006_v2_modules.sql")),
     (7, include_str!("migrations/0007_v2_drive_accounts.sql")),
     (8, include_str!("migrations/0008_v2_calendar.sql")),
+    (9, include_str!("migrations/0009_v2_guardians.sql")),
 ];
 
 // A per-thread frozen clock for deterministic tests. Compiled ONLY in debug
@@ -189,6 +190,59 @@ mod tests {
         assert_eq!(resp.licence_status.as_deref(), Some("active"));
         // Home now asks to connect the school sync account (no sync row yet).
         assert!(crate::drive_account::needs_sync_account(&conn).unwrap());
+    }
+
+    /// P13 Step 2 backfill: existing (v1) students with inline guardian columns
+    /// are migrated into the guardian table, and siblings that share the same
+    /// (mobile, name) map to ONE guardian row (report counts). Runs migrations
+    /// through P13-Step-1 (v8), inserts realistic students, then applies the
+    /// guardian migration (v9) on top.
+    #[test]
+    fn guardian_backfill_dedupes_siblings() {
+        let mut conn = open_in_memory(KEY).unwrap();
+        // Apply everything up to (but not including) the guardian migration.
+        for (v, sql) in MIGRATIONS.iter().filter(|(v, _)| *v <= 8) {
+            let tx = conn.transaction().unwrap();
+            tx.execute_batch(sql).unwrap();
+            tx.execute("INSERT INTO schema_version(version, applied_at) VALUES (?1, 't')", rusqlite::params![v]).unwrap();
+            tx.commit().unwrap();
+        }
+        conn.execute("INSERT INTO school(id,name,backup_salt,created_at,updated_at) VALUES ('sch','S',x'00','t','t')", []).unwrap();
+        // Two siblings share the SAME guardian (mobile + name); a third student has
+        // a different guardian; a fourth has only a name; a fifth has no guardian.
+        let students = [
+            ("s1", "Riya",  Some("Ramesh Kumar"), Some("9876543210")),
+            ("s2", "Rahul", Some("Ramesh Kumar"), Some("9876543210")),
+            ("s3", "Anil",  Some("Suresh Rao"),   Some("9811111111")),
+            ("s4", "Zoya",  Some("Farah Khan"),   None),
+            ("s5", "Om",    None,                 None),
+        ];
+        for (id, name, gname, gmob) in students {
+            conn.execute(
+                "INSERT INTO student(id,name,guardian_name,guardian_mobile,created_at,updated_at) VALUES (?1,?2,?3,?4,'t','t')",
+                rusqlite::params![id, name, gname, gmob],
+            )
+            .unwrap();
+        }
+        // Apply the guardian migration (v9).
+        assert_eq!(run_migrations(&mut conn).unwrap(), MIGRATIONS.last().map(|(v, _)| *v).unwrap());
+
+        // 3 distinct guardians: (Ramesh,9876…) shared by s1+s2, (Suresh,981…), (Farah,none).
+        let guardians: i64 = conn.query_row("SELECT COUNT(*) FROM guardian", [], |r| r.get(0)).unwrap();
+        assert_eq!(guardians, 3, "siblings share one guardian; s5 has none");
+        // s1 and s2 point at the same guardian.
+        let g1: String = conn.query_row("SELECT guardian_id FROM student_guardian WHERE student_id='s1'", [], |r| r.get(0)).unwrap();
+        let g2: String = conn.query_row("SELECT guardian_id FROM student_guardian WHERE student_id='s2'", [], |r| r.get(0)).unwrap();
+        assert_eq!(g1, g2, "same mobile+name → same guardian row");
+        // Each backfilled link is primary.
+        let primary: i64 = conn.query_row("SELECT COUNT(*) FROM student_guardian WHERE is_primary=1", [], |r| r.get(0)).unwrap();
+        assert_eq!(primary, 4, "s1..s4 each get a primary guardian; s5 gets none");
+        // s5 has no guardian link.
+        let s5: i64 = conn.query_row("SELECT COUNT(*) FROM student_guardian WHERE student_id='s5'", [], |r| r.get(0)).unwrap();
+        assert_eq!(s5, 0);
+        // The legacy columns are untouched.
+        let legacy: String = conn.query_row("SELECT guardian_name FROM student WHERE id='s1'", [], |r| r.get(0)).unwrap();
+        assert_eq!(legacy, "Ramesh Kumar");
     }
 
     #[test]

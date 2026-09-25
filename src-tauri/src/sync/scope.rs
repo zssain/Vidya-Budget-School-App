@@ -23,6 +23,28 @@ pub const MARK_TABLES: &[&str] = &["attendance_sheet", "attendance_mark", "marks
 /// Columns of `staff` a non-Principal device may see (names only, no secrets).
 const STAFF_PUBLIC: &[&str] = &["id", "name", "role", "state"];
 
+/// Columns of `guardian` a teacher device may see (name + mobile of their
+/// students; not email, §8.2). Principal + accountant see the full row.
+const GUARDIAN_TEACHER: &[&str] = &["id", "name", "relation", "mobile", "language"];
+
+/// True if `guardian_id` is linked to a student in one of the teacher's classes.
+fn guardian_visible_to_teacher(conn: &Connection, classes: &BTreeSet<String>, guardian_id: &str) -> rusqlite::Result<bool> {
+    if classes.is_empty() {
+        return Ok(false);
+    }
+    let list: Vec<String> = classes.iter().cloned().collect();
+    let ph = list.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+    let sql = format!(
+        "SELECT 1 FROM student_guardian sg JOIN enrollment e ON e.student_id=sg.student_id AND e.to_date IS NULL \
+         WHERE sg.guardian_id=? AND e.class_id IN ({ph}) LIMIT 1"
+    );
+    let mut args: Vec<&dyn rusqlite::ToSql> = vec![&guardian_id];
+    for c in &list {
+        args.push(c);
+    }
+    Ok(conn.query_row(&sql, args.as_slice(), |_| Ok(())).optional()?.is_some())
+}
+
 /// The class ids a teacher actor is scoped to (class-teacher-of ∪ taught classes).
 fn teacher_class_ids(conn: &Connection, actor: &Actor) -> rusqlite::Result<BTreeSet<String>> {
     let mut ids: BTreeSet<String> = actor.class_teacher_of.iter().cloned().collect();
@@ -155,6 +177,25 @@ pub fn visible_row(conn: &Connection, actor: &Actor, table: &str, id: &str) -> r
                     let by: Option<String> = conn.query_row("SELECT requested_by FROM request WHERE id=?1", [id], |r| r.get(0)).optional()?;
                     Ok(if by.as_deref() == Some(actor.staff_id.as_str()) { mk(row, None) } else { None })
                 }
+                "guardian" => {
+                    // Guardian of one of the teacher's students → name+mobile only.
+                    if guardian_visible_to_teacher(conn, &classes, id)? {
+                        let f = |r: &mut serde_json::Value| { if let Some(o) = r.as_object_mut() { o.retain(|k, _| GUARDIAN_TEACHER.contains(&k.as_str())); } };
+                        Ok(mk(row, Some(&f)))
+                    } else {
+                        Ok(None)
+                    }
+                }
+                "student_guardian" => {
+                    // Link visible iff its student is in one of the teacher's classes.
+                    let cid: Option<String> = conn
+                        .query_row(
+                            "SELECT e.class_id FROM student_guardian sg JOIN enrollment e ON e.student_id=sg.student_id AND e.to_date IS NULL WHERE sg.id=?1 LIMIT 1",
+                            [id], |r| r.get(0),
+                        )
+                        .optional()?;
+                    Ok(if cid.map(|c| classes.contains(&c)).unwrap_or(false) { mk(row, None) } else { None })
+                }
                 _ => Ok(None),
             }
         }
@@ -200,7 +241,8 @@ pub fn snapshot(conn: &Connection, actor: &Actor) -> rusqlite::Result<Vec<Change
 
     match actor.role {
         Role::Principal => {
-            for t in ["class", "class_subject", "student", "enrollment", "attendance_sheet", "attendance_mark",
+            for t in ["class", "class_subject", "student", "enrollment", "guardian", "student_guardian",
+                      "attendance_sheet", "attendance_mark",
                       "fee_head", "fee_due", "payment", "payment_allocation", "reversal", "request",
                       "marks_sheet", "mark_entry", "exam", "exam_subject"] {
                 for id in ids_of(conn, &format!("SELECT id FROM {t}"), &[])? {
@@ -209,7 +251,7 @@ pub fn snapshot(conn: &Connection, actor: &Actor) -> rusqlite::Result<Vec<Change
             }
         }
         Role::Accountant => {
-            for t in ["class", "class_subject", "student", "enrollment", "fee_head", "fee_due", "payment", "payment_allocation", "reversal"] {
+            for t in ["class", "class_subject", "student", "enrollment", "guardian", "student_guardian", "fee_head", "fee_due", "payment", "payment_allocation", "reversal"] {
                 for id in ids_of(conn, &format!("SELECT id FROM {t}"), &[])? {
                     push(conn, t, &id, None)?;
                 }
@@ -252,6 +294,26 @@ pub fn snapshot(conn: &Connection, actor: &Actor) -> rusqlite::Result<Vec<Change
                 push(conn, "student", &sid, f)?;
             }
             for id in ids_of(conn, &format!("SELECT id FROM enrollment WHERE class_id IN ({ph}) AND to_date IS NULL"), cargs.as_slice())? { push(conn, "enrollment", &id, None)?; }
+            // Guardians of the teacher's students: name+mobile only. Links, then the
+            // guardian rows filtered to GUARDIAN_TEACHER columns.
+            let guardian_filter = |row: &mut serde_json::Value| {
+                if let Some(obj) = row.as_object_mut() { obj.retain(|k, _| GUARDIAN_TEACHER.contains(&k.as_str())); }
+            };
+            let sg_rows = {
+                let mut stmt = conn.prepare(&format!(
+                    "SELECT DISTINCT sg.id, sg.guardian_id FROM student_guardian sg \
+                     JOIN enrollment e ON e.student_id=sg.student_id AND e.to_date IS NULL WHERE e.class_id IN ({ph})"
+                ))?;
+                let rows = stmt.query_map(cargs.as_slice(), |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+                rows.collect::<rusqlite::Result<Vec<(String, String)>>>()?
+            };
+            let mut seen_g: BTreeSet<String> = BTreeSet::new();
+            for (sg_id, g_id) in sg_rows {
+                push(conn, "student_guardian", &sg_id, None)?;
+                if seen_g.insert(g_id.clone()) {
+                    push(conn, "guardian", &g_id, Some(&guardian_filter))?;
+                }
+            }
             for id in ids_of(conn, &format!("SELECT id FROM attendance_sheet WHERE class_id IN ({ph})"), cargs.as_slice())? { push(conn, "attendance_sheet", &id, None)?; }
             // Marks for those sheets.
             let sheet_ids = ids_of(conn, &format!("SELECT id FROM attendance_sheet WHERE class_id IN ({ph})"), cargs.as_slice())?;

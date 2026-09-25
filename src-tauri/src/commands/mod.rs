@@ -103,6 +103,10 @@ pub const COMMANDS: &[&str] = &[
     "add_calendar_event",
     "update_calendar_event",
     "delete_calendar_event",
+    "add_guardian",
+    "update_guardian",
+    "set_primary_guardian",
+    "remove_guardian",
     "verify_audit_chain",
     "backup_status",
     "backup_now",
@@ -474,6 +478,44 @@ pub fn delete_calendar_event(state: State<RtCtx>, id: String) -> CmdResult<()> {
     let device_id = state.device_id.lock().map_err(|_| crate::error::CmdError::internal("lock"))?.clone();
     let mode = state.device_mode;
     state.with_db(|conn| delete_calendar_event_logic(conn, &actor, device_id.as_deref(), mode, &id))
+}
+
+// -------------------------------------------------------------- guardians -----
+
+fn cur_device(state: &State<RtCtx>) -> CmdResult<Option<String>> {
+    Ok(state.device_id.lock().map_err(|_| crate::error::CmdError::internal("lock"))?.clone())
+}
+
+#[tauri::command]
+pub fn add_guardian(state: State<RtCtx>, student_id: String, input: GuardianEditInput) -> CmdResult<Vec<crate::guardians::GuardianDto>> {
+    let actor = state.require_session()?;
+    let device_id = cur_device(&state)?;
+    let mode = state.device_mode;
+    state.with_db(|conn| add_guardian_logic(conn, &actor, device_id.as_deref(), mode, &student_id, &input))
+}
+
+#[tauri::command]
+pub fn update_guardian(state: State<RtCtx>, student_id: String, guardian_id: String, input: GuardianEditInput) -> CmdResult<Vec<crate::guardians::GuardianDto>> {
+    let actor = state.require_session()?;
+    let device_id = cur_device(&state)?;
+    let mode = state.device_mode;
+    state.with_db(|conn| update_guardian_logic(conn, &actor, device_id.as_deref(), mode, &student_id, &guardian_id, &input))
+}
+
+#[tauri::command]
+pub fn set_primary_guardian(state: State<RtCtx>, student_id: String, guardian_id: String) -> CmdResult<Vec<crate::guardians::GuardianDto>> {
+    let actor = state.require_session()?;
+    let device_id = cur_device(&state)?;
+    let mode = state.device_mode;
+    state.with_db(|conn| set_primary_guardian_logic(conn, &actor, device_id.as_deref(), mode, &student_id, &guardian_id))
+}
+
+#[tauri::command]
+pub fn remove_guardian(state: State<RtCtx>, student_id: String, guardian_id: String) -> CmdResult<Vec<crate::guardians::GuardianDto>> {
+    let actor = state.require_session()?;
+    let device_id = cur_device(&state)?;
+    let mode = state.device_mode;
+    state.with_db(|conn| remove_guardian_logic(conn, &actor, device_id.as_deref(), mode, &student_id, &guardian_id))
 }
 
 // ------------------------------------------------------------- academics ------

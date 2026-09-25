@@ -710,6 +710,7 @@ pub fn create_student_logic(
 
     let confirmed = device_mode == DeviceMode::Server;
     let sync_state = if confirmed { "confirmed" } else { "on_device" };
+    let school_id = single_school_id(conn)?;
     let ctx = WriteCtx { mode: device_mode };
     let sid2 = sid.clone();
     let dev = device_id.map(str::to_string);
@@ -719,6 +720,13 @@ pub fn create_student_logic(
              VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,'active',?14,?14,?15)",
             params![sid2, admission_no, provisional, name, input.dob, input.gender, input.guardian_name, input.guardian_mobile,
                 input.address, transport as i64, input.category, rte as i64, aadhaar, now, sync_state],
+        )?;
+        // v2 (P13): also create the primary guardian row (find-or-create by
+        // mobile+name, so siblings share one). The legacy student.guardian_*
+        // columns above are kept in sync for read-only compatibility.
+        crate::guardians::ensure_primary_guardian(
+            tx, &sid2, input.guardian_name.as_deref(), input.guardian_mobile.as_deref(),
+            school_id.as_deref(), &now, sync_state,
         )?;
         if let Some(sess) = &session_id {
             tx.execute(
@@ -866,6 +874,9 @@ pub struct StudentProfileDto {
     pub version: i64,
     pub enrollment_history: Vec<EnrollmentHistoryDto>,
     pub attendance: AttendanceSummaryDto,
+    /// v2 (P13): guardians from the `guardian` table, primary first. The legacy
+    /// `guardian_name`/`guardian_mobile` above stay for read-only compatibility.
+    pub guardians: Vec<crate::guardians::GuardianDto>,
 }
 
 /// The current term of the current session (the one containing `today`), else
@@ -924,11 +935,13 @@ pub fn get_student_profile_logic(conn: &mut Connection, today: &str, id: &str) -
                     roll_no: r.get(19)?,
                     enrollment_history: Vec::new(),
                     attendance: AttendanceSummaryDto { present: 0, absent: 0, leave: 0, marked: 0, pct_tenths: 0, term_label: None, from_date: None, to_date: None },
+                    guardians: Vec::new(),
                 })
             },
         )
         .optional()?
         .ok_or_else(CmdError::not_found)?;
+    let guardians = crate::guardians::list_for_student(conn, id)?;
 
     let mut hstmt = conn.prepare(
         "SELECT c.display, ses.label, e.roll_no, e.from_date, e.to_date FROM enrollment e \
@@ -973,6 +986,7 @@ pub fn get_student_profile_logic(conn: &mut Connection, today: &str, id: &str) -
     Ok(StudentProfileDto {
         enrollment_history: history,
         attendance: AttendanceSummaryDto { present, absent, leave, marked: present + absent + leave, pct_tenths: pct, term_label, from_date, to_date },
+        guardians,
         ..profile
     })
 }
@@ -1401,6 +1415,7 @@ pub fn import_students_commit_logic(
     let mut skipped = Vec::new();
     let mut imported = 0i64;
     let now = now_iso();
+    let school_id = single_school_id(conn)?;
 
     let tx = conn.transaction()?;
     for p in &parsed {
@@ -1422,6 +1437,10 @@ pub fn import_students_commit_logic(
             "INSERT INTO student(id,admission_no,provisional_no,name,dob,gender,guardian_name,guardian_mobile,transport,category,rte,aadhaar_status,status,created_at,updated_at,sync_state) \
              VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,'active',?13,?13,?14)",
             params![sid, admission_no, provisional, p.name, p.dob, p.gender, p.guardian_name, p.guardian_mobile, p.transport as i64, p.category, p.rte as i64, p.aadhaar, now, sync_state],
+        )?;
+        crate::guardians::ensure_primary_guardian(
+            &tx, &sid, p.guardian_name.as_deref(), p.guardian_mobile.as_deref(),
+            school_id.as_deref(), &now, sync_state,
         )?;
         if let Some(sess) = &session_id {
             tx.execute(
@@ -3859,6 +3878,232 @@ pub fn delete_calendar_event_logic(
     Ok(())
 }
 
+// ============================================================ guardians ======
+
+/// Editable guardian fields (student profile / admission form).
+#[derive(Debug, Deserialize)]
+pub struct GuardianEditInput {
+    pub name: String,
+    #[serde(default)]
+    pub relation: Option<String>,
+    #[serde(default)]
+    pub mobile: Option<String>,
+    #[serde(default)]
+    pub email: Option<String>,
+    #[serde(default = "default_guardian_lang")]
+    pub language: String,
+    #[serde(default = "default_true")]
+    pub whatsapp_ok: bool,
+}
+fn default_guardian_lang() -> String { "en".to_string() }
+fn default_true() -> bool { true }
+
+fn validate_guardian_input(input: &GuardianEditInput) -> CmdResult<String> {
+    let gi = vidya_core::guardians::GuardianInput {
+        name: &input.name,
+        relation: input.relation.as_deref(),
+        mobile: input.mobile.as_deref(),
+        email: input.email.as_deref(),
+        language: &input.language,
+        whatsapp_ok: input.whatsapp_ok,
+    };
+    Ok(vidya_core::guardians::validate_guardian(&gi)?)
+}
+
+fn finance_op(now: &str, dev: &str, staff: &str, table: &str, id: &str, kind: &str) -> Op {
+    Op {
+        op_id: new_id("op"),
+        hlc: now.to_string(),
+        device_id: dev.to_string(),
+        staff_id: staff.to_string(),
+        audience: "finance".into(),
+        table: table.into(),
+        record_id: id.into(),
+        kind: kind.into(),
+        payload: "{}".into(),
+        base_version: None,
+        server_epoch: 1,
+    }
+}
+
+/// Add a guardian to a student (up to 2; the first becomes primary). Principal
+/// edits directly (EditStudentDetails); accountant edits would go through a
+/// student-details request (not wired for guardians yet). Audited; synced (finance).
+pub fn add_guardian_logic(
+    conn: &mut Connection,
+    actor_s: &SessionStaff,
+    device_id: Option<&str>,
+    device_mode: DeviceMode,
+    student_id: &str,
+    input: &GuardianEditInput,
+) -> CmdResult<Vec<crate::guardians::GuardianDto>> {
+    let actor = actor_from(conn, actor_s)?;
+    require_allow(&actor, Action::EditStudentDetails, &Target::of(TargetKind::Student))?;
+    let name = validate_guardian_input(input)?;
+    if conn.query_row("SELECT 1 FROM student WHERE id=?1", params![student_id], |_| Ok(())).optional()?.is_none() {
+        return Err(CmdError::not_found());
+    }
+    let count = crate::guardians::count_for_student(conn, student_id)?;
+    if count as usize >= vidya_core::guardians::MAX_GUARDIANS_PER_STUDENT {
+        return Err(CmdError::validation("guardians", "max_2"));
+    }
+    let is_primary = count == 0;
+    let now = now_iso();
+    let school_id = single_school_id(conn)?;
+    let sync_state = if device_mode == DeviceMode::Server { "confirmed" } else { "on_device" };
+    let dev = device_id.unwrap_or_default().to_string();
+    let gid = new_id("grd");
+    let sgid = new_id("sg");
+    let tx = conn.transaction()?;
+    tx.execute(
+        "INSERT INTO guardian(id,name,relation,mobile,email,language,whatsapp_ok,school_id,created_at,updated_at,updated_by_staff,updated_by_device,sync_state) \
+         VALUES (?1,?2,?3,NULLIF(?4,''),NULLIF(?5,''),?6,?7,?8,?9,?9,?10,?11,?12)",
+        params![gid, name, input.relation, input.mobile.as_deref().unwrap_or(""), input.email.as_deref().unwrap_or(""), input.language, input.whatsapp_ok as i64, school_id, now, actor_s.id, dev, sync_state],
+    )?;
+    tx.execute(
+        "INSERT INTO student_guardian(id,student_id,guardian_id,is_primary,school_id,created_at,updated_at,updated_by_staff,updated_by_device,sync_state) \
+         VALUES (?1,?2,?3,?4,?5,?6,?6,?7,?8,?9)",
+        params![sgid, student_id, gid, is_primary as i64, school_id, now, actor_s.id, dev, sync_state],
+    )?;
+    crate::security::audit::append(&tx, &AuditEntry {
+        at: now.clone(), staff_id: Some(actor_s.id.clone()), action: "add_guardian".into(),
+        table: Some("guardian".into()), record_id: Some(gid.clone()),
+        after_json: Some(serde_json::json!({ "student_id": student_id, "name": name, "is_primary": is_primary }).to_string()),
+        ..Default::default()
+    })?;
+    crate::write::append_op(&tx, device_mode, &finance_op(&now, &dev, &actor_s.id, "guardian", &gid, "insert"))?;
+    crate::write::append_op(&tx, device_mode, &finance_op(&now, &dev, &actor_s.id, "student_guardian", &sgid, "insert"))?;
+    tx.commit()?;
+    crate::guardians::list_for_student(conn, student_id).map_err(Into::into)
+}
+
+/// Edit a guardian's fields. Principal direct; audited; synced (finance).
+pub fn update_guardian_logic(
+    conn: &mut Connection,
+    actor_s: &SessionStaff,
+    device_id: Option<&str>,
+    device_mode: DeviceMode,
+    student_id: &str,
+    guardian_id: &str,
+    input: &GuardianEditInput,
+) -> CmdResult<Vec<crate::guardians::GuardianDto>> {
+    let actor = actor_from(conn, actor_s)?;
+    require_allow(&actor, Action::EditStudentDetails, &Target::of(TargetKind::Student))?;
+    let name = validate_guardian_input(input)?;
+    if conn.query_row("SELECT 1 FROM guardian WHERE id=?1", params![guardian_id], |_| Ok(())).optional()?.is_none() {
+        return Err(CmdError::not_found());
+    }
+    let now = now_iso();
+    let sync_state = if device_mode == DeviceMode::Server { "confirmed" } else { "on_device" };
+    let dev = device_id.unwrap_or_default().to_string();
+    let tx = conn.transaction()?;
+    tx.execute(
+        "UPDATE guardian SET name=?2, relation=?3, mobile=NULLIF(?4,''), email=NULLIF(?5,''), language=?6, whatsapp_ok=?7, \
+           updated_at=?8, updated_by_staff=?9, updated_by_device=?10, sync_state=?11, version=version+1 WHERE id=?1",
+        params![guardian_id, name, input.relation, input.mobile.as_deref().unwrap_or(""), input.email.as_deref().unwrap_or(""), input.language, input.whatsapp_ok as i64, now, actor_s.id, dev, sync_state],
+    )?;
+    crate::security::audit::append(&tx, &AuditEntry {
+        at: now.clone(), staff_id: Some(actor_s.id.clone()), action: "update_guardian".into(),
+        table: Some("guardian".into()), record_id: Some(guardian_id.to_string()),
+        after_json: Some(serde_json::json!({ "name": name }).to_string()),
+        ..Default::default()
+    })?;
+    crate::write::append_op(&tx, device_mode, &finance_op(&now, &dev, &actor_s.id, "guardian", guardian_id, "update"))?;
+    tx.commit()?;
+    crate::guardians::list_for_student(conn, student_id).map_err(Into::into)
+}
+
+/// Make `guardian_id` the student's primary guardian (clears the others).
+pub fn set_primary_guardian_logic(
+    conn: &mut Connection,
+    actor_s: &SessionStaff,
+    device_id: Option<&str>,
+    device_mode: DeviceMode,
+    student_id: &str,
+    guardian_id: &str,
+) -> CmdResult<Vec<crate::guardians::GuardianDto>> {
+    let actor = actor_from(conn, actor_s)?;
+    require_allow(&actor, Action::EditStudentDetails, &Target::of(TargetKind::Student))?;
+    let now = now_iso();
+    let dev = device_id.unwrap_or_default().to_string();
+    let links: Vec<(String, String)> = {
+        let mut stmt = conn.prepare("SELECT id, guardian_id FROM student_guardian WHERE student_id=?1")?;
+        let rows = stmt.query_map(params![student_id], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+        rows.collect::<rusqlite::Result<_>>()?
+    };
+    if !links.iter().any(|(_, gid)| gid == guardian_id) {
+        return Err(CmdError::not_found());
+    }
+    let tx = conn.transaction()?;
+    for (sgid, gid) in &links {
+        let primary = gid == guardian_id;
+        tx.execute(
+            "UPDATE student_guardian SET is_primary=?2, updated_at=?3, updated_by_staff=?4, updated_by_device=?5, version=version+1 WHERE id=?1",
+            params![sgid, primary as i64, now, actor_s.id, dev],
+        )?;
+        crate::write::append_op(&tx, device_mode, &finance_op(&now, &dev, &actor_s.id, "student_guardian", sgid, "update"))?;
+    }
+    crate::security::audit::append(&tx, &AuditEntry {
+        at: now.clone(), staff_id: Some(actor_s.id.clone()), action: "set_primary_guardian".into(),
+        table: Some("student_guardian".into()), record_id: Some(student_id.to_string()),
+        after_json: Some(serde_json::json!({ "student_id": student_id, "primary_guardian": guardian_id }).to_string()),
+        ..Default::default()
+    })?;
+    tx.commit()?;
+    crate::guardians::list_for_student(conn, student_id).map_err(Into::into)
+}
+
+/// Remove a guardian link from a student. If it was the primary and another link
+/// remains, the first remaining becomes primary. A guardian with no links left is
+/// removed too. Principal direct; audited; synced (finance).
+pub fn remove_guardian_logic(
+    conn: &mut Connection,
+    actor_s: &SessionStaff,
+    device_id: Option<&str>,
+    device_mode: DeviceMode,
+    student_id: &str,
+    guardian_id: &str,
+) -> CmdResult<Vec<crate::guardians::GuardianDto>> {
+    let actor = actor_from(conn, actor_s)?;
+    require_allow(&actor, Action::EditStudentDetails, &Target::of(TargetKind::Student))?;
+    let link: Option<(String, i64)> = conn
+        .query_row("SELECT id, is_primary FROM student_guardian WHERE student_id=?1 AND guardian_id=?2", params![student_id, guardian_id], |r| Ok((r.get(0)?, r.get(1)?)))
+        .optional()?;
+    let (sgid, was_primary) = match link {
+        Some(x) => x,
+        None => return Err(CmdError::not_found()),
+    };
+    let now = now_iso();
+    let dev = device_id.unwrap_or_default().to_string();
+    let tx = conn.transaction()?;
+    tx.execute("DELETE FROM student_guardian WHERE id=?1", params![sgid])?;
+    crate::write::append_op(&tx, device_mode, &finance_op(&now, &dev, &actor_s.id, "student_guardian", &sgid, "delete"))?;
+    // Promote a remaining link to primary if we removed the primary.
+    if was_primary != 0 {
+        let next: Option<String> = tx
+            .query_row("SELECT id FROM student_guardian WHERE student_id=?1 ORDER BY created_at LIMIT 1", params![student_id], |r| r.get(0))
+            .optional()?;
+        if let Some(next_sg) = next {
+            tx.execute("UPDATE student_guardian SET is_primary=1, updated_at=?2, version=version+1 WHERE id=?1", params![next_sg, now])?;
+            crate::write::append_op(&tx, device_mode, &finance_op(&now, &dev, &actor_s.id, "student_guardian", &next_sg, "update"))?;
+        }
+    }
+    // Delete an orphan guardian (no links anywhere).
+    let orphan = tx.query_row("SELECT COUNT(*) FROM student_guardian WHERE guardian_id=?1", params![guardian_id], |r| r.get::<_, i64>(0))? == 0;
+    if orphan {
+        tx.execute("DELETE FROM guardian WHERE id=?1", params![guardian_id])?;
+        crate::write::append_op(&tx, device_mode, &finance_op(&now, &dev, &actor_s.id, "guardian", guardian_id, "delete"))?;
+    }
+    crate::security::audit::append(&tx, &AuditEntry {
+        at: now.clone(), staff_id: Some(actor_s.id.clone()), action: "remove_guardian".into(),
+        table: Some("guardian".into()), record_id: Some(guardian_id.to_string()),
+        before_json: Some(serde_json::json!({ "student_id": student_id }).to_string()),
+        ..Default::default()
+    })?;
+    tx.commit()?;
+    crate::guardians::list_for_student(conn, student_id).map_err(Into::into)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3963,6 +4208,65 @@ mod tests {
             kind: "party".into(), title: "x".into(), title_hi: None, title_te: None, is_non_working: false,
         };
         assert_eq!(add_calendar_event_logic(&mut c, &principal(), None, DeviceMode::Server, &bad_kind).unwrap_err().code, "VALIDATION");
+    }
+
+    // ---- Phase 13: guardians -----------------------------------------------
+    fn ge(name: &str, mobile: Option<&str>) -> GuardianEditInput {
+        GuardianEditInput { name: name.into(), relation: Some("Father".into()), mobile: mobile.map(|s| s.into()), email: None, language: "en".into(), whatsapp_ok: true }
+    }
+
+    fn new_student(c: &mut Connection, name: &str, gname: Option<&str>, gmob: Option<&str>) -> String {
+        let input = NewStudentInput {
+            name: name.into(), class_id: "cls-5a".into(), roll_no: None,
+            guardian_name: gname.map(|s| s.into()), guardian_mobile: gmob.map(|s| s.into()),
+            dob: None, gender: None, address: None, transport: None, rte: None, category: None, aadhaar_status: None,
+        };
+        create_student_logic(c, &principal(), None, DeviceMode::Server, "2026-09-23", &input).unwrap().id
+    }
+
+    #[test]
+    fn create_student_makes_a_primary_guardian_and_siblings_share_it() {
+        let mut c = seeded();
+        let s1 = new_student(&mut c, "Riya Verma", Some("Ramesh Verma"), Some("9876543210"));
+        let prof = get_student_profile_logic(&mut c, "2026-09-23", &s1).unwrap();
+        assert_eq!(prof.guardians.len(), 1);
+        assert!(prof.guardians[0].is_primary);
+        assert_eq!(prof.guardians[0].name, "Ramesh Verma");
+        // A sibling with the same guardian (mobile+name) shares the row.
+        let s2 = new_student(&mut c, "Rohit Verma", Some("Ramesh Verma"), Some("9876543210"));
+        let g1 = &get_student_profile_logic(&mut c, "2026-09-23", &s1).unwrap().guardians[0].id;
+        let g2 = &get_student_profile_logic(&mut c, "2026-09-23", &s2).unwrap().guardians[0].id;
+        assert_eq!(g1, g2);
+    }
+
+    #[test]
+    fn add_second_guardian_set_primary_and_remove() {
+        let mut c = seeded();
+        let s = new_student(&mut c, "Riya Verma", Some("Ramesh Verma"), Some("9876543210"));
+        // Add a second guardian (mother).
+        let list = add_guardian_logic(&mut c, &principal(), None, DeviceMode::Server, &s, &ge("Sunita Verma", Some("9811111111"))).unwrap();
+        assert_eq!(list.len(), 2);
+        assert_eq!(list.iter().filter(|g| g.is_primary).count(), 1, "still exactly one primary");
+        let mother = list.iter().find(|g| g.name == "Sunita Verma").unwrap().id.clone();
+        // A third is rejected (max 2).
+        assert_eq!(add_guardian_logic(&mut c, &principal(), None, DeviceMode::Server, &s, &ge("X", None)).unwrap_err().code, "VALIDATION");
+        // Make the mother primary.
+        let list = set_primary_guardian_logic(&mut c, &principal(), None, DeviceMode::Server, &s, &mother).unwrap();
+        assert!(list.iter().find(|g| g.id == mother).unwrap().is_primary);
+        assert_eq!(list.iter().filter(|g| g.is_primary).count(), 1);
+        // Remove the (now non-primary) father → mother auto-stays primary; 1 left.
+        let father = list.iter().find(|g| g.name == "Ramesh Verma").unwrap().id.clone();
+        let list = remove_guardian_logic(&mut c, &principal(), None, DeviceMode::Server, &s, &father).unwrap();
+        assert_eq!(list.len(), 1);
+        assert!(list[0].is_primary);
+    }
+
+    #[test]
+    fn teacher_cannot_edit_guardians() {
+        let mut c = seeded();
+        let s = new_student(&mut c, "Riya Verma", Some("Ramesh Verma"), Some("9876543210"));
+        let teacher = SessionStaff { id: "stf-meena".into(), name: "Meena Iyer".into(), role: "teacher".into() };
+        assert_eq!(add_guardian_logic(&mut c, &teacher, None, DeviceMode::Server, &s, &ge("X", None)).unwrap_err().code, "FORBIDDEN");
     }
 
     #[test]

@@ -97,7 +97,11 @@ pub fn audience_for(table: &str, class_id: Option<&str>) -> CoreResult<Audience>
         // won't see a *new* admission via Drive until the server returns (it
         // reconciles on import). The alternative (`class:<id>`) would let teachers
         // see roster changes but leave accountants unable to seal — worse.
-        "student" | "enrollment" => Ok(Audience::Finance),
+        // guardian/student_guardian belong to the student-roster domain (P13):
+        // written at admission by accountants + the Principal (both hold finance),
+        // read by teachers via the server snapshot — same pusher-consistent choice
+        // as student/enrollment.
+        "student" | "enrollment" | "guardian" | "student_guardian" => Ok(Audience::Finance),
         // ---- principal-only administrative data ----------------------------
         // Calendar (P13): Principal-edited school-wide config; every role reads it
         // via the server snapshot (like the student roster). Pusher = Principal →
@@ -187,7 +191,7 @@ mod tests {
     #[test]
     fn student_roster_maps_to_finance() {
         // [OWNER default, P06]: pusher-consistent — accountants + Principal hold finance.
-        for t in ["student", "enrollment"] {
+        for t in ["student", "enrollment", "guardian", "student_guardian"] {
             assert_eq!(audience_for(t, None).unwrap(), Audience::Finance, "{t}");
         }
     }

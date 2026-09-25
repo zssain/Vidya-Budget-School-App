@@ -12,6 +12,7 @@ pub mod dash;
 pub mod db;
 pub mod drive_account;
 pub mod error;
+pub mod guardians;
 pub mod kv;
 pub mod licence;
 pub mod modules;
@@ -178,6 +179,7 @@ fn invoke_handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'stat
         decide_request, dashboard_principal, dashboard_accountant, dashboard_teacher, set_accent,
         list_modules, set_module,
         get_calendar, set_weekly_offs, add_calendar_event, update_calendar_event, delete_calendar_event,
+        add_guardian, update_guardian, set_primary_guardian, remove_guardian,
         verify_audit_chain, backup_status, backup_now,
         list_staff_access, add_staff, suspend_staff, remove_staff, create_invite, revoke_invite,
         set_class_teacher, assign_subject_teacher, effective_access, list_devices, revoke_device,
@@ -204,6 +206,7 @@ fn invoke_handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'stat
         decide_request, dashboard_principal, dashboard_accountant, dashboard_teacher, set_accent,
         list_modules, set_module,
         get_calendar, set_weekly_offs, add_calendar_event, update_calendar_event, delete_calendar_event,
+        add_guardian, update_guardian, set_primary_guardian, remove_guardian,
         verify_audit_chain, backup_status, backup_now,
         list_staff_access, add_staff, suspend_staff, remove_staff, create_invite, revoke_invite,
         set_class_teacher, assign_subject_teacher, effective_access, list_devices, revoke_device,

@@ -137,6 +137,8 @@ export interface StudentProfileDto {
   version: number
   enrollment_history: EnrollmentHistoryDto[]
   attendance: AttendanceSummaryDto
+  /** v2 (P13): guardians from the guardian table, primary first. */
+  guardians: GuardianDto[]
 }
 
 export interface ImportRowError {
@@ -749,6 +751,34 @@ export const add_calendar_event = (input: CalendarEventInput) =>
 export const update_calendar_event = (id: string, input: CalendarEventInput) =>
   invoke<CalendarEventDto>('update_calendar_event', { id, input })
 export const delete_calendar_event = (id: string) => invoke<void>('delete_calendar_event', { id })
+
+// ---- Phase 13: guardians (separate table; up to 2 per student, one primary) --
+export interface GuardianDto {
+  id: string
+  name: string
+  relation: string | null
+  mobile: string | null
+  email: string | null
+  language: string
+  whatsapp_ok: boolean
+  is_primary: boolean
+}
+export interface GuardianEditInput {
+  name: string
+  relation?: string | null
+  mobile?: string | null
+  email?: string | null
+  language?: string
+  whatsapp_ok?: boolean
+}
+export const add_guardian = (studentId: string, input: GuardianEditInput) =>
+  invoke<GuardianDto[]>('add_guardian', { studentId, input })
+export const update_guardian = (studentId: string, guardianId: string, input: GuardianEditInput) =>
+  invoke<GuardianDto[]>('update_guardian', { studentId, guardianId, input })
+export const set_primary_guardian = (studentId: string, guardianId: string) =>
+  invoke<GuardianDto[]>('set_primary_guardian', { studentId, guardianId })
+export const remove_guardian = (studentId: string, guardianId: string) =>
+  invoke<GuardianDto[]>('remove_guardian', { studentId, guardianId })
 
 export const verify_audit_chain = () => invoke<AuditChainDto>('verify_audit_chain')
 export const backup_status = () => invoke<BackupStatusDto>('backup_status')

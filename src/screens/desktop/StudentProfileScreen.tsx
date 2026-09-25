@@ -6,7 +6,8 @@ import { navigate } from '@/lib/router'
 import { t } from '@/lib/i18n'
 import { formatMoney } from '@/lib/format'
 import * as api from '@/lib/api'
-import type { ClassDto, FeeDuesDto, PaymentDto, RequestDto, StudentProfileDto } from '@/lib/api'
+import type { ClassDto, FeeDuesDto, GuardianDto, PaymentDto, RequestDto, StudentProfileDto } from '@/lib/api'
+import GuardiansCard from './GuardiansCard'
 
 // Student profile (prompts/P07 §1): details, enrollment history, attendance %
 // this term, fees/ledger (Principal + Accountant), requests, audit. Actions:
@@ -120,6 +121,14 @@ export default function StudentProfileScreen({ id, role }: { id: string; role: s
             <Field label={t('students.field.aadhaar')} value={t(`students.aadhaar.${p.aadhaar_status}`)} />
           </div>
         </div>
+
+        {/* Guardians (P13): separate table; up to 2, one primary. Principal edits. */}
+        <GuardiansCard
+          studentId={p.id}
+          guardians={p.guardians}
+          canEdit={role === 'principal'}
+          onChanged={(list: GuardianDto[]) => setP({ ...p, guardians: list })}
+        />
 
         {/* Attendance this term */}
         <div style={CARD}>
