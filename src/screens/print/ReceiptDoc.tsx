@@ -26,7 +26,7 @@ function Row({ k, v }: { k: string; v: string }) {
   )
 }
 
-export default function ReceiptDoc({ id, size = 'a5', lang = 'en', duplicate = false, auto = false }: { id: string; size?: Size; lang?: 'en' | 'hi'; duplicate?: boolean; auto?: boolean }) {
+export default function ReceiptDoc({ id, size = 'a5', lang = 'en', duplicate = false, auto = false }: { id: string; size?: Size; lang?: 'en' | 'hi' | 'te'; duplicate?: boolean; auto?: boolean }) {
   const [r, setR] = useState<ReceiptDto | null>(null)
   const [school, setSchool] = useState<SchoolDto | null>(null)
   const [err, setErr] = useState(false)
@@ -48,7 +48,7 @@ export default function ReceiptDoc({ id, size = 'a5', lang = 'en', duplicate = f
   if (!r) return <div style={{ padding: 40, color: 'var(--muted)' }}>…</div>
 
   const width = size === '80mm' ? '80mm' : '148mm'
-  const words = lang === 'hi' ? r.amount_words_hi : r.amount_words_en
+  const words = lang === 'te' ? r.amount_words_te : lang === 'hi' ? r.amount_words_hi : r.amount_words_en
   const adm = r.admission_no ?? r.provisional_no ?? t('students.admissionPending')
 
   return (

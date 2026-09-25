@@ -79,7 +79,7 @@ export default function SettingsScreen() {
     setAccentState(hex)
     api.set_accent(hex).catch((e) => void (e as CmdError))
   }
-  const chooseLang = (next: 'en' | 'hi') => setLang(next)
+  const chooseLang = (next: 'en' | 'hi' | 'te') => setLang(next)
 
   const lang = getLang()
   const licence = store.app?.licence_status ?? 'active'
@@ -123,13 +123,13 @@ export default function SettingsScreen() {
         <div style={CARD}>
           <h3 style={H3}>{t('settings.language.title')}</h3>
           <div style={{ display: 'flex', gap: 10, marginBottom: 8 }}>
-            {(['en', 'hi'] as const).map((l) => (
+            {(['en', 'hi', 'te'] as const).map((l) => (
               <button
                 key={l}
                 onClick={() => chooseLang(l)}
                 style={{ height: 40, padding: '0 18px', borderRadius: 8, fontSize: 14, fontWeight: 500, cursor: 'pointer', border: '1px solid var(--line-strong)', background: lang === l ? 'var(--accent)' : 'var(--white)', color: lang === l ? '#fff' : 'var(--ink)' }}
               >
-                {l === 'en' ? 'English' : 'हिन्दी'}
+                {l === 'en' ? 'English' : l === 'hi' ? 'हिन्दी' : 'తెలుగు'}
               </button>
             ))}
           </div>

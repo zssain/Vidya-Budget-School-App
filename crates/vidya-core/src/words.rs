@@ -233,6 +233,108 @@ pub fn amount_in_words_hi(amount: Paise) -> String {
     body
 }
 
+// ---- Telugu ----------------------------------------------------------------
+//
+// DRAFT — pending native-speaker review (§4a, OWNER-DECISIONS #12). Uses simple
+// space-separated composition and nominative-plural scale words. Formal Telugu
+// contracts some compounds (sandhi) and uses oblique scale forms before more
+// digits (e.g. "మూడు వేల" not "మూడు వేలు" before another number). The specific
+// items to review are listed in docs/phase-notes/phase-13.md.
+
+const TE_ONES: [&str; 20] = [
+    "సున్నా", "ఒకటి", "రెండు", "మూడు", "నాలుగు", "ఐదు", "ఆరు", "ఏడు", "ఎనిమిది", "తొమ్మిది",
+    "పది", "పదకొండు", "పన్నెండు", "పదమూడు", "పద్నాలుగు", "పదిహేను", "పదహారు", "పదిహేడు", "పద్దెనిమిది", "పంతొమ్మిది",
+];
+// Index by tens digit (2..=9); 0 and 1 are handled by TE_ONES.
+const TE_TENS: [&str; 10] = [
+    "", "", "ఇరవై", "ముప్పై", "నలభై", "యాభై", "అరవై", "డెబ్బై", "ఎనభై", "తొంభై",
+];
+const TE_HUNDRED: &str = "వందలు";
+const TE_THOUSAND: &str = "వేలు";
+const TE_LAKH: &str = "లక్షలు";
+const TE_CRORE: &str = "కోట్లు";
+
+/// Words for 0..=99 in Telugu (empty for 0 inside a larger number).
+fn te_two_digits(n: u64) -> String {
+    debug_assert!(n < 100);
+    if n == 0 {
+        String::new()
+    } else if n < 20 {
+        TE_ONES[n as usize].to_string()
+    } else {
+        let tens = TE_TENS[(n / 10) as usize];
+        let ones = n % 10;
+        if ones == 0 {
+            tens.to_string()
+        } else {
+            format!("{} {}", tens, TE_ONES[ones as usize])
+        }
+    }
+}
+
+/// Words for 0..=999 in Telugu.
+fn te_three_digits(n: u64) -> String {
+    debug_assert!(n < 1000);
+    let hundreds = n / 100;
+    let rest = n % 100;
+    match (hundreds, rest) {
+        (0, _) => te_two_digits(rest),
+        (h, 0) => format!("{} {}", TE_ONES[h as usize], TE_HUNDRED),
+        (h, r) => format!("{} {} {}", TE_ONES[h as usize], TE_HUNDRED, te_two_digits(r)),
+    }
+}
+
+/// A non-negative integer in words, Indian numbering system (Telugu).
+fn te_number(mut n: u64) -> String {
+    if n == 0 {
+        return TE_ONES[0].to_string();
+    }
+    let mut parts: Vec<String> = Vec::new();
+
+    let crore = n / 10_000_000;
+    n %= 10_000_000;
+    let lakh = n / 100_000;
+    n %= 100_000;
+    let thousand = n / 1_000;
+    n %= 1_000;
+    let below_thousand = n;
+
+    if crore > 0 {
+        parts.push(format!("{} {}", te_number(crore), TE_CRORE));
+    }
+    if lakh > 0 {
+        parts.push(format!("{} {}", te_two_digits(lakh), TE_LAKH));
+    }
+    if thousand > 0 {
+        parts.push(format!("{} {}", te_two_digits(thousand), TE_THOUSAND));
+    }
+    if below_thousand > 0 {
+        parts.push(te_three_digits(below_thousand));
+    }
+
+    parts.join(" ")
+}
+
+/// Telugu amount-in-words for a receipt (Indian system). DRAFT — see the note
+/// above; the phrase "రూపాయలు మాత్రమే" = "rupees only", "పైసలు" = "paise",
+/// "రుణ" = "minus".
+pub fn amount_in_words_te(amount: Paise) -> String {
+    let value = amount.get();
+    let negative = value < 0;
+    let abs = value.unsigned_abs();
+    let rupees = abs / 100;
+    let paise = abs % 100;
+
+    let mut body = format!("{} రూపాయలు మాత్రమే", te_number(rupees));
+    if paise > 0 {
+        body = format!("{} రూపాయలు {} పైసలు మాత్రమే", te_number(rupees), te_two_digits(paise));
+    }
+    if negative {
+        body = format!("రుణ {body}");
+    }
+    body
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -375,5 +477,39 @@ mod tests {
     #[test]
     fn hi_negative_is_prefixed() {
         assert_eq!(amount_in_words_hi(Paise(-10000)), "ऋण एक सौ रुपये मात्र");
+    }
+
+    // ---- Telugu (draft; native review pending) --------------------------
+    #[test]
+    fn te_small_amounts() {
+        assert_eq!(te_number(0), "సున్నా");
+        // 5 rupees.
+        assert_eq!(amount_in_words_te(Paise(500)), "ఐదు రూపాయలు మాత్రమే");
+        // 1 rupee 50 paise.
+        assert_eq!(amount_in_words_te(Paise(150)), "ఒకటి రూపాయలు యాభై పైసలు మాత్రమే");
+    }
+
+    #[test]
+    fn te_two_digit_composition() {
+        assert_eq!(te_two_digits(20), "ఇరవై");
+        assert_eq!(te_two_digits(21), "ఇరవై ఒకటి");
+        assert_eq!(te_two_digits(99), "తొంభై తొమ్మిది");
+        assert_eq!(te_two_digits(15), "పదిహేను");
+    }
+
+    #[test]
+    fn te_large_amounts_use_indian_scale() {
+        // ₹3,100 uses the thousands scale and never panics.
+        let s = amount_in_words_te(Paise(310_000));
+        assert!(s.contains("వేలు"), "{s}");
+        assert!(s.contains("రూపాయలు మాత్రమే"), "{s}");
+        // ₹6,84,200 (lakh scale).
+        let s = amount_in_words_te(Paise(68_420_000));
+        assert!(s.contains("లక్షలు"), "{s}");
+    }
+
+    #[test]
+    fn te_negative_is_prefixed() {
+        assert!(amount_in_words_te(Paise(-500)).starts_with("రుణ"));
     }
 }

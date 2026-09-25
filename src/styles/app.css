@@ -51,7 +51,7 @@
   --radius-tile: var(--radius-16);
   --radius-pill: var(--radius-4);
 
-  --font-sans: 'Geist', 'Noto Sans Devanagari', system-ui, sans-serif;
+  --font-sans: 'Geist', 'Noto Sans Devanagari', 'Noto Sans Telugu', system-ui, sans-serif;
   --font-serif: 'Newsreader', Georgia, serif;
 }
 
@@ -62,7 +62,7 @@ body,
 }
 body {
   margin: 0;
-  font-family: 'Geist', 'Noto Sans Devanagari', system-ui, sans-serif;
+  font-family: 'Geist', 'Noto Sans Devanagari', 'Noto Sans Telugu', system-ui, sans-serif;
   font-size: 14px;
   color: var(--ink);
   background: var(--bg);
@@ -83,6 +83,18 @@ body {
 /* Headings marked .v-serif additionally get the mock's Noto 500 weight. */
 :root[lang='hi'] .v-serif {
   font-family: 'Noto Sans Devanagari', sans-serif !important;
+  font-weight: 500 !important;
+  font-style: normal !important;
+}
+
+/* Telugu (P13, §4a): same treatment as Hindi — serif headings swap to Noto Sans
+   Telugu 500 at the same size, no italics. */
+:root[lang='te'] {
+  --font-serif: 'Noto Sans Telugu', sans-serif;
+  font-synthesis: none;
+}
+:root[lang='te'] .v-serif {
+  font-family: 'Noto Sans Telugu', sans-serif !important;
   font-weight: 500 !important;
   font-style: normal !important;
 }

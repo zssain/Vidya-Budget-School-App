@@ -192,6 +192,7 @@ export interface ReceiptDto {
   amount_paise: number
   amount_words_en: string
   amount_words_hi: string
+  amount_words_te: string
   mode: string
   reference: string | null
   collected_by_name: string | null

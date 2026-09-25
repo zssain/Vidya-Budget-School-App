@@ -27,16 +27,21 @@ import guardians from './strings/guardians'
 import customFields from './strings/customFields'
 import privacy from './strings/privacy'
 
-export type Lang = 'en' | 'hi'
+export type Lang = 'en' | 'hi' | 'te'
 export interface Bundle {
   en: Record<string, string>
   hi: Record<string, string>
+  // Telugu (P13, §4a). Optional while the full translation is filled in;
+  // untranslated keys fall back to English in `t()`. amount-in-words is real
+  // Telugu (from vidya-core::words). Native-speaker review pending (OWNER #12).
+  te?: Record<string, string>
 }
 
 const bundles: Bundle[] = [common, welcome, principalHome, collectFee, teacherHome, attendance, errors, p04, shell, students, fees, receipts, daybook, attendanceReg, shared, academics, reports, settings, calendar, guardians, customFields, privacy]
 const en: Record<string, string> = Object.assign({}, ...bundles.map((b) => b.en))
 const hi: Record<string, string> = Object.assign({}, ...bundles.map((b) => b.hi))
-const dict: Record<Lang, Record<string, string>> = { en, hi }
+const te: Record<string, string> = Object.assign({}, ...bundles.map((b) => b.te ?? {}))
+const dict: Record<Lang, Record<string, string>> = { en, hi, te }
 
 let lang: Lang = 'en'
 const listeners = new Set<() => void>()
@@ -57,7 +62,7 @@ export function setLang(next: Lang): void {
 export function loadLang(): void {
   try {
     const v = localStorage.getItem(LANG_KEY)
-    if (v === 'en' || v === 'hi') {
+    if (v === 'en' || v === 'hi' || v === 'te') {
       lang = v
       if (typeof document !== 'undefined') document.documentElement.setAttribute('lang', v)
     }

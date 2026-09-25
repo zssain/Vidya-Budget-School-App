@@ -38,8 +38,9 @@ const JS_ALLOWED = new Set([
   '@radix-ui/react-slot', '@radix-ui/react-dialog', '@radix-ui/react-dropdown-menu',
   '@radix-ui/react-select', '@radix-ui/react-tabs', '@radix-ui/react-radio-group',
   '@radix-ui/react-checkbox',
-  // Fonts (bundled, subset to Latin + Devanagari)
+  // Fonts (bundled, subset to Latin + Devanagari + Telugu)
   '@fontsource/geist', '@fontsource-variable/newsreader', '@fontsource/noto-sans-devanagari',
+  '@fontsource/noto-sans-telugu',
   // JS dev
   'vite', '@vitejs/plugin-react', 'typescript', 'tailwindcss', '@tailwindcss/vite',
   'vitest', '@playwright/test', '@tauri-apps/cli', '@types/react', '@types/react-dom',
