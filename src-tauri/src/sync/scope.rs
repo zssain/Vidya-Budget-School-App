@@ -243,7 +243,7 @@ pub fn snapshot(conn: &Connection, actor: &Actor) -> rusqlite::Result<Vec<Change
 
     match actor.role {
         Role::Principal => {
-            for t in ["class", "class_subject", "student", "enrollment", "guardian", "student_guardian",
+            for t in ["class", "class_subject", "student", "enrollment", "guardian", "student_guardian", "consent",
                       "attendance_sheet", "attendance_mark",
                       "fee_head", "fee_due", "payment", "payment_allocation", "reversal", "request",
                       "ledger_account", "voucher", "ledger_entry",
@@ -254,7 +254,7 @@ pub fn snapshot(conn: &Connection, actor: &Actor) -> rusqlite::Result<Vec<Change
             }
         }
         Role::Accountant => {
-            for t in ["class", "class_subject", "student", "enrollment", "guardian", "student_guardian", "fee_head", "fee_due", "payment", "payment_allocation", "reversal", "ledger_account", "voucher", "ledger_entry"] {
+            for t in ["class", "class_subject", "student", "enrollment", "guardian", "student_guardian", "consent", "fee_head", "fee_due", "payment", "payment_allocation", "reversal", "ledger_account", "voucher", "ledger_entry"] {
                 for id in ids_of(conn, &format!("SELECT id FROM {t}"), &[])? {
                     push(conn, t, &id, None)?;
                 }

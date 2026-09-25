@@ -113,6 +113,16 @@ pub const COMMANDS: &[&str] = &[
     "set_custom_field_active",
     "get_custom_values",
     "set_custom_values",
+    "list_consent",
+    "record_consent",
+    "withdraw_consent",
+    "export_student",
+    "erase_student",
+    "get_retention",
+    "set_retention",
+    "list_incidents",
+    "add_incident",
+    "list_privacy_actions",
     "verify_audit_chain",
     "backup_status",
     "backup_now",
@@ -568,6 +578,74 @@ pub fn set_custom_values(state: State<RtCtx>, entity: String, entity_id: String,
     let device_id = cur_device(&state)?;
     let mode = state.device_mode;
     state.with_db(|conn| set_custom_values_logic(conn, &actor, device_id.as_deref(), mode, &entity, &entity_id, &values))
+}
+
+// -------------------------------------------------------------- privacy -------
+
+#[tauri::command]
+pub fn list_consent(state: State<RtCtx>, student_id: String) -> CmdResult<Vec<ConsentDto>> {
+    let _ = state.require_session()?;
+    state.with_db(|conn| list_consent_logic(conn, &student_id))
+}
+
+#[tauri::command]
+pub fn record_consent(state: State<RtCtx>, student_id: String, guardian_id: Option<String>, purpose: String, method: String) -> CmdResult<Vec<ConsentDto>> {
+    let actor = state.require_session()?;
+    let device_id = cur_device(&state)?;
+    let mode = state.device_mode;
+    state.with_db(|conn| record_consent_logic(conn, &actor, device_id.as_deref(), mode, &student_id, guardian_id.as_deref(), &purpose, &method))
+}
+
+#[tauri::command]
+pub fn withdraw_consent(state: State<RtCtx>, id: String) -> CmdResult<Vec<ConsentDto>> {
+    let actor = state.require_session()?;
+    let device_id = cur_device(&state)?;
+    let mode = state.device_mode;
+    state.with_db(|conn| withdraw_consent_logic(conn, &actor, device_id.as_deref(), mode, &id))
+}
+
+#[tauri::command]
+pub fn export_student(state: State<RtCtx>, student_id: String) -> CmdResult<String> {
+    let actor = state.require_session()?;
+    state.with_db(|conn| export_student_logic(conn, &actor, &student_id, &today()))
+}
+
+#[tauri::command]
+pub fn erase_student(state: State<RtCtx>, student_id: String) -> CmdResult<()> {
+    let actor = state.require_session()?;
+    let device_id = cur_device(&state)?;
+    let mode = state.device_mode;
+    state.with_db(|conn| erase_student_logic(conn, &actor, device_id.as_deref(), mode, &student_id))
+}
+
+#[tauri::command]
+pub fn get_retention(state: State<RtCtx>) -> CmdResult<String> {
+    let _ = state.require_session()?;
+    state.with_db(get_retention_logic)
+}
+
+#[tauri::command]
+pub fn set_retention(state: State<RtCtx>, value: String) -> CmdResult<()> {
+    let actor = state.require_session()?;
+    state.with_db(|conn| set_retention_logic(conn, &actor, &value))
+}
+
+#[tauri::command]
+pub fn list_incidents(state: State<RtCtx>) -> CmdResult<Vec<IncidentDto>> {
+    let _ = state.require_session()?;
+    state.with_db(list_incidents_logic)
+}
+
+#[tauri::command]
+pub fn add_incident(state: State<RtCtx>, input: IncidentInput) -> CmdResult<Vec<IncidentDto>> {
+    let actor = state.require_session()?;
+    state.with_db(|conn| add_incident_logic(conn, &actor, &input))
+}
+
+#[tauri::command]
+pub fn list_privacy_actions(state: State<RtCtx>) -> CmdResult<Vec<PrivacyActionDto>> {
+    let _ = state.require_session()?;
+    state.with_db(list_privacy_actions_logic)
 }
 
 // ------------------------------------------------------------- academics ------

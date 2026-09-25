@@ -103,7 +103,7 @@ pub fn audience_for(table: &str, class_id: Option<&str>) -> CoreResult<Audience>
         // written at admission by accountants + the Principal (both hold finance),
         // read by teachers via the server snapshot — same pusher-consistent choice
         // as student/enrollment.
-        "student" | "enrollment" | "guardian" | "student_guardian" => Ok(Audience::Finance),
+        "student" | "enrollment" | "guardian" | "student_guardian" | "consent" => Ok(Audience::Finance),
         // ---- principal-only administrative data ----------------------------
         // Calendar (P13): Principal-edited school-wide config; every role reads it
         // via the server snapshot (like the student roster). Pusher = Principal →

@@ -12,6 +12,7 @@ import { navigate } from '@/lib/router'
 import { ACCENT_OPTIONS, loadAccent, setAccent } from '@/lib/theme'
 import { useStore } from '@/lib/store'
 import CustomFieldsSettings from './CustomFieldsSettings'
+import PrivacySettings from './PrivacySettings'
 
 declare const __APP_VERSION__: string
 
@@ -177,6 +178,9 @@ export default function SettingsScreen() {
 
         {/* Custom fields (P13): Principal-defined student/staff fields. */}
         <CustomFieldsSettings />
+
+        {/* Privacy & data protection (P13, DPDP): retention, incidents, export/erase. */}
+        <PrivacySettings />
 
         {/* Academics */}
         <div style={CARD}>

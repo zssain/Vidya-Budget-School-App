@@ -9,6 +9,7 @@ import * as api from '@/lib/api'
 import type { ClassDto, FeeDuesDto, GuardianDto, PaymentDto, RequestDto, StudentProfileDto } from '@/lib/api'
 import GuardiansCard from './GuardiansCard'
 import CustomValuesCard from './CustomValuesCard'
+import ConsentCard from './ConsentCard'
 
 // Student profile (prompts/P07 §1): details, enrollment history, attendance %
 // this term, fees/ledger (Principal + Accountant), requests, audit. Actions:
@@ -133,6 +134,12 @@ export default function StudentProfileScreen({ id, role }: { id: string; role: s
 
         {/* Custom fields (P13): school-defined "More details". Principal edits. */}
         <CustomValuesCard entity="student" entityId={p.id} canEdit={role === 'principal'} />
+
+        {/* Consent + export/erase (P13, DPDP). Accountant/Principal record consent;
+            Principal exports/erases. */}
+        {finance ? (
+          <ConsentCard studentId={p.id} canManage={role === 'principal'} onErased={() => load()} />
+        ) : null}
 
         {/* Attendance this term */}
         <div style={CARD}>

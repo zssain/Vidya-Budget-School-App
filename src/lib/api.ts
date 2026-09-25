@@ -822,6 +822,51 @@ export const get_custom_values = (entity: string, entityId: string) =>
 export const set_custom_values = (entity: string, entityId: string, values: CustomValueSet[]) =>
   invoke<CustomFieldValueDto[]>('set_custom_values', { entity, entityId, values })
 
+// ---- Phase 13: privacy (DPDP) — consent, export/erase, retention, incidents --
+export interface ConsentDto {
+  id: string
+  student_id: string
+  guardian_id: string | null
+  purpose: string
+  method: string
+  recorded_at: string
+  withdrawn_at: string | null
+}
+export interface IncidentDto {
+  id: string
+  occurred_on: string | null
+  description: string
+  action_taken: string | null
+  reported_to_board: boolean
+  reported_on: string | null
+  created_at: string
+}
+export interface IncidentInput {
+  occurred_on?: string | null
+  description: string
+  action_taken?: string | null
+  reported_to_board?: boolean
+  reported_on?: string | null
+}
+export interface PrivacyActionDto {
+  id: string
+  student_id: string | null
+  kind: string
+  performed_at: string
+  note: string | null
+}
+export const list_consent = (studentId: string) => invoke<ConsentDto[]>('list_consent', { studentId })
+export const record_consent = (studentId: string, guardianId: string | null, purpose: string, method: string) =>
+  invoke<ConsentDto[]>('record_consent', { studentId, guardianId, purpose, method })
+export const withdraw_consent = (id: string) => invoke<ConsentDto[]>('withdraw_consent', { id })
+export const export_student = (studentId: string) => invoke<string>('export_student', { studentId })
+export const erase_student = (studentId: string) => invoke<void>('erase_student', { studentId })
+export const get_retention = () => invoke<string>('get_retention')
+export const set_retention = (value: string) => invoke<void>('set_retention', { value })
+export const list_incidents = () => invoke<IncidentDto[]>('list_incidents')
+export const add_incident = (input: IncidentInput) => invoke<IncidentDto[]>('add_incident', { input })
+export const list_privacy_actions = () => invoke<PrivacyActionDto[]>('list_privacy_actions')
+
 export const verify_audit_chain = () => invoke<AuditChainDto>('verify_audit_chain')
 export const backup_status = () => invoke<BackupStatusDto>('backup_status')
 export const backup_now = (recoveryKey?: string) =>

@@ -4445,6 +4445,283 @@ pub fn set_custom_values_logic(
     get_custom_values_logic(conn, entity, entity_id)
 }
 
+// ============================================================ privacy ========
+//
+// DPDP (§9): consent per student+purpose; student export/erase (Principal;
+// financial/academic/audit kept, personal fields tombstoned); a retention setting;
+// an incident log with the 72-hour reporting duty; and a record of export/erase.
+
+const KV_RETENTION: &str = "privacy.retention";
+const ERASED: &str = "(erased)";
+
+#[derive(Debug, Serialize)]
+pub struct ConsentDto {
+    pub id: String,
+    pub student_id: String,
+    pub guardian_id: Option<String>,
+    pub purpose: String,
+    pub method: String,
+    pub recorded_at: String,
+    pub withdrawn_at: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct IncidentDto {
+    pub id: String,
+    pub occurred_on: Option<String>,
+    pub description: String,
+    pub action_taken: Option<String>,
+    pub reported_to_board: bool,
+    pub reported_on: Option<String>,
+    pub created_at: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct IncidentInput {
+    pub occurred_on: Option<String>,
+    pub description: String,
+    #[serde(default)]
+    pub action_taken: Option<String>,
+    #[serde(default)]
+    pub reported_to_board: bool,
+    #[serde(default)]
+    pub reported_on: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct PrivacyActionDto {
+    pub id: String,
+    pub student_id: Option<String>,
+    pub kind: String,
+    pub performed_at: String,
+    pub note: Option<String>,
+}
+
+/// The consent rows for a student (latest first).
+pub fn list_consent_logic(conn: &mut Connection, student_id: &str) -> CmdResult<Vec<ConsentDto>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, student_id, guardian_id, purpose, method, recorded_at, withdrawn_at FROM consent WHERE student_id=?1 ORDER BY recorded_at DESC",
+    )?;
+    let rows = stmt.query_map(params![student_id], |r| {
+        Ok(ConsentDto {
+            id: r.get(0)?, student_id: r.get(1)?, guardian_id: r.get(2)?, purpose: r.get(3)?,
+            method: r.get(4)?, recorded_at: r.get(5)?, withdrawn_at: r.get(6)?,
+        })
+    })?;
+    Ok(rows.collect::<rusqlite::Result<_>>()?)
+}
+
+/// True if the student has an active (non-withdrawn) `messages` consent — used by
+/// the messaging engine's `can_message` (P14 wires the send path to this).
+pub fn messages_consent_logic(conn: &Connection, student_id: &str) -> rusqlite::Result<bool> {
+    let n: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM consent WHERE student_id=?1 AND purpose='messages' AND withdrawn_at IS NULL",
+        params![student_id], |r| r.get(0),
+    )?;
+    Ok(n > 0)
+}
+
+/// Record a consent (Accountant + Principal — part of admission/records). Audited; synced.
+#[allow(clippy::too_many_arguments)]
+pub fn record_consent_logic(
+    conn: &mut Connection,
+    actor_s: &SessionStaff,
+    device_id: Option<&str>,
+    device_mode: DeviceMode,
+    student_id: &str,
+    guardian_id: Option<&str>,
+    purpose: &str,
+    method: &str,
+) -> CmdResult<Vec<ConsentDto>> {
+    let actor = actor_from(conn, actor_s)?;
+    require_allow(&actor, Action::CreateStudent, &Target::of(TargetKind::Student))?;
+    if !matches!(purpose, "school_records" | "messages") {
+        return Err(CmdError::validation("purpose", "unknown"));
+    }
+    if !matches!(method, "signed_form" | "in_person") {
+        return Err(CmdError::validation("method", "unknown"));
+    }
+    let id = new_id("con");
+    let now = now_iso();
+    let school_id = single_school_id(conn)?;
+    let sync_state = if device_mode == DeviceMode::Server { "confirmed" } else { "on_device" };
+    let dev = device_id.unwrap_or_default().to_string();
+    let tx = conn.transaction()?;
+    tx.execute(
+        "INSERT INTO consent(id,student_id,guardian_id,purpose,method,recorded_by,recorded_at,school_id,created_at,updated_at,updated_by_staff,updated_by_device,sync_state) \
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?7,?7,?6,?9,?10)",
+        params![id, student_id, guardian_id, purpose, method, actor_s.id, now, school_id, dev, sync_state],
+    )?;
+    crate::security::audit::append(&tx, &AuditEntry {
+        at: now.clone(), staff_id: Some(actor_s.id.clone()), action: "record_consent".into(),
+        table: Some("consent".into()), record_id: Some(id.clone()),
+        after_json: Some(serde_json::json!({ "student_id": student_id, "purpose": purpose, "method": method }).to_string()),
+        ..Default::default()
+    })?;
+    crate::write::append_op(&tx, device_mode, &finance_op(&now, &dev, &actor_s.id, "consent", &id, "insert"))?;
+    tx.commit()?;
+    list_consent_logic(conn, student_id)
+}
+
+/// Withdraw a consent (sets withdrawn_at). Audited; synced.
+pub fn withdraw_consent_logic(
+    conn: &mut Connection,
+    actor_s: &SessionStaff,
+    device_id: Option<&str>,
+    device_mode: DeviceMode,
+    id: &str,
+) -> CmdResult<Vec<ConsentDto>> {
+    let actor = actor_from(conn, actor_s)?;
+    require_allow(&actor, Action::CreateStudent, &Target::of(TargetKind::Student))?;
+    let student_id: String = conn
+        .query_row("SELECT student_id FROM consent WHERE id=?1", params![id], |r| r.get(0))
+        .optional()?
+        .ok_or_else(CmdError::not_found)?;
+    let now = now_iso();
+    let dev = device_id.unwrap_or_default().to_string();
+    let tx = conn.transaction()?;
+    tx.execute("UPDATE consent SET withdrawn_at=?2, updated_at=?2, version=version+1 WHERE id=?1 AND withdrawn_at IS NULL", params![id, now])?;
+    crate::security::audit::append(&tx, &AuditEntry {
+        at: now.clone(), staff_id: Some(actor_s.id.clone()), action: "withdraw_consent".into(),
+        table: Some("consent".into()), record_id: Some(id.to_string()),
+        after_json: Some(serde_json::json!({ "withdrawn_at": now }).to_string()),
+        ..Default::default()
+    })?;
+    crate::write::append_op(&tx, device_mode, &finance_op(&now, &dev, &actor_s.id, "consent", id, "update"))?;
+    tx.commit()?;
+    list_consent_logic(conn, &student_id)
+}
+
+/// Export one student's data as JSON (Principal). Logs a privacy action.
+pub fn export_student_logic(conn: &mut Connection, actor_s: &SessionStaff, student_id: &str, today: &str) -> CmdResult<String> {
+    let actor = actor_from(conn, actor_s)?;
+    require_allow(&actor, Action::Settings, &Target { kind: TargetKind::School, ..Default::default() })?;
+    let profile = get_student_profile_logic(conn, today, student_id)?;
+    let consent = list_consent_logic(conn, student_id)?;
+    let customs = get_custom_values_logic(conn, "student", student_id)?;
+    let payments = list_payments_logic(conn, Some(student_id))?;
+    let export = serde_json::json!({
+        "exported_at": now_iso(),
+        "student": profile,
+        "consent": consent,
+        "custom_values": customs,
+        "payments": payments,
+    });
+    conn.execute(
+        "INSERT INTO privacy_action(id,student_id,kind,performed_by,performed_at,note,school_id) VALUES (?1,?2,'export',?3,?4,?5,(SELECT id FROM school LIMIT 1))",
+        params![new_id("pa"), student_id, actor_s.id, now_iso(), format!("Exported {}", profile.name)],
+    )?;
+    Ok(serde_json::to_string_pretty(&export).unwrap_or_else(|_| "{}".into()))
+}
+
+/// Erase a student on request (Principal): tombstone personal fields on the
+/// student and their (non-shared) guardians, delete custom values; KEEP financial,
+/// academic and audit records. Audited; logs a privacy action.
+pub fn erase_student_logic(
+    conn: &mut Connection,
+    actor_s: &SessionStaff,
+    device_id: Option<&str>,
+    device_mode: DeviceMode,
+    student_id: &str,
+) -> CmdResult<()> {
+    let actor = actor_from(conn, actor_s)?;
+    require_allow(&actor, Action::Settings, &Target { kind: TargetKind::School, ..Default::default() })?;
+    let name: String = conn
+        .query_row("SELECT name FROM student WHERE id=?1", params![student_id], |r| r.get(0))
+        .optional()?
+        .ok_or_else(CmdError::not_found)?;
+    let now = now_iso();
+    let dev = device_id.unwrap_or_default().to_string();
+    let tx = conn.transaction()?;
+    tx.execute(
+        "UPDATE student SET name=?2, dob=NULL, gender=NULL, guardian_name=NULL, guardian_mobile=NULL, address=NULL, aadhaar_status='none', updated_at=?3, version=version+1 WHERE id=?1",
+        params![student_id, ERASED, now],
+    )?;
+    let gids: Vec<String> = {
+        let mut gstmt = tx.prepare(
+            "SELECT guardian_id FROM student_guardian WHERE student_id=?1 AND guardian_id IN \
+             (SELECT guardian_id FROM student_guardian GROUP BY guardian_id HAVING COUNT(*)=1)",
+        )?;
+        let out = gstmt.query_map(params![student_id], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<Vec<String>>>()?;
+        out
+    };
+    for gid in &gids {
+        tx.execute("UPDATE guardian SET name=?2, mobile=NULL, email=NULL, updated_at=?3, version=version+1 WHERE id=?1", params![gid, ERASED, now])?;
+    }
+    tx.execute("DELETE FROM custom_value WHERE entity_id=?1", params![student_id])?;
+    crate::security::audit::append(&tx, &AuditEntry {
+        at: now.clone(), staff_id: Some(actor_s.id.clone()), action: "erase_student".into(),
+        table: Some("student".into()), record_id: Some(student_id.to_string()),
+        reason: Some("erase_on_request".into()),
+        after_json: Some(serde_json::json!({ "tombstoned": true, "guardians_tombstoned": gids.len() }).to_string()),
+        ..Default::default()
+    })?;
+    crate::write::append_op(&tx, device_mode, &finance_op(&now, &dev, &actor_s.id, "student", student_id, "update"))?;
+    tx.execute(
+        "INSERT INTO privacy_action(id,student_id,kind,performed_by,performed_at,note,school_id) VALUES (?1,?2,'erase',?3,?4,?5,(SELECT id FROM school LIMIT 1))",
+        params![new_id("pa"), student_id, actor_s.id, now, format!("Erased {name}")],
+    )?;
+    tx.commit()?;
+    Ok(())
+}
+
+pub fn get_retention_logic(conn: &mut Connection) -> CmdResult<String> {
+    Ok(crate::kv::get::<String>(conn, KV_RETENTION)?.unwrap_or_else(|| "keep".to_string()))
+}
+
+pub fn set_retention_logic(conn: &mut Connection, actor_s: &SessionStaff, value: &str) -> CmdResult<()> {
+    let actor = actor_from(conn, actor_s)?;
+    require_allow(&actor, Action::Settings, &Target { kind: TargetKind::School, ..Default::default() })?;
+    if !matches!(value, "keep" | "review") {
+        return Err(CmdError::validation("retention", "unknown"));
+    }
+    crate::kv::set(conn, KV_RETENTION, &value.to_string())?;
+    Ok(())
+}
+
+pub fn list_incidents_logic(conn: &mut Connection) -> CmdResult<Vec<IncidentDto>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, occurred_on, description, action_taken, reported_to_board, reported_on, created_at FROM incident_log ORDER BY created_at DESC",
+    )?;
+    let rows = stmt.query_map([], |r| {
+        Ok(IncidentDto {
+            id: r.get(0)?, occurred_on: r.get(1)?, description: r.get(2)?, action_taken: r.get(3)?,
+            reported_to_board: r.get::<_, i64>(4)? != 0, reported_on: r.get(5)?, created_at: r.get(6)?,
+        })
+    })?;
+    Ok(rows.collect::<rusqlite::Result<_>>()?)
+}
+
+pub fn add_incident_logic(conn: &mut Connection, actor_s: &SessionStaff, input: &IncidentInput) -> CmdResult<Vec<IncidentDto>> {
+    let actor = actor_from(conn, actor_s)?;
+    require_allow(&actor, Action::Settings, &Target { kind: TargetKind::School, ..Default::default() })?;
+    if input.description.trim().is_empty() {
+        return Err(CmdError::validation("description", "required"));
+    }
+    let now = now_iso();
+    let tx = conn.transaction()?;
+    tx.execute(
+        "INSERT INTO incident_log(id,occurred_on,description,action_taken,reported_to_board,reported_on,recorded_by,school_id,created_at) \
+         VALUES (?1,?2,?3,?4,?5,?6,?7,(SELECT id FROM school LIMIT 1),?8)",
+        params![new_id("inc"), input.occurred_on, input.description, input.action_taken, input.reported_to_board as i64, input.reported_on, actor_s.id, now],
+    )?;
+    crate::security::audit::append(&tx, &AuditEntry {
+        at: now.clone(), staff_id: Some(actor_s.id.clone()), action: "add_incident".into(),
+        table: Some("incident_log".into()), after_json: Some(serde_json::json!({ "reported_to_board": input.reported_to_board }).to_string()),
+        ..Default::default()
+    })?;
+    tx.commit()?;
+    list_incidents_logic(conn)
+}
+
+pub fn list_privacy_actions_logic(conn: &mut Connection) -> CmdResult<Vec<PrivacyActionDto>> {
+    let mut stmt = conn.prepare("SELECT id, student_id, kind, performed_at, note FROM privacy_action ORDER BY performed_at DESC LIMIT 200")?;
+    let rows = stmt.query_map([], |r| {
+        Ok(PrivacyActionDto { id: r.get(0)?, student_id: r.get(1)?, kind: r.get(2)?, performed_at: r.get(3)?, note: r.get(4)? })
+    })?;
+    Ok(rows.collect::<rusqlite::Result<_>>()?)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -4697,6 +4974,68 @@ mod tests {
         create_custom_field_logic(&mut c, &principal(), None, DeviceMode::Server, &cf_input("student", "route", "text", &[], false)).unwrap();
         let err = create_custom_field_logic(&mut c, &principal(), None, DeviceMode::Server, &cf_input("student", "route", "text", &[], false)).unwrap_err();
         assert_eq!(err.code, "VALIDATION");
+    }
+
+    // ---- Phase 13: privacy -------------------------------------------------
+    const STU: &str = "stu-kavya-singh";
+
+    #[test]
+    fn consent_record_withdraw_and_messages_consent() {
+        let mut c = seeded();
+        assert!(!messages_consent_logic(&c, STU).unwrap());
+        let list = record_consent_logic(&mut c, &accountant(), None, DeviceMode::Server, STU, None, "messages", "signed_form").unwrap();
+        assert_eq!(list.len(), 1);
+        assert!(messages_consent_logic(&c, STU).unwrap());
+        // Withdraw → no active messages consent.
+        let cid = list[0].id.clone();
+        withdraw_consent_logic(&mut c, &principal(), None, DeviceMode::Server, &cid).unwrap();
+        assert!(!messages_consent_logic(&c, STU).unwrap());
+        // Bad purpose rejected.
+        assert_eq!(record_consent_logic(&mut c, &principal(), None, DeviceMode::Server, STU, None, "ads", "in_person").unwrap_err().code, "VALIDATION");
+    }
+
+    #[test]
+    fn export_then_erase_keeps_money_tombstones_personal() {
+        let mut c = seeded();
+        // Record a payment so there's financial data to keep.
+        record_payment_logic(&mut c, &accountant(), Some("dev-a2"), DeviceMode::Server,
+            &PaymentInput { student_id: STU.into(), amount_paise: 310_000, mode: "cash".into(), reference: Some(String::new()) }).unwrap();
+        let payments_before: i64 = c.query_row("SELECT COUNT(*) FROM payment WHERE student_id=?1", params![STU], |r| r.get(0)).unwrap();
+        // Export contains the student's name.
+        let json = export_student_logic(&mut c, &principal(), STU, "2026-09-23").unwrap();
+        assert!(json.contains("Kavya"));
+        // Erase tombstones personal fields but keeps the payment.
+        erase_student_logic(&mut c, &principal(), None, DeviceMode::Server, STU).unwrap();
+        let name: String = c.query_row("SELECT name FROM student WHERE id=?1", params![STU], |r| r.get(0)).unwrap();
+        assert_eq!(name, "(erased)");
+        let payments_after: i64 = c.query_row("SELECT COUNT(*) FROM payment WHERE student_id=?1", params![STU], |r| r.get(0)).unwrap();
+        assert_eq!(payments_after, payments_before, "financial records kept");
+        // Both actions logged.
+        let actions: i64 = c.query_row("SELECT COUNT(*) FROM privacy_action WHERE student_id=?1", params![STU], |r| r.get(0)).unwrap();
+        assert_eq!(actions, 2);
+    }
+
+    #[test]
+    fn teacher_cannot_export_erase_or_manage_privacy() {
+        let mut c = seeded();
+        let teacher = SessionStaff { id: "stf-meena".into(), name: "Meena Iyer".into(), role: "teacher".into() };
+        assert_eq!(export_student_logic(&mut c, &teacher, STU, "2026-09-23").unwrap_err().code, "FORBIDDEN");
+        assert_eq!(erase_student_logic(&mut c, &teacher, None, DeviceMode::Server, STU).unwrap_err().code, "FORBIDDEN");
+        assert_eq!(add_incident_logic(&mut c, &teacher, &IncidentInput { occurred_on: None, description: "x".into(), action_taken: None, reported_to_board: false, reported_on: None }).unwrap_err().code, "FORBIDDEN");
+    }
+
+    #[test]
+    fn retention_and_incident_log() {
+        let mut c = seeded();
+        assert_eq!(get_retention_logic(&mut c).unwrap(), "keep");
+        set_retention_logic(&mut c, &principal(), "review").unwrap();
+        assert_eq!(get_retention_logic(&mut c).unwrap(), "review");
+        assert_eq!(set_retention_logic(&mut c, &principal(), "delete").unwrap_err().code, "VALIDATION");
+        // Incident log.
+        let list = add_incident_logic(&mut c, &principal(), &IncidentInput { occurred_on: Some("2026-09-20".into()), description: "Lost USB with a class list.".into(), action_taken: Some("Recovered".into()), reported_to_board: true, reported_on: Some("2026-09-21".into()) }).unwrap();
+        assert_eq!(list.len(), 1);
+        assert!(list[0].reported_to_board);
+        assert_eq!(add_incident_logic(&mut c, &principal(), &IncidentInput { occurred_on: None, description: "  ".into(), action_taken: None, reported_to_board: false, reported_on: None }).unwrap_err().code, "VALIDATION");
     }
 
     // ---- Phase 13: ledger vouchers -----------------------------------------
