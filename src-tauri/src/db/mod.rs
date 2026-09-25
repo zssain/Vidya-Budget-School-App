@@ -22,6 +22,7 @@ pub const MIGRATIONS: &[(i64, &str)] = &[
     (13, include_str!("migrations/0013_v2_messaging.sql")),
     (14, include_str!("migrations/0014_v2_custom_fields.sql")),
     (15, include_str!("migrations/0015_v2_roles.sql")),
+    (16, include_str!("migrations/0016_v2_school_id.sql")),
 ];
 
 // A per-thread frozen clock for deterministic tests. Compiled ONLY in debug
@@ -320,6 +321,31 @@ mod tests {
         }
         let n: i64 = conn.query_row("SELECT COUNT(*) FROM message_template", [], |r| r.get(0)).unwrap();
         assert_eq!(n, 15, "5 templates × 3 languages");
+    }
+
+    /// P13 Step 10: `school_id` is added to the domain tables and backfilled to
+    /// the single school's id for existing rows.
+    #[test]
+    fn school_id_backfilled_on_domain_tables() {
+        let mut conn = open_in_memory(KEY).unwrap();
+        for (v, sql) in MIGRATIONS.iter().filter(|(v, _)| *v <= 15) {
+            let tx = conn.transaction().unwrap();
+            tx.execute_batch(sql).unwrap();
+            tx.execute("INSERT INTO schema_version(version, applied_at) VALUES (?1, 't')", rusqlite::params![v]).unwrap();
+            tx.commit().unwrap();
+        }
+        conn.execute("INSERT INTO school(id,name,backup_salt,created_at,updated_at) VALUES ('sch','S',x'00','t','t')", []).unwrap();
+        conn.execute("INSERT INTO student(id,name,created_at,updated_at) VALUES ('s1','Riya','t','t')", []).unwrap();
+        conn.execute("INSERT INTO class(id,name,display,created_at,updated_at) VALUES ('c1','VII','VII-B','t','t')", []).ok();
+
+        assert_eq!(run_migrations(&mut conn).unwrap(), MIGRATIONS.last().map(|(v, _)| *v).unwrap());
+
+        let sid: Option<String> = conn.query_row("SELECT school_id FROM student WHERE id='s1'", [], |r| r.get(0)).unwrap();
+        assert_eq!(sid.as_deref(), Some("sch"), "student.school_id backfilled");
+        // The column exists on several domain tables.
+        for tbl in ["staff", "enrollment", "fee_due", "request", "attendance_mark"] {
+            assert!(conn.query_row(&format!("SELECT school_id FROM {tbl} LIMIT 1"), [], |_| Ok(())).is_ok() || conn.query_row(&format!("SELECT COUNT(school_id) FROM {tbl}"), [], |r| r.get::<_, i64>(0)).is_ok(), "{tbl} has school_id");
+        }
     }
 
     #[test]
