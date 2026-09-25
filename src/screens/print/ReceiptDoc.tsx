@@ -29,12 +29,22 @@ function Row({ k, v }: { k: string; v: string }) {
 export default function ReceiptDoc({ id, size = 'a5', lang = 'en', duplicate = false, auto = false }: { id: string; size?: Size; lang?: 'en' | 'hi' | 'te'; duplicate?: boolean; auto?: boolean }) {
   const [r, setR] = useState<ReceiptDto | null>(null)
   const [school, setSchool] = useState<SchoolDto | null>(null)
+  const [qr, setQr] = useState<string | null>(null)
+  const [vpa, setVpa] = useState<string | null>(null)
   const [err, setErr] = useState(false)
 
   useEffect(() => {
     api.get_receipt(id).then(setR).catch(() => setErr(true))
     api.get_school().then(setSchool).catch(() => setSchool(null))
+    api.get_payment_settings().then((p) => setVpa(p.upi_id)).catch(() => setVpa(null))
   }, [id])
+
+  // Render the balance QR only when the receipt carries a upi:// link (school has
+  // a UPI id, the receipts toggle is on, and a balance remains).
+  useEffect(() => {
+    if (r?.upi_link) api.qr_svg(r.upi_link).then(setQr).catch(() => setQr(null))
+    else setQr(null)
+  }, [r?.upi_link])
 
   // Auto-open the print dialog once the document has laid out.
   useEffect(() => {
@@ -104,6 +114,16 @@ export default function ReceiptDoc({ id, size = 'a5', lang = 'en', duplicate = f
           <Row k={t('receipt.doc.balanceAfter')} v={formatMoney(r.balance_after_paise)} />
           {r.collected_by_name ? <Row k={t('receipt.doc.collectedBy')} v={r.collected_by_name} /> : null}
         </div>
+
+        {r.upi_link && qr ? (
+          <div style={{ display: 'flex', alignItems: 'center', gap: '16px', padding: '12px', borderRadius: '8px', background: 'var(--bg)', border: '1px dashed var(--line-strong)', marginTop: '10px' }}>
+            <span style={{ width: 84, height: 84, flexShrink: 0, display: 'block' }} dangerouslySetInnerHTML={{ __html: qr }} />
+            <span style={{ display: 'flex', flexDirection: 'column', gap: '3px' }}>
+              <span style={{ fontWeight: 600, fontSize: '13px' }}>{t('receipt.doc.upiTitle')}</span>
+              <span style={{ fontSize: '12px', color: 'var(--muted)' }}>{t('receipt.doc.upiHint', { amount: formatMoney(r.balance_after_paise), vpa: vpa ?? '' })}</span>
+            </span>
+          </div>
+        ) : null}
 
         {!r.confirmed ? <div style={{ fontSize: '11px', color: 'var(--gold-text)', marginTop: '10px', textAlign: 'center' }}>{t('receipt.doc.waiting')}</div> : null}
         <div style={{ fontSize: '10px', color: 'var(--muted)', marginTop: '10px', textAlign: 'center' }}>{t('receipt.doc.generated')}</div>

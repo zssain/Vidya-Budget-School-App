@@ -98,6 +98,9 @@ pub const COMMANDS: &[&str] = &[
     "set_accent",
     "list_modules",
     "set_module",
+    "get_payment_settings",
+    "set_payment_settings",
+    "qr_svg",
     "get_calendar",
     "set_weekly_offs",
     "add_calendar_event",
@@ -454,6 +457,26 @@ pub fn list_modules(state: State<RtCtx>) -> CmdResult<Vec<ModuleDto>> {
 pub fn set_module(state: State<RtCtx>, key: String, enabled: bool) -> CmdResult<()> {
     let actor = state.require_session()?;
     state.with_db(|conn| set_module_logic(conn, &actor, &key, enabled))
+}
+
+// --------------------------------------------------------------- payments -----
+
+#[tauri::command]
+pub fn get_payment_settings(state: State<RtCtx>) -> CmdResult<crate::upi::PaymentSettings> {
+    state.require_session()?;
+    state.with_db(get_payment_settings_logic)
+}
+
+#[tauri::command]
+pub fn set_payment_settings(state: State<RtCtx>, input: PaymentSettingsInput) -> CmdResult<()> {
+    let actor = state.require_session()?;
+    state.with_db(|conn| set_payment_settings_logic(conn, &actor, &input))
+}
+
+#[tauri::command]
+pub fn qr_svg(state: State<RtCtx>, data: String) -> CmdResult<String> {
+    state.require_session()?;
+    qr_svg_logic(&data)
 }
 
 // --------------------------------------------------------------- calendar -----

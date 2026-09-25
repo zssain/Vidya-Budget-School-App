@@ -12,6 +12,7 @@ import { navigate } from '@/lib/router'
 import { ACCENT_OPTIONS, loadAccent, setAccent } from '@/lib/theme'
 import { useStore } from '@/lib/store'
 import CustomFieldsSettings from './CustomFieldsSettings'
+import PaymentsSettings from './PaymentsSettings'
 import PrivacySettings from './PrivacySettings'
 
 declare const __APP_VERSION__: string
@@ -135,6 +136,9 @@ export default function SettingsScreen() {
           </div>
           <div style={{ fontSize: 12, color: 'var(--muted)' }}>{t('settings.language.hint')}</div>
         </div>
+
+        {/* Payments (UPI) — prototype settings state 1. */}
+        <PaymentsSettings />
 
         {/* Modules (Languages & modules — prototype settings state 3) */}
         <div style={{ ...CARD, gridColumn: '1 / -1' }}>

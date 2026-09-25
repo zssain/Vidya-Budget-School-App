@@ -202,6 +202,7 @@ export interface ReceiptDto {
   advance_credit_paise: number
   balance_after_paise: number
   reversed: boolean
+  upi_link: string | null
 }
 export interface ReceiptSummaryDto {
   id: string
@@ -564,6 +565,25 @@ export interface SchoolInput {
   board?: string | null
   udise?: string | null
   phone?: string | null
+  upi_id?: string | null
+  upi_name?: string | null
+}
+
+// Payments (UPI) — Settings → Payments (prototype settings state 1).
+export interface PaymentSettings {
+  upi_id: string | null
+  upi_name: string | null
+  on_receipts: boolean
+  on_reminders: boolean
+  on_dues_list: boolean
+  preview_link: string | null
+}
+export interface PaymentSettingsInput {
+  upi_id: string | null
+  upi_name: string | null
+  on_receipts: boolean
+  on_reminders: boolean
+  on_dues_list: boolean
 }
 export interface SessionInput {
   label: string
@@ -717,6 +737,9 @@ export const dashboard_teacher = () => invoke<TeacherDashboard>('dashboard_teach
 export const set_accent = (hex: string) => invoke<void>('set_accent', { hex })
 export const list_modules = () => invoke<ModuleRow[]>('list_modules')
 export const set_module = (key: string, enabled: boolean) => invoke<void>('set_module', { key, enabled })
+export const get_payment_settings = () => invoke<PaymentSettings>('get_payment_settings')
+export const set_payment_settings = (input: PaymentSettingsInput) => invoke<void>('set_payment_settings', { input })
+export const qr_svg = (data: string) => invoke<string>('qr_svg', { data })
 
 // ---- Phase 13: school calendar (weekly offs + holidays/exams/events) --------
 export interface CalendarEventDto {

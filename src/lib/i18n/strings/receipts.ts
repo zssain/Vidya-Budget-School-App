@@ -48,6 +48,8 @@ const receipts: Bundle = {
     'receipt.doc.waiting': 'Recorded on this computer — waiting for school server',
     'receipt.doc.generated': 'Computer-generated receipt',
     'receipt.doc.reversed': 'This payment has been reversed.',
+    'receipt.doc.upiTitle': 'Pay the balance by UPI',
+    'receipt.doc.upiHint': 'Scan to pay {amount} to {vpa}. Amount and student name are filled in.',
   },
   hi: {
     'receipts.eyebrow': 'वित्त',
@@ -91,6 +93,8 @@ const receipts: Bundle = {
     'receipt.doc.waiting': 'इस कंप्यूटर पर दर्ज — स्कूल सर्वर की प्रतीक्षा में',
     'receipt.doc.generated': 'कंप्यूटर-जनित रसीद',
     'receipt.doc.reversed': 'यह भुगतान वापस कर दिया गया है।',
+    'receipt.doc.upiTitle': 'UPI से शेष राशि का भुगतान करें',
+    'receipt.doc.upiHint': '{vpa} को {amount} भुगतान करने के लिए स्कैन करें। राशि और छात्र का नाम भरा हुआ है।',
   },
 }
 export default receipts

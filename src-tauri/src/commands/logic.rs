@@ -130,6 +130,12 @@ pub struct SchoolInput {
     pub board: Option<String>,
     pub udise: Option<String>,
     pub phone: Option<String>,
+    /// Optional UPI id set on the School wizard step (skippable, §10.1). When
+    /// present it must be a valid VPA; `upi_name` defaults to the school name.
+    #[serde(default)]
+    pub upi_id: Option<String>,
+    #[serde(default)]
+    pub upi_name: Option<String>,
 }
 
 pub fn setup_school_logic(conn: &mut Connection, input: &SchoolInput) -> CmdResult<()> {
@@ -138,6 +144,26 @@ pub fn setup_school_logic(conn: &mut Connection, input: &SchoolInput) -> CmdResu
     // A random 16-byte backup salt (recovery-key backup key is derived from it).
     let mut salt = [0u8; 16];
     rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut salt);
+
+    // Optional UPI id — validated only when the Principal typed one (the field is
+    // skippable). Default the display name to the school name; receipts show the
+    // QR only when a UPI id is set and the receipts toggle is on (default on here).
+    let mut settings = serde_json::json!({ "phone": input.phone });
+    if let Some(vpa) = input.upi_id.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        let vpa = vidya_core::upi::validate_vpa(vpa)?;
+        let upi_name = input
+            .upi_name
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+            .unwrap_or_else(|| name.clone());
+        settings["upi_id"] = serde_json::Value::String(vpa);
+        settings["upi_name"] = serde_json::Value::String(upi_name);
+        settings["upi_on_receipts"] = serde_json::Value::Bool(true);
+        settings["upi_on_reminders"] = serde_json::Value::Bool(true);
+        settings["upi_on_dues_list"] = serde_json::Value::Bool(false);
+    }
 
     // Create the school row (or update if setup is being redone before completion).
     let existing: Option<String> = conn
@@ -150,7 +176,7 @@ pub fn setup_school_logic(conn: &mut Connection, input: &SchoolInput) -> CmdResu
          ON CONFLICT(id) DO UPDATE SET name=excluded.name, address=excluded.address, \
            board=excluded.board, udise=excluded.udise, updated_at=excluded.updated_at",
         params![school_id, name, input.address, input.board, input.udise, salt.to_vec(),
-            serde_json::json!({ "phone": input.phone }).to_string(), now],
+            settings.to_string(), now],
     )?;
 
     // Move the pending licence (from activation) into the licence table now that
@@ -1693,6 +1719,10 @@ pub struct ReceiptDto {
     pub advance_credit_paise: i64,
     pub balance_after_paise: i64,
     pub reversed: bool,
+    /// A `upi://pay` link pre-filled for the remaining balance — present only when
+    /// the school has a UPI id, the "show QR on receipts" toggle is on, and the
+    /// balance after this payment is > 0 (§10.1). The webview renders it as a QR.
+    pub upi_link: Option<String>,
 }
 
 pub fn get_receipt_logic(conn: &mut Connection, actor_s: &SessionStaff, id: &str) -> CmdResult<ReceiptDto> {
@@ -1747,6 +1777,19 @@ pub fn get_receipt_logic(conn: &mut Connection, actor_s: &SessionStaff, id: &str
         .optional()?
         .is_some();
 
+    // Balance UPI QR (§10.1): only when configured, the receipts toggle is on, and
+    // there is still a balance to pay. Note trimmed to ≤50 chars inside upi_uri.
+    let pay = crate::upi::PaymentSettings::read(conn)?;
+    let upi_link = if pay.on_receipts && balance_after_paise > 0 {
+        let note = match &class_display {
+            Some(c) => format!("Fees {student_name} {c}"),
+            None => format!("Fees {student_name}"),
+        };
+        pay.link(balance_after_paise, &note)
+    } else {
+        None
+    };
+
     Ok(ReceiptDto {
         id: pid,
         receipt_no,
@@ -1769,6 +1812,7 @@ pub fn get_receipt_logic(conn: &mut Connection, actor_s: &SessionStaff, id: &str
         advance_credit_paise,
         balance_after_paise,
         reversed,
+        upi_link,
     })
 }
 
@@ -3594,6 +3638,107 @@ pub fn set_module_logic(conn: &mut Connection, actor_s: &SessionStaff, key: &str
     })?;
     tx.commit()?;
     Ok(())
+}
+
+// ============================================================= payments (UPI) =
+
+/// Read the school's UPI settings (Settings → Payments, the reminder sheet, the
+/// receipt QR). Any signed-in staff may read it — it is non-sensitive school
+/// config and several roles render the QR.
+pub fn get_payment_settings_logic(conn: &mut Connection) -> CmdResult<crate::upi::PaymentSettings> {
+    Ok(crate::upi::PaymentSettings::read(conn)?)
+}
+
+#[derive(Debug, Deserialize)]
+pub struct PaymentSettingsInput {
+    /// Empty / absent clears the UPI id (no QR anywhere).
+    pub upi_id: Option<String>,
+    pub upi_name: Option<String>,
+    pub on_receipts: bool,
+    pub on_reminders: bool,
+    pub on_dues_list: bool,
+}
+
+/// Save the school's UPI settings (Principal only, §10.1). Validates the VPA when
+/// present, merges into `school.settings_json` (keeping `phone`), and audits.
+pub fn set_payment_settings_logic(
+    conn: &mut Connection,
+    actor_s: &SessionStaff,
+    input: &PaymentSettingsInput,
+) -> CmdResult<()> {
+    let actor = actor_from(conn, actor_s)?;
+    require_allow(&actor, Action::Settings, &Target { kind: TargetKind::School, ..Default::default() })?;
+
+    // Read the current blob so we don't drop `phone` or any other key.
+    let (school_id, raw): (String, Option<String>) = conn
+        .query_row("SELECT id, settings_json FROM school LIMIT 1", [], |r| Ok((r.get(0)?, r.get(1)?)))
+        .optional()?
+        .ok_or_else(CmdError::not_found)?;
+    let mut settings: serde_json::Value = raw
+        .and_then(|s| serde_json::from_str(&s).ok())
+        .unwrap_or_else(|| serde_json::json!({}));
+
+    let vpa = match input.upi_id.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        Some(v) => Some(vidya_core::upi::validate_vpa(v)?),
+        None => None,
+    };
+    let name = input
+        .upi_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string);
+    match (&vpa, &name) {
+        (Some(v), _) => {
+            settings["upi_id"] = serde_json::Value::String(v.clone());
+            // Default the display name to the school name when left blank.
+            let display = name.unwrap_or_else(|| {
+                conn.query_row("SELECT name FROM school WHERE id=?1", params![school_id], |r| r.get::<_, String>(0))
+                    .unwrap_or_default()
+            });
+            settings["upi_name"] = serde_json::Value::String(display);
+        }
+        (None, _) => {
+            // Clearing the UPI id removes both fields; toggles are kept but inert.
+            settings.as_object_mut().map(|m| m.remove("upi_id"));
+            settings.as_object_mut().map(|m| m.remove("upi_name"));
+        }
+    }
+    settings["upi_on_receipts"] = serde_json::Value::Bool(input.on_receipts);
+    settings["upi_on_reminders"] = serde_json::Value::Bool(input.on_reminders);
+    settings["upi_on_dues_list"] = serde_json::Value::Bool(input.on_dues_list);
+
+    let now = now_iso();
+    let tx = conn.transaction()?;
+    tx.execute(
+        "UPDATE school SET settings_json=?1, updated_at=?2 WHERE id=?3",
+        params![settings.to_string(), now, school_id],
+    )?;
+    crate::security::audit::append(&tx, &AuditEntry {
+        at: now.clone(),
+        staff_id: Some(actor_s.id.clone()),
+        action: "set_payment_settings".into(),
+        table: Some("school".into()),
+        record_id: Some(school_id.clone()),
+        // The VPA is not a secret (it is printed on receipts), but keep the audit
+        // to just the fact of the change + toggles.
+        after_json: Some(serde_json::json!({
+            "upi_id_set": vpa.is_some(),
+            "on_receipts": input.on_receipts,
+            "on_reminders": input.on_reminders,
+            "on_dues_list": input.on_dues_list,
+        }).to_string()),
+        ..Default::default()
+    })?;
+    tx.commit()?;
+    Ok(())
+}
+
+/// Render any string as an SVG QR code (navy on white). Used by the receipt,
+/// reminder sheet and printed dues list; a pure rendering helper, so any signed-in
+/// staff may call it.
+pub fn qr_svg_logic(data: &str) -> CmdResult<String> {
+    crate::upi::qr_svg(data).map_err(|e| CmdError::internal(format!("qr: {e}")))
 }
 
 // ============================================================ calendar =======

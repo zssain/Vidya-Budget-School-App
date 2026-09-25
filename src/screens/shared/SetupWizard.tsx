@@ -36,6 +36,7 @@ export default function SetupWizard({ startStep }: { startStep: number }) {
   const [board, setBoard] = useState('CBSE')
   const [udise, setUdise] = useState('')
   const [phone, setPhone] = useState('')
+  const [upiId, setUpiId] = useState('')
   // Step 2 — session
   const [label, setLabel] = useState('2026–27')
   // Step 4 — you
@@ -74,7 +75,7 @@ export default function SetupWizard({ startStep }: { startStep: number }) {
 
   async function submitSchool() {
     await guard(async () => {
-      await api.setup_school({ name, address, board, udise: udise || null, phone })
+      await api.setup_school({ name, address, board, udise: udise || null, phone, upi_id: upiId.trim() || null })
       next()
     })
   }
@@ -180,6 +181,8 @@ export default function SetupWizard({ startStep }: { startStep: number }) {
             ))}
             {field('setup.school.udise', <input style={inputStyle} value={udise} onChange={(e) => setUdise(e.target.value)} />)}
             {field('setup.school.phone', <input style={inputStyle} value={phone} onChange={(e) => setPhone(e.target.value)} />)}
+            {field('setup.school.upi', <input style={inputStyle} value={upiId} onChange={(e) => setUpiId(e.target.value)} placeholder="yourschool@okhdfcbank" autoComplete="off" />)}
+            <p style={{ fontSize: 12, color: 'var(--muted)', margin: '-8px 0 14px' }}>{t('setup.school.upiHint')}</p>
             {primaryBtn(t('setup.continue'), submitSchool)}
           </>
         )
