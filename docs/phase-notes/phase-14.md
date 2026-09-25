@@ -1,10 +1,10 @@
 # Phase 14 handoff — Communication (UPI QR, email, WhatsApp, absence alerts, fee reminders, circulars)
 
-> **Status: IN PROGRESS.** Steps 0, 1 and the Step 2 **foundation** are built, tested
-> and committed. Steps 2 (Android native), 3–7 and the Playwright fidelity of Step 8
-> are **specced in detail below and not yet built** — a scoped runway, the way P12/P13
-> handed off partial phases. Every committed increment is genuinely working and green;
-> nothing is marked "done" that isn't.
+> **Status: IN PROGRESS.** Steps 0, 1, the Step 2 **foundation**, and **Step 5** are
+> built, tested and committed. Steps 2 (Android native), 3, 4, 6, 7 and the Playwright
+> fidelity of Step 8 are **specced in detail below and not yet built** — a scoped runway,
+> the way P12/P13 handed off partial phases. Every committed increment is genuinely
+> working and green; nothing is marked "done" that isn't.
 
 ## Start state / environment
 - Branch `v2/p14`, cut from `v2/p13` @ `71b0658`. HEAD at write time `ab46f3f`.
@@ -19,6 +19,8 @@
   | `fcc6d30` | 0 — verification checks (`docs/phase-14-checks.md`) |
   | `bb6a20d` | 1 — UPI settings + per-student balance QR |
   | `ab46f3f` | 2 (part) — message outbox foundation + desktop tap-to-WhatsApp |
+  | `abe535f` | interim handoff + OWNER-DECISIONS #13 |
+  | `863fc6b` | 5 — Fee dues screen + reminder sheet |
 
 ## Owner decisions taken this phase
 - **#13 Gmail (`gmail.send`) → decided (interim): run the OAuth app in Testing mode now**,
@@ -162,19 +164,29 @@ present — a Rule-3 doc/code discrepancy, reported). Step 2's phone share sheet
 - Desktop register: same action for a chosen date. Principal setting "who may send absence alerts"
   (class teacher default) stored in `settings_json`.
 
-### Step 5 — Fee dues + reminders (desktop; highly testable, no Android)
-- Fees → **Dues** screen (prototype `feesadmin` state 2): strip (total due, students with dues,
-  overdue instalments, collected today), table (student + primary guardian, class, **fee head**
-  as the "instalment" column until P15 adds real instalments, due-date pill, amount, Email /
-  WhatsApp), bulk "**Email all N parents**" (queues one `email` message per eligible guardian,
-  reporting counts skipped for no-email / no-consent), filters. Reuse the existing dues query
-  (`student_dues`) + guardians.
-- Reminder sheet (prototype `feesadmin` state 3): channel segmented (Email free / WhatsApp free /
-  Automatic — shown only if `wa_auto` on), language chips, preview **with the UPI QR** (reuse
-  `PaymentSettings.link` + `qr_svg`; gate by the `on_reminders` toggle), Send.
-- New action `SendFeeReminder` (Core; **Accountant + Principal**; Teacher never). Extend
-  `action_for_message_kind`: `fee_reminder → SendFeeReminder`. Template `fee_reminder`
-  (placeholders incl. `upi_link`). Accountant + Principal only; teachers never see this screen.
+### Step 5 — Fee dues + reminders (DONE, committed `863fc6b`)
+- **vidya-core**: new action **`SendFeeReminder`** (Core; Accountant + Principal; Teacher never),
+  wired through `Action`/`ALL`/`as_key`/`from_key`/`can`/`module_for`/`target_kind`. **Changed test
+  expectation:** `action_all_covers_every_variant…` now asserts `ALL.len() == 41` (was 40) — the
+  only P14 behaviour change to an existing test so far; the exhaustive `role_matrix` derives the
+  new row automatically.
+- **app**: `list_dues_logic` (strip: total due / students with dues / unpaid dues / collected
+  today; one row per outstanding fee due with the student's primary guardian + `messages` consent
+  + fee head + balance; optional class filter). `render_fee_reminder` fills the `fee_reminder`
+  template in the guardian's language with `{amount}` (Indian ₹ grouping, `inr`), `{instalment}`
+  (fee heads until P15 due dates), `{upi_link}` (gated by the reminders toggle). `preview_fee_reminder`
+  (sheet) + `queue_fee_reminders` (bulk "Email all", queues one `email` message per **eligible**
+  guardian = has email AND consent, counts skipped no-email / no-consent). Message insert refactored
+  into `insert_message_in_tx` (shared single + bulk). Commands `list_dues` / `preview_fee_reminder`
+  / `queue_fee_reminders`.
+- **frontend**: Fees → **Dues** tab (`FeesDues.tsx`, prototype `feesadmin` 2): strip + table
+  (Email / WhatsApp per row) + "Email all N parents" with a skip summary + the reminder sheet
+  (`feesadmin` 3: channel segmented Email/WhatsApp, language chips, preview **with the UPI QR**,
+  Send). Email → queued; WhatsApp → `wa_tap` row + `wa.me`. i18n en/hi.
+- **Seed gap (noted):** the demo seed inserts students with **no guardian rows** (real schools
+  create guardians inline via `create_student`), so with the demo seed the Dues table shows no
+  guardian names and 0 emailable. A seed guardian backfill is a small follow-up (also helps the
+  Playwright `feesadmin` fidelity + a richer demo). Real data is unaffected.
 
 ### Step 6 — Circulars & notices (module `circulars`, on by default)
 - **Migration 0018**: `circular(id, number, title, body, languages_json, audience_json,
@@ -220,11 +232,14 @@ present — a Rule-3 doc/code discrepancy, reported). Step 2's phone share sheet
   recipient when server-side sending lands (Step 3/7).
 
 ## Tests (all real, this session)
-- `cargo test -p vidya-core` — upi **11**, messages **8** (+ existing); `cargo test -p vidya --lib`
-  → **218 passed / 0 failed** (was 215 at P13 tip; +3 messaging: wa_tap `tapped`+op, teacher
-  forbidden, bad kind/channel).
+- `cargo test -p vidya-core --lib` → **362 passed** (upi **11**, messages **8**, +permissions
+  SendFeeReminder); `cargo test -p vidya --lib` → **222 passed / 0 failed** (was 215 at P13 tip;
+  +3 messaging, +5 Step 5: `inr` grouping, dues list + reminder queue + skip, no-UPI toggle,
+  teacher forbidden).
+- **Changed existing test expectation (P14):** `permissions::…action_all_covers…` `ALL.len()`
+  40→41 (added `SendFeeReminder`). No other existing test value changed.
 - `cargo clippy -p vidya -p vidya-core --lib -- -D warnings` → clean.
-- `npm run typecheck` clean; `check:i18n` **954 keys en/hi in sync**; `check:hex` OK (42 tokens,
+- `npm run typecheck` clean; `check:i18n` **990 keys en/hi in sync**; `check:hex` OK (42 tokens,
   no new colours); `api.test.ts` command parity green (COMMANDS ↔ commands.json ↔ api.ts).
 - **Owed once the later steps land:** MIME snapshot tests (Step 3), circular numbering test (Step
   6), the offline→sync→fake-Gmail→status integration (Step 3), and Playwright prototype fidelity
