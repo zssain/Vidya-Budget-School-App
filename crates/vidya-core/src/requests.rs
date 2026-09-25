@@ -22,7 +22,66 @@
 use serde::{Deserialize, Serialize};
 
 use crate::errors::{CoreError, CoreResult};
-use crate::types::RequestType;
+use crate::types::{RequestType, Role};
+
+// ============================================================ registry =======
+//
+// P13: every request type is served through the same lifecycle (below) but
+// declares its policy here — who may raise it, who decides, whether its apply
+// function is implemented yet, and whether approval enforces the stale
+// (base_version) check. Existing types are declared to match their current
+// behaviour exactly; the new v2 types (Leave, AttendanceDuty, ClassNotice)
+// validate and store now, with their apply functions landing in P16/P17.
+
+/// The policy for one request type (P13 approval registry).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RequestSpec {
+    pub request_type: RequestType,
+    /// Roles that may open this request (the decider — Principal — never needs
+    /// one; they act directly).
+    pub raisers: &'static [Role],
+    /// Who decides the request.
+    pub decider: Role,
+    /// Is the apply function implemented yet? (`false` = approved-but-not-applied
+    /// until its owning phase implements the write.)
+    pub apply_available: bool,
+    /// Does approval require `base_version` to still equal the target's current
+    /// version (§8.5)? Corrections to locked rows do; the rest don't.
+    pub enforce_stale: bool,
+}
+
+/// The registry entry for a request type.
+pub fn spec(request_type: RequestType) -> RequestSpec {
+    use RequestType::*;
+    // Helper closures for common role sets.
+    const TEACHER: &[Role] = &[Role::Teacher];
+    const ACCOUNTANT: &[Role] = &[Role::Accountant];
+    const ANY_STAFF: &[Role] = &[Role::Principal, Role::Accountant, Role::Teacher];
+    let (raisers, apply_available, enforce_stale): (&'static [Role], bool, bool) = match request_type {
+        // Corrections to locked academic rows: raised by the class/subject teacher,
+        // applied today, stale-checked against the locked row's version.
+        MarksCorrection => (TEACHER, false, true),
+        AttendanceCorrection => (TEACHER, true, true),
+        // Student-detail edits: the accountant raises; the Principal edits directly.
+        StudentDetails => (ACCOUNTANT, false, true),
+        // Payment reversal: the accountant raises; applied on approval (writes the
+        // reversal + voucher). Reversals don't depend on a target version.
+        PaymentReversal => (ACCOUNTANT, true, false),
+        // Access / device changes: staff-initiated, not yet auto-applied.
+        AccessChange => (ANY_STAFF, false, false),
+        DeviceReplacement => (ANY_STAFF, false, false),
+        // v2 additions — validate & store now; apply in their phases.
+        Leave => (ANY_STAFF, false, false),        // P17
+        AttendanceDuty => (TEACHER, false, false),  // P16/P17
+        ClassNotice => (TEACHER, false, false),     // P14 (teacher-drafted notices)
+    };
+    RequestSpec { request_type, raisers, decider: Role::Principal, apply_available, enforce_stale }
+}
+
+/// May `role` raise a request of this type?
+pub fn can_raise(request_type: RequestType, role: Role) -> bool {
+    spec(request_type).raisers.contains(&role)
+}
 
 /// Minimum characters for a reject/return note.
 const NOTE_MIN: usize = 5;
@@ -603,5 +662,48 @@ mod tests {
         let applied = mark_applied(&approved).unwrap();
         // A second transition is refused.
         assert!(matches!(mark_failed(&applied), Err(CoreError::Forbidden { .. })));
+    }
+
+    // ---- registry (P13) -------------------------------------------------
+
+    #[test]
+    fn every_type_has_a_spec_decided_by_the_principal() {
+        for rt in RequestType::ALL {
+            let s = spec(rt);
+            assert_eq!(s.request_type, rt);
+            assert_eq!(s.decider, Role::Principal);
+            assert!(!s.raisers.is_empty(), "{:?} must have a raiser", rt);
+        }
+    }
+
+    #[test]
+    fn apply_available_matches_current_behaviour() {
+        // Today only attendance corrections and payment reversals auto-apply on
+        // approval; everything else (incl. the new v2 types) is approved-only.
+        for rt in RequestType::ALL {
+            let expected = matches!(rt, RequestType::AttendanceCorrection | RequestType::PaymentReversal);
+            assert_eq!(spec(rt).apply_available, expected, "{:?}", rt);
+        }
+    }
+
+    #[test]
+    fn can_raise_new_types() {
+        // Teachers draft class notices and request attendance duty.
+        assert!(can_raise(RequestType::ClassNotice, Role::Teacher));
+        assert!(can_raise(RequestType::AttendanceDuty, Role::Teacher));
+        // Accountants cannot draft a class notice.
+        assert!(!can_raise(RequestType::ClassNotice, Role::Accountant));
+        // Any staff member can apply for leave.
+        for role in [Role::Principal, Role::Accountant, Role::Teacher] {
+            assert!(can_raise(RequestType::Leave, role));
+        }
+    }
+
+    #[test]
+    fn keys_round_trip_for_every_type() {
+        for rt in RequestType::ALL {
+            assert_eq!(RequestType::from_key(rt.as_key()), Some(rt));
+        }
+        assert_eq!(RequestType::from_key("nope"), None);
     }
 }

@@ -18,6 +18,7 @@ pub const MIGRATIONS: &[(i64, &str)] = &[
     (9, include_str!("migrations/0009_v2_guardians.sql")),
     (10, include_str!("migrations/0010_v2_ledger.sql")),
     (11, include_str!("migrations/0011_v2_numbering.sql")),
+    (12, include_str!("migrations/0012_v2_request_types.sql")),
 ];
 
 // A per-thread frozen clock for deterministic tests. Compiled ONLY in debug
@@ -245,6 +246,58 @@ mod tests {
         // The legacy columns are untouched.
         let legacy: String = conn.query_row("SELECT guardian_name FROM student WHERE id='s1'", [], |r| r.get(0)).unwrap();
         assert_eq!(legacy, "Ramesh Kumar");
+    }
+
+    /// P13 Step 5: the request-table recreate (0012) keeps existing request rows
+    /// and now accepts the new v2 types (leave / attendance_duty / class_notice).
+    #[test]
+    fn request_type_rebuild_preserves_rows_and_accepts_new_types() {
+        let mut conn = open_in_memory(KEY).unwrap();
+        for (v, sql) in MIGRATIONS.iter().filter(|(v, _)| *v <= 11) {
+            let tx = conn.transaction().unwrap();
+            tx.execute_batch(sql).unwrap();
+            tx.execute("INSERT INTO schema_version(version, applied_at) VALUES (?1, 't')", rusqlite::params![v]).unwrap();
+            tx.commit().unwrap();
+        }
+        conn.execute("INSERT INTO school(id,name,backup_salt,created_at,updated_at) VALUES ('sch','S',x'00','t','t')", []).unwrap();
+        conn.execute("INSERT INTO staff(id,name,role,created_at,updated_at) VALUES ('st1','Meena','teacher','t','t')", []).unwrap();
+        // A pre-rebuild request of an existing type (marks_correction).
+        conn.execute(
+            "INSERT INTO request(id,type,target_table,target_id,base_version,reason,requested_by,created_at,updated_at) \
+             VALUES ('rq1','marks_correction','mark_entry','m1',1,'fix mark','st1','t','t')",
+            [],
+        )
+        .unwrap();
+        // Before the rebuild the new type is rejected by the old CHECK.
+        assert!(conn
+            .execute(
+                "INSERT INTO request(id,type,target_table,target_id,base_version,reason,requested_by,created_at,updated_at) \
+                 VALUES ('rq2','leave','staff','st1',0,'casual leave','st1','t','t')",
+                [],
+            )
+            .is_err());
+
+        // Apply 0012.
+        assert_eq!(run_migrations(&mut conn).unwrap(), MIGRATIONS.last().map(|(v, _)| *v).unwrap());
+
+        // The existing request survived.
+        let t: String = conn.query_row("SELECT type FROM request WHERE id='rq1'", [], |r| r.get(0)).unwrap();
+        assert_eq!(t, "marks_correction");
+        // A new-type request now inserts.
+        conn.execute(
+            "INSERT INTO request(id,type,target_table,target_id,base_version,reason,requested_by,created_at,updated_at) \
+             VALUES ('rq2','leave','staff','st1',0,'casual leave','st1','t','t')",
+            [],
+        )
+        .unwrap();
+        // But a genuinely unknown type is still rejected.
+        assert!(conn
+            .execute(
+                "INSERT INTO request(id,type,target_table,target_id,base_version,reason,requested_by,created_at,updated_at) \
+                 VALUES ('rq3','nope','staff','st1',0,'x','st1','t','t')",
+                [],
+            )
+            .is_err());
     }
 
     #[test]

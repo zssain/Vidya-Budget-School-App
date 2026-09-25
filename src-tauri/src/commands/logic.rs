@@ -2522,6 +2522,16 @@ const REQUEST_SELECT: &str = "SELECT r.id, r.type, r.target_table, r.target_id, 
      FROM request r JOIN staff s ON s.id = r.requested_by";
 
 pub fn create_request_logic(conn: &mut Connection, actor_s: &SessionStaff, input: &RequestInput) -> CmdResult<RequestDto> {
+    // Validate the request type against the approval registry (P13). For the new
+    // v2 types (leave / attendance_duty / class_notice) also enforce who may raise
+    // them; the existing types keep their current create behaviour unchanged.
+    let rt = vidya_core::types::RequestType::from_key(&input.kind)
+        .ok_or_else(|| CmdError::validation("kind", "unknown"))?;
+    if matches!(rt, vidya_core::types::RequestType::Leave | vidya_core::types::RequestType::AttendanceDuty | vidya_core::types::RequestType::ClassNotice)
+        && !vidya_core::requests::can_raise(rt, role_from(&actor_s.role)?)
+    {
+        return Err(CmdError::forbidden("cannot_raise"));
+    }
     // One open request per target (§requests): reject a duplicate.
     let pending: bool = conn
         .query_row(
@@ -2622,7 +2632,11 @@ pub fn decide_request_logic(
         .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
         .and_then(|v| v.get("value").and_then(|x| x.as_str()).map(str::to_string));
 
-    let applied: bool = matches!(req.kind.as_str(), "attendance_correction" | "payment_reversal");
+    // Whether this type auto-applies on approval is declared by the approval
+    // registry (P13) — identical to the previous hard-coded list.
+    let applied: bool = vidya_core::types::RequestType::from_key(&req.kind)
+        .map(|rt| vidya_core::requests::spec(rt).apply_available)
+        .unwrap_or(false);
     let ctx = WriteCtx { mode: device_mode };
     let req_id = id.to_string();
     let kind = req.kind.clone();
@@ -4301,6 +4315,43 @@ mod tests {
         let s = new_student(&mut c, "Riya Verma", Some("Ramesh Verma"), Some("9876543210"));
         let teacher = SessionStaff { id: "stf-meena".into(), name: "Meena Iyer".into(), role: "teacher".into() };
         assert_eq!(add_guardian_logic(&mut c, &teacher, None, DeviceMode::Server, &s, &ge("X", None)).unwrap_err().code, "FORBIDDEN");
+    }
+
+    // ---- Phase 13: approval registry ---------------------------------------
+    fn req_input(kind: &str, target_id: &str) -> RequestInput {
+        RequestInput {
+            kind: kind.into(), target_table: "staff".into(), target_id: target_id.into(),
+            base_version: 0, reason: "Casual leave for two days.".into(),
+            before_json: None, after_json: Some("{}".into()),
+        }
+    }
+
+    #[test]
+    fn teacher_can_raise_a_leave_request_and_it_stores_pending() {
+        let mut c = seeded();
+        let teacher = SessionStaff { id: "stf-meena".into(), name: "Meena Iyer".into(), role: "teacher".into() };
+        let dto = create_request_logic(&mut c, &teacher, &req_input("leave", "stf-meena")).unwrap();
+        assert_eq!(dto.kind, "leave");
+        assert_eq!(dto.status, "pending");
+        // Approving it does NOT auto-apply (apply function lands in P17).
+        let decided = decide_request_logic(&mut c, &principal(), DeviceMode::Server, &dto.id, "approve", Some("ok")).unwrap();
+        assert_eq!(decided.status, "approved");
+        let apply_state: String = c.query_row("SELECT apply_state FROM request WHERE id=?1", params![dto.id], |r| r.get(0)).unwrap();
+        assert_eq!(apply_state, "not_applied");
+    }
+
+    #[test]
+    fn accountant_cannot_raise_a_class_notice() {
+        let mut c = seeded();
+        let err = create_request_logic(&mut c, &accountant(), &req_input("class_notice", "stf-suresh")).unwrap_err();
+        assert_eq!(err.code, "FORBIDDEN");
+    }
+
+    #[test]
+    fn unknown_request_kind_is_rejected() {
+        let mut c = seeded();
+        let err = create_request_logic(&mut c, &principal(), &req_input("banana", "stf-priya")).unwrap_err();
+        assert_eq!(err.code, "VALIDATION");
     }
 
     // ---- Phase 13: ledger vouchers -----------------------------------------
