@@ -10,20 +10,6 @@ use rusqlite::{params, Connection, OptionalExtension, Transaction};
 use vidya_core::ledger::{self, Entry};
 use vidya_core::types::PaymentMode;
 
-/// The next voucher number for `series`: `V-<series>-<seq>` (seq zero-padded to
-/// 4, grows past 9999). Mirrors the receipt-number scheme; generalised in Step 4.
-pub fn next_voucher_no(conn: &Connection, series: &str) -> rusqlite::Result<String> {
-    let last: i64 = conn
-        .query_row(
-            "SELECT COALESCE(MAX(CAST(substr(voucher_no, length(?1)+4) AS INTEGER)),0) FROM voucher WHERE voucher_no LIKE ?2",
-            params![series, format!("V-{series}-%")],
-            |r| r.get(0),
-        )
-        .optional()?
-        .unwrap_or(0);
-    Ok(format!("V-{series}-{:04}", last + 1))
-}
-
 /// The date part (`YYYY-MM-DD`) of an ISO timestamp.
 fn date_of(iso: &str) -> String {
     iso.get(0..10).unwrap_or(iso).to_string()
@@ -106,7 +92,7 @@ pub fn post_payment_voucher(
         return Ok(());
     }
     let series = series_for_receipt(receipt_no);
-    let voucher_no = next_voucher_no(tx, &series)?;
+    let voucher_no = crate::numbering::next_no(tx, vidya_core::numbering::NumberKind::Voucher, &series)?;
     let entries = build(ledger::voucher_for_payment(mode, amount_paise))?;
     let narration = format!("Fee receipt {receipt_no}");
     post_voucher(
@@ -134,7 +120,7 @@ pub fn post_reversal_voucher(
         return Ok(());
     }
     let series = series_for_receipt(receipt_no);
-    let voucher_no = next_voucher_no(tx, &series)?;
+    let voucher_no = crate::numbering::next_no(tx, vidya_core::numbering::NumberKind::Voucher, &series)?;
     let entries = build(ledger::voucher_for_reversal(mode, amount_paise))?;
     let narration = format!("Reversal of receipt {receipt_no}");
     post_voucher(

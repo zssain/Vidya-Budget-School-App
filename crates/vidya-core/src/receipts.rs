@@ -16,8 +16,9 @@
 /// assert_eq!(next_receipt_no("A2", 9999), "R-A2-10000");
 /// ```
 pub fn next_receipt_no(series: &str, last_seq: u32) -> String {
-    let seq = last_seq + 1;
-    format!("R-{series}-{seq:04}")
+    // Delegates the format to the unified numbering engine (P13); the output is
+    // unchanged and cross-checked in `numbering`'s tests.
+    crate::numbering::format_number(crate::numbering::NumberKind::Receipt, series, last_seq + 1)
 }
 
 /// Parse a receipt number back into `(series, seq)`.

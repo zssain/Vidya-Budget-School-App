@@ -13,7 +13,6 @@ use vidya_core::grades::{self, GradeBand, SubjectMark};
 use vidya_core::marks::MarkEntry;
 use vidya_core::money::Paise;
 use vidya_core::permissions::{self, Action, Actor, Target, TargetKind};
-use vidya_core::receipts;
 use vidya_core::types::{PaymentMode, Role, StaffState};
 
 use crate::ctx::RtCtx;
@@ -2341,9 +2340,10 @@ pub fn record_payment_logic(
     let dues: Vec<Due> = lines.iter().map(|l| Due { id: l.id.clone(), balance: Paise(l.balance_paise) }).collect();
     let allocation = fees::allocate(Paise(input.amount_paise), &dues);
 
-    // Receipt number from this device's series.
-    let (series, last_seq) = receipt_series_and_last(conn, device_id)?;
-    let receipt_no = receipts::next_receipt_no(&series, last_seq);
+    // The receipt series for this device (the sequence is reserved atomically
+    // inside the write transaction below via the P13 numbering engine — the
+    // number format and continuity are unchanged: still R-<series>-NNNN).
+    let series = receipt_series_and_last(conn, device_id)?.0;
 
     let now = now_iso();
     let pid = new_id("pay");
@@ -2355,12 +2355,13 @@ pub fn record_payment_logic(
     let ctx = WriteCtx { mode: device_mode };
     let dto = {
         let pid = pid.clone();
-        let receipt_no = receipt_no.clone();
+        let series = series.clone();
         let student_id = input.student_id.clone();
         let mode_s = input.mode.clone();
         let allocation = allocation.clone();
         let dev = device_id.map(str::to_string);
         with_write(conn, &ctx, move |tx| {
+            let receipt_no = crate::numbering::next_no(tx, vidya_core::numbering::NumberKind::Receipt, &series)?;
             tx.execute(
                 "INSERT INTO payment(id,receipt_no,student_id,amount_paise,mode,reference,collected_by,collected_at,device_id,confirmed_at,created_at,updated_at,sync_state) \
                  VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?8,?8,?11)",

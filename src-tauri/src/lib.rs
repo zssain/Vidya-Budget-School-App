@@ -17,6 +17,7 @@ pub mod kv;
 pub mod ledger;
 pub mod licence;
 pub mod modules;
+pub mod numbering;
 pub mod reliability;
 pub mod security;
 pub mod server;
