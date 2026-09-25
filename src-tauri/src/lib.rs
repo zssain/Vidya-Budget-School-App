@@ -19,6 +19,7 @@ pub mod licence;
 pub mod modules;
 pub mod numbering;
 pub mod reliability;
+pub mod roles;
 pub mod security;
 pub mod server;
 pub mod session;
@@ -72,6 +73,11 @@ fn build_ctx(data_dir: std::path::PathBuf) -> RtCtx {
                         // so a hiccup never blocks startup.
                         if let Err(e) = ledger::backfill_vouchers(&mut conn) {
                             tracing::warn!("voucher backfill: {e}");
+                        }
+                        // v2 (P13): materialise the built-in role×action matrix
+                        // into role_permission (derived from vidya-core; idempotent).
+                        if let Err(e) = roles::seed_role_permissions(&mut conn) {
+                            tracing::warn!("role permission seed: {e}");
                         }
                         (Some(conn), false)
                     }

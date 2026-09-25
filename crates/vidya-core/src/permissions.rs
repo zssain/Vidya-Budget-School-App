@@ -556,6 +556,131 @@ fn class_subject_owned(actor: &Actor, target: &Target) -> bool {
     }
 }
 
+// ======================================================= roles as data =======
+//
+// P13: the role × action matrix is represented as data — `role` +
+// `role_permission(role, action, effect allow|request)` — so future role
+// templates can be added without code. `can` remains the authoritative decision
+// point (the exhaustive matrix test still asserts §5 over it); the data is DERIVED
+// from `can` (`default_permissions`), so it can never drift, and a loaded set can
+// be read back with `effect_of`. A missing (role, action) entry means deny.
+
+impl Action {
+    /// Every action variant (for the matrix-as-data seed and exhaustive checks).
+    pub const ALL: [Action; 40] = [
+        Action::CreateStudent, Action::EnrollStudent, Action::TransferSection, Action::MarkStudentLeft,
+        Action::EditStudentDetails, Action::ViewStudent, Action::ViewGuardianAddress,
+        Action::StudentCsvImport, Action::StudentCsvExport,
+        Action::ViewFees, Action::RecordPayment, Action::PrintShareReceipt, Action::PaymentReversal,
+        Action::DayBook, Action::FeeReports,
+        Action::TakeAttendance, Action::EditSubmittedAttendance, Action::ViewAttendance,
+        Action::EnterMarks, Action::EditSubmittedMarks, Action::ViewMarks, Action::ViewReportCard,
+        Action::ManageStaff, Action::InviteStaff, Action::SuspendStaff, Action::RemoveStaff,
+        Action::ManageDevices, Action::Settings, Action::Licence, Action::Drive, Action::Backups,
+        Action::Restore, Action::SessionRollover, Action::ApproveRequest,
+        Action::ViewOwnRequests, Action::ViewInbox, Action::ViewSync,
+        Action::EditOwnProfile, Action::ChangeOwnPin, Action::ChangeLanguage,
+    ];
+
+    /// The stable string stored in `role_permission.action` (serde snake_case).
+    pub fn as_key(&self) -> String {
+        serde_json::to_value(self).ok().and_then(|v| v.as_str().map(str::to_string)).unwrap_or_default()
+    }
+
+    /// Parse a `role_permission.action` string back into an `Action`.
+    pub fn from_key(s: &str) -> Option<Action> {
+        serde_json::from_value(serde_json::Value::String(s.to_string())).ok()
+    }
+}
+
+/// The effect a role has for an action in the matrix (`role_permission.effect`).
+/// `Deny` is represented by the ABSENCE of a row, not a value here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Effect {
+    Allow,
+    Request,
+}
+
+impl Effect {
+    pub fn as_key(&self) -> &'static str {
+        match self {
+            Effect::Allow => "allow",
+            Effect::Request => "request",
+        }
+    }
+    pub fn from_key(s: &str) -> Option<Effect> {
+        match s {
+            "allow" => Some(Effect::Allow),
+            "request" => Some(Effect::Request),
+            _ => None,
+        }
+    }
+}
+
+/// The natural target kind for an action (used to derive the coarse matrix).
+fn target_kind_for(action: Action) -> TargetKind {
+    use Action::*;
+    match action {
+        CreateStudent | EnrollStudent | TransferSection | MarkStudentLeft | EditStudentDetails
+        | ViewStudent | ViewGuardianAddress | StudentCsvImport | StudentCsvExport => TargetKind::Student,
+        ViewFees | RecordPayment | PrintShareReceipt | PaymentReversal | DayBook | FeeReports => TargetKind::Fee,
+        TakeAttendance | EditSubmittedAttendance | ViewAttendance => TargetKind::Attendance,
+        EnterMarks | EditSubmittedMarks | ViewMarks | ViewReportCard => TargetKind::Marks,
+        ManageStaff | InviteStaff | SuspendStaff | RemoveStaff | ManageDevices => TargetKind::Staff,
+        Settings | Licence | Drive | Backups | Restore | SessionRollover => TargetKind::School,
+        ApproveRequest => TargetKind::Request,
+        ViewOwnRequests | ViewInbox | ViewSync | EditOwnProfile | ChangeOwnPin | ChangeLanguage => TargetKind::Own,
+    }
+}
+
+/// An active actor of `role` with a class assignment, for deriving capability.
+fn representative_actor(role: Role) -> Actor {
+    Actor {
+        staff_id: "seed".into(),
+        role,
+        state: StaffState::Active,
+        class_teacher_of: vec!["c1".into()],
+        class_subjects: vec!["cs1".into()],
+    }
+}
+
+/// A favourable, unlocked target that the actor would own — so `can` returns the
+/// role's *capability* (allow / request) rather than a target-specific deny.
+fn representative_target(action: Action) -> Target {
+    Target {
+        kind: target_kind_for(action),
+        class_id: Some("c1".to_string()),
+        class_subject_id: Some("cs1".to_string()),
+        is_locked: false,
+        is_own: true,
+    }
+}
+
+/// The built-in role × action matrix as data — every `(role, action)` a role can
+/// perform, with its effect (allow / request). Derived from `can`, so the seed can
+/// never disagree with the code. Denials are omitted. Seeds `role_permission`.
+pub fn default_permissions() -> Vec<(Role, Action, Effect)> {
+    let mut out = Vec::new();
+    for role in [Role::Principal, Role::Accountant, Role::Teacher] {
+        let actor = representative_actor(role);
+        for action in Action::ALL {
+            match can(&actor, action, &representative_target(action)) {
+                Decision::Allow { .. } => out.push((role, action, Effect::Allow)),
+                Decision::NeedsRequest(_) => out.push((role, action, Effect::Request)),
+                Decision::Deny { .. } => {}
+            }
+        }
+    }
+    out
+}
+
+/// Read a loaded permission set (as loaded from `role_permission`): the effect for
+/// `(role, action)`, or `None` (deny) if absent. Pure — the caller supplies the set.
+pub fn effect_of(set: &[(Role, Action, Effect)], role: Role, action: Action) -> Option<Effect> {
+    set.iter().find(|(r, a, _)| *r == role && *a == action).map(|(_, _, e)| *e)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1107,5 +1232,56 @@ mod tests {
         let a = Action::RecordPayment;
         let j = serde_json::to_string(&a).unwrap();
         assert_eq!(j, "\"record_payment\"");
+    }
+
+    // ---- roles as data (P13) --------------------------------------------
+
+    #[test]
+    fn action_all_covers_every_variant_and_keys_round_trip() {
+        assert_eq!(Action::ALL.len(), 40);
+        for a in Action::ALL {
+            assert_eq!(Action::from_key(&a.as_key()), Some(a), "{a:?}");
+        }
+        assert_eq!(Action::from_key("nope"), None);
+        assert_eq!(Effect::from_key(Effect::Allow.as_key()), Some(Effect::Allow));
+    }
+
+    #[test]
+    fn default_permissions_are_consistent_with_can_and_readable() {
+        let set = default_permissions();
+        for role in [Role::Principal, Role::Accountant, Role::Teacher] {
+            let actor = representative_actor(role);
+            for action in Action::ALL {
+                let expected = match can(&actor, action, &representative_target(action)) {
+                    Decision::Allow { .. } => Some(Effect::Allow),
+                    Decision::NeedsRequest(_) => Some(Effect::Request),
+                    Decision::Deny { .. } => None,
+                };
+                assert_eq!(effect_of(&set, role, action), expected, "{role:?} {action:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn matrix_shape_matches_section_5() {
+        let set = default_permissions();
+        // Principal can do every action (allow).
+        for action in Action::ALL {
+            assert_eq!(effect_of(&set, Role::Principal, action), Some(Effect::Allow), "principal {action:?}");
+        }
+        // Accountant: fees yes, marks/attendance no; student-detail edits via request.
+        assert_eq!(effect_of(&set, Role::Accountant, Action::ViewFees), Some(Effect::Allow));
+        assert_eq!(effect_of(&set, Role::Accountant, Action::ViewMarks), None);
+        assert_eq!(effect_of(&set, Role::Accountant, Action::EditStudentDetails), Some(Effect::Request));
+        // Teacher: attendance yes (own class), fees never. EditSubmitted* is the
+        // base capability (allow); the correction-request layer is lock-triggered
+        // inside `can`, not a role-level policy, so it isn't in the coarse matrix.
+        assert_eq!(effect_of(&set, Role::Teacher, Action::TakeAttendance), Some(Effect::Allow));
+        assert_eq!(effect_of(&set, Role::Teacher, Action::ViewFees), None);
+        assert_eq!(effect_of(&set, Role::Teacher, Action::EnterMarks), Some(Effect::Allow));
+        // Everyone: own profile.
+        for role in [Role::Principal, Role::Accountant, Role::Teacher] {
+            assert_eq!(effect_of(&set, role, Action::EditOwnProfile), Some(Effect::Allow));
+        }
     }
 }
