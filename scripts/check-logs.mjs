@@ -13,7 +13,9 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url))
-const SCAN_DIRS = ['src-tauri/src', 'cloud/relay/src', 'cloud/licence/src', 'crates/vidya-core/src']
+// cloud/licence was retired in v2 and moved to cloud/_archive/licence (P12 Step 8);
+// keep scanning it there for reference (it is not shipped).
+const SCAN_DIRS = ['src-tauri/src', 'cloud/relay/src', 'cloud/_archive/licence/src', 'crates/vidya-core/src']
 
 // Identifiers that must never be logged as a value. Word-boundary matched.
 const SECRETS = [

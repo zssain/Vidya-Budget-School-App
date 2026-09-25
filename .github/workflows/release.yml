@@ -10,11 +10,14 @@ name: Release
 # release notes carry an "Unsigned build" banner (rule 6 — never fake a signature).
 # Android is debug-signed `-UNSIGNED-TEST` until the owner adds the keystore secrets.
 #
-# BUILD-CONFIG (required): the five non-secret build-config values are read from
-# repo Variables and written to build-config/release.json before each build; a
-# missing value fails the job with a clear message (build.rs is the backstop and
-# also refuses the dev licence key). Only §4 allow-listed actions are used; the
-# cross-job SHA256SUMS uses the preinstalled `gh` CLI (no download-artifact).
+# BUILD-CONFIG (required): the non-secret build-config values are read from repo
+# Variables and written to build-config/release.json before each build; a missing
+# value fails the job with a clear message (build.rs is the backstop and also
+# refuses the dev licence key). v2 (Phase 12): there is NO LICENCE_API — licences
+# verify offline; LICENCE_PUBLIC_KEY_PREV and RELAY_URL are optional. Only §4
+# allow-listed actions are used; the cross-job SHA256SUMS uses the preinstalled
+# `gh` CLI (no download-artifact). The final job also writes site/releases.json on
+# the default branch so the static download page (site/) lists this release.
 
 on:
   push:
@@ -44,8 +47,8 @@ jobs:
       - name: Write build-config/release.json (fail if any value is missing)
         shell: bash
         env:
-          LICENCE_API: ${{ vars.LICENCE_API }}
           LICENCE_PUBLIC_KEY: ${{ vars.LICENCE_PUBLIC_KEY }}
+          LICENCE_PUBLIC_KEY_PREV: ${{ vars.LICENCE_PUBLIC_KEY_PREV }}
           RELAY_URL: ${{ vars.RELAY_URL }}
           GOOGLE_CLIENT_ID_DESKTOP: ${{ vars.GOOGLE_CLIENT_ID_DESKTOP }}
           GOOGLE_CLIENT_ID_ANDROID: ${{ vars.GOOGLE_CLIENT_ID_ANDROID }}
@@ -95,8 +98,8 @@ jobs:
       - name: Write build-config/release.json (fail if any value is missing)
         shell: bash
         env:
-          LICENCE_API: ${{ vars.LICENCE_API }}
           LICENCE_PUBLIC_KEY: ${{ vars.LICENCE_PUBLIC_KEY }}
+          LICENCE_PUBLIC_KEY_PREV: ${{ vars.LICENCE_PUBLIC_KEY_PREV }}
           RELAY_URL: ${{ vars.RELAY_URL }}
           GOOGLE_CLIENT_ID_DESKTOP: ${{ vars.GOOGLE_CLIENT_ID_DESKTOP }}
           GOOGLE_CLIENT_ID_ANDROID: ${{ vars.GOOGLE_CLIENT_ID_ANDROID }}
@@ -158,8 +161,8 @@ jobs:
         run: node scripts/set-version.mjs "${GITHUB_REF_NAME#v}"
       - name: Write build-config/release.json (fail if any value is missing)
         env:
-          LICENCE_API: ${{ vars.LICENCE_API }}
           LICENCE_PUBLIC_KEY: ${{ vars.LICENCE_PUBLIC_KEY }}
+          LICENCE_PUBLIC_KEY_PREV: ${{ vars.LICENCE_PUBLIC_KEY_PREV }}
           RELAY_URL: ${{ vars.RELAY_URL }}
           GOOGLE_CLIENT_ID_DESKTOP: ${{ vars.GOOGLE_CLIENT_ID_DESKTOP }}
           GOOGLE_CLIENT_ID_ANDROID: ${{ vars.GOOGLE_CLIENT_ID_ANDROID }}
@@ -238,3 +241,30 @@ jobs:
           name: Vidya ${{ github.ref_name }}
           body_path: release-notes.md
           files: release/SHA256SUMS.txt
+      # Write site/releases.json on the default branch so the static Downloads page
+      # (site/downloads.html) lists this release (prompts/P12 Step 9). No deploy —
+      # GitHub/Cloudflare Pages picks up the committed file (docs/DEPLOY-SITE.md).
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: '.nvmrc'
+      - name: Update site/releases.json on the default branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          VER="${GITHUB_REF_NAME#v}"
+          DATE="$(date -u +%F)"
+          rm -rf pages
+          git clone --depth 1 --branch "$DEFAULT_BRANCH" \
+            "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" pages
+          node scripts/write-site-releases.mjs release "$VER" "$DATE" "$GITHUB_REPOSITORY" pages/site/releases.json
+          cd pages
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          if git diff --quiet -- site/releases.json; then
+            echo "site/releases.json unchanged — nothing to commit"
+          else
+            git add site/releases.json
+            git commit -m "release: update site/releases.json for ${GITHUB_REF_NAME}"
+            git push origin "HEAD:${DEFAULT_BRANCH}"
+          fi

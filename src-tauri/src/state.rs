@@ -23,8 +23,10 @@ pub const SETUP_STEPS: i64 = 6;
 pub const KV_SETUP_STEP: &str = "setup_step";
 /// app_kv key: the verified licence held between activation and school creation.
 pub const KV_PENDING_LICENCE: &str = "pending_licence";
-/// app_kv key: the relay secret issued by `cloud/licence` at activation (P05 §10).
-/// The school server presents it to open its outbound tunnel to the Vidya relay.
+/// app_kv key: the relay secret the school server presents to open its outbound
+/// tunnel to the Vidya relay (P05 §10). v2 (Phase 12): activation is offline and no
+/// longer issues this — it is provisioned only for the optional `instant_sync`
+/// add-on (§14), which is off by default; unused otherwise.
 pub const KV_RELAY_SECRET: &str = "relay_secret";
 
 /// The staff member of the current unlocked session.

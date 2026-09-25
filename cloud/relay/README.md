@@ -1,9 +1,17 @@
 # Vidya relay (`cloud/relay`)
 
+> **Optional add-on (Instant sync) — not needed for normal use.** In v2 the
+> internet route is the school's Google Drive sync account (docs §8.3 route 2,
+> §11). The relay is the paid, off-by-default **`instant_sync`** module (§14): a
+> release without a `RELAY_URL` is valid, and devices reach the school over LAN or
+> Drive. This service stays here as a company-run add-on, wired in only when a
+> school buys Instant sync. It has its own `[workspace]` and is excluded from the
+> app build.
+
 A small, **stateless** reverse tunnel that lets staff devices reach a school server
 from anywhere (mobile data, home Wi‑Fi) without the school opening router ports
-(docs §8.3 route 2, prompts/P05 Step 1). It is a **separate binary** and is **never
-shipped inside the apps**.
+(prompts/P05 Step 1). It is a **separate binary** and is **never shipped inside the
+apps**.
 
 ## What it does
 

@@ -37,8 +37,11 @@ GoogleService-Info.plist
 # Real release build config (only build-config/release.json.example is committed)
 src-tauri/build-config/release.json
 
-# Dev licence service keypair (generated on first run — prompts/P03 Step 2)
+# Dev licence service keypair (generated on first run — prompts/P03 Step 2).
+# Never commit signing keys. Covers the retired server's new home (P12 Step 8).
 cloud/licence/.dev-keys/
+cloud/_archive/licence/.dev-keys/
+**/.dev-keys/
 
 # Test fixtures
 .test-phone-*
