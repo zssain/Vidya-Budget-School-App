@@ -30,6 +30,8 @@ pub enum CoreError {
     DuplicateAdmissionNo,
     #[error("licence invalid")]
     LicenceInvalid,
+    #[error("licence is for another computer")]
+    LicenceOtherMachine,
     #[error("licence revoked")]
     LicenceRevoked,
     #[error("licence moved")]
@@ -68,6 +70,7 @@ impl CoreError {
             CoreError::RequestStale => "REQUEST_STALE",
             CoreError::DuplicateAdmissionNo => "DUPLICATE_ADMISSION_NO",
             CoreError::LicenceInvalid => "LICENCE_INVALID",
+            CoreError::LicenceOtherMachine => "LICENCE_OTHER_MACHINE",
             CoreError::LicenceRevoked => "LICENCE_REVOKED",
             CoreError::LicenceMoved => "LICENCE_MOVED",
             CoreError::LicenceLimit { .. } => "LICENCE_LIMIT",

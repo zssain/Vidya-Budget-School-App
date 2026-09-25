@@ -27,6 +27,7 @@ fn now_utc() -> time::OffsetDateTime {
 pub const COMMANDS: &[&str] = &[
     "app_state",
     "activate_licence",
+    "machine_code",
     "setup_school",
     "setup_session",
     "setup_classes",
@@ -144,8 +145,14 @@ pub fn app_state(state: State<RtCtx>) -> CmdResult<AppStateResponse> {
 // -------------------------------------------------------------- licence ------
 
 #[tauri::command]
-pub async fn activate_licence(state: State<'_, RtCtx>, code: String, school_name: String) -> CmdResult<AppStateResponse> {
-    activate_licence_impl(&state, &code, &school_name).await
+pub fn activate_licence(state: State<RtCtx>, licence_key: String) -> CmdResult<AppStateResponse> {
+    activate_licence_impl(&state, &licence_key)
+}
+
+/// This computer's machine code (`XXXX-XXXX-XXXX-C`) for Welcome → Set up.
+#[tauri::command]
+pub fn machine_code(state: State<RtCtx>) -> CmdResult<String> {
+    Ok(machine_code_impl(&state))
 }
 
 // ---------------------------------------------------------------- setup ------

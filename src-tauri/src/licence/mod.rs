@@ -1,204 +1,98 @@
-//! App-side licence: machine id, activation, signature verification, re-check
-//! (docs/00-SYSTEM-CONTEXT.md §10, prompts/P03 Step 3).
+//! App-side licence: machine id/code, **offline** verification (docs §10,
+//! prompts/P12 Step 6).
 //!
-//! Business model is one-time / perpetual (no expiry, no grace). The app verifies
-//! the ed25519 signature offline with the public key from build config
-//! (`crate::config`) via `vidya_core::licence::verify`, then re-checks the service
-//! every 30 days when online — only an explicit `revoked`/`moved` changes status.
+//! v2 licences are offline files: a **licence key** (or `.vlic`) minted by
+//! `tools/licence-maker` and pasted / loaded on Welcome → Set up. The app verifies
+//! the ed25519 signature against the build-config public key(s) and checks the
+//! licence is bound to THIS computer's machine code. Perpetual: no expiry, no
+//! online check, no remote revoke.
+//!
+//! v1 licences (already-activated installs) keep verifying via
+//! `vidya_core::licence::verify` and are now treated as perpetual — the 30-day
+//! online re-check and grace logic were removed in Phase 12.
 
 use std::path::PathBuf;
 
-use serde::Serialize;
-use time::OffsetDateTime;
-use vidya_core::licence::{CheckResult, Licence};
+use base64::engine::general_purpose::STANDARD;
+use base64::Engine;
 
 pub mod machine;
-
-/// How often to re-check the licence with the service when online (§10).
-pub const RECHECK_DAYS: i64 = 30;
 
 /// A user-facing licence failure. Commands turn this into `{code, message_key, vars}`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LicenceError {
-    /// Service unreachable / 503 (offline). Activation needs internet once.
-    Unreachable,
-    /// 404: the code is unknown to the service.
-    CodeNotFound,
-    /// 409: the code was already used by another school/machine.
-    CodeAlreadyUsed,
-    /// Signature/verify failed, malformed response, or machine-id mismatch.
+    /// Signature invalid, not a v2 licence, or a malformed key / file.
     Invalid,
+    /// Correctly signed, but issued for a different computer.
+    OtherMachine,
 }
 
 impl LicenceError {
     /// Stable machine code (mirrors the error contract in §10).
     pub fn code(&self) -> &'static str {
         match self {
-            LicenceError::Unreachable => "LICENCE_UNREACHABLE",
-            LicenceError::CodeNotFound => "CODE_NOT_FOUND",
-            LicenceError::CodeAlreadyUsed => "CODE_ALREADY_USED",
             LicenceError::Invalid => "LICENCE_INVALID",
+            LicenceError::OtherMachine => "LICENCE_OTHER_MACHINE",
         }
     }
     /// i18n key for the message the UI shows.
     pub fn message_key(&self) -> &'static str {
         match self {
-            LicenceError::Unreachable => "licence.needs_internet",
-            LicenceError::CodeNotFound => "licence.code_not_found",
-            LicenceError::CodeAlreadyUsed => "licence.code_already_used",
             LicenceError::Invalid => "licence.invalid",
+            LicenceError::OtherMachine => "licence.other_machine",
         }
     }
 }
 
-/// A verified activation, ready to persist.
+/// A verified offline licence, ready to persist into the `licence` table.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Activation {
-    pub licence: Licence,
-    /// Base64 licence JSON exactly as the service returned it (stored in `raw_json`).
-    pub licence_b64: String,
-    /// Base64 ed25519 signature (stored in `licence.signature`).
+pub struct OfflineLicence {
+    pub licence_id: String,
+    pub school_name: String,
+    pub plan: String,
+    pub issued_at: String,
+    /// STANDARD base64 of the signed payload bytes (stored in `licence.raw_json`).
+    pub payload_b64: String,
+    /// STANDARD base64 of the 64-byte signature (stored in `licence.signature`).
     pub signature_b64: String,
-    /// The relay secret the school server presents to the Vidya relay (P05 §10).
-    /// Empty when the (older) service did not return one — the relay route is then
-    /// simply unavailable until the school re-activates against the new service.
-    pub relay_secret: String,
 }
 
-#[derive(Debug, Serialize)]
-struct ActivateBody<'a> {
-    code: &'a str,
-    school_name: &'a str,
-    machine_id: &'a str,
-    app_version: &'a str,
-}
-
-#[derive(Debug, Serialize)]
-struct CheckBody<'a> {
-    licence_id: &'a str,
-    machine_id: &'a str,
-}
-
-/// Parse an `/v1/activate` HTTP result into an [`Activation`] or [`LicenceError`].
+/// Verify a pasted licence key OR the text contents of a `.vlic` file against this
+/// computer's machine code and the build-config public key(s).
 ///
-/// Pure (no IO) so it is unit-testable. `status` is the HTTP status code; `body`
-/// is the raw response body; `machine_id` is this device's id (checked against the
-/// signed `server_machine_id`); `public_key` is the build-config licence key.
-pub fn parse_activate(
-    status: u16,
-    body: &str,
-    machine_id: &str,
-    public_key: &[u8; 32],
-) -> Result<Activation, LicenceError> {
-    match status {
-        200 => {}
-        404 => return Err(LicenceError::CodeNotFound),
-        409 => return Err(LicenceError::CodeAlreadyUsed),
-        503 => return Err(LicenceError::Unreachable),
-        _ => return Err(LicenceError::Invalid),
-    }
-    let v: serde_json::Value = serde_json::from_str(body).map_err(|_| LicenceError::Invalid)?;
-    let licence_b64 = v.get("licence").and_then(|x| x.as_str()).ok_or(LicenceError::Invalid)?;
-    let signature_b64 = v.get("signature").and_then(|x| x.as_str()).ok_or(LicenceError::Invalid)?;
-    // Optional (P05 §10): the relay secret. Tolerated-when-absent so a pre-P05
-    // service still activates (the relay route is then just unavailable).
-    let relay_secret = v.get("relay_secret").and_then(|x| x.as_str()).unwrap_or("").to_string();
-
-    // Verify the ed25519 signature offline with vidya-core.
-    let licence = vidya_core::licence::verify(licence_b64, signature_b64, public_key)
+/// Every public key is tried (supporting key rotation): a valid signature for THIS
+/// machine → `Ok`; a valid signature for another machine → [`LicenceError::OtherMachine`];
+/// nothing valid → [`LicenceError::Invalid`].
+pub fn verify_offline(
+    key_or_vlic_text: &str,
+    machine_code: &str,
+    public_keys: &[[u8; 32]],
+) -> Result<OfflineLicence, LicenceError> {
+    let (payload, signature) = vidya_core::licence::parse_licence_key(key_or_vlic_text)
         .map_err(|_| LicenceError::Invalid)?;
 
-    // The licence must be bound to THIS machine (the server machine at activation).
-    if licence.server_machine_id != machine_id {
-        return Err(LicenceError::Invalid);
+    let mut saw_other_machine = false;
+    for key in public_keys {
+        match vidya_core::licence::verify_v2(&payload, &signature, key, machine_code) {
+            Ok(lic) => {
+                return Ok(OfflineLicence {
+                    licence_id: lic.licence_id,
+                    school_name: lic.school_name,
+                    plan: lic.plan,
+                    issued_at: lic.issued_at,
+                    payload_b64: STANDARD.encode(&payload),
+                    signature_b64: STANDARD.encode(&signature),
+                });
+            }
+            Err(vidya_core::errors::CoreError::LicenceOtherMachine) => saw_other_machine = true,
+            Err(_) => {}
+        }
     }
-
-    Ok(Activation {
-        licence,
-        licence_b64: licence_b64.to_string(),
-        signature_b64: signature_b64.to_string(),
-        relay_secret,
+    Err(if saw_other_machine {
+        LicenceError::OtherMachine
+    } else {
+        LicenceError::Invalid
     })
-}
-
-/// Activate a code against the licence service and verify the returned licence.
-///
-/// Network/timeout/connection failures map to [`LicenceError::Unreachable`]
-/// ("Activation needs internet once — please try again.").
-pub async fn activate(
-    client: &reqwest::Client,
-    licence_api: &str,
-    code: &str,
-    school_name: &str,
-    machine_id: &str,
-    app_version: &str,
-    public_key: &[u8; 32],
-) -> Result<Activation, LicenceError> {
-    let url = format!("{}/v1/activate", licence_api.trim_end_matches('/'));
-    let resp = client
-        .post(url)
-        .json(&ActivateBody { code, school_name, machine_id, app_version })
-        .send()
-        .await
-        .map_err(|_| LicenceError::Unreachable)?;
-    let status = resp.status().as_u16();
-    let body = resp.text().await.map_err(|_| LicenceError::Unreachable)?;
-    parse_activate(status, &body, machine_id, public_key)
-}
-
-/// Re-check a licence's status. `None` = service unreachable (licence stays
-/// active under the perpetual model — §10).
-pub async fn check(
-    client: &reqwest::Client,
-    licence_api: &str,
-    licence_id: &str,
-    machine_id: &str,
-) -> Option<CheckResult> {
-    let url = format!("{}/v1/check", licence_api.trim_end_matches('/'));
-    let resp = client
-        .post(url)
-        .json(&CheckBody { licence_id, machine_id })
-        .send()
-        .await
-        .ok()?;
-    if !resp.status().is_success() {
-        return None;
-    }
-    let v: serde_json::Value = resp.json().await.ok()?;
-    match v.get("status").and_then(|s| s.as_str())? {
-        "active" => Some(CheckResult::Active),
-        "revoked" => Some(CheckResult::Revoked),
-        "moved" => Some(CheckResult::Moved),
-        _ => None,
-    }
-}
-
-/// Persist a licence re-check result (P05 Step 5). Returns the new status string.
-/// `moved`/`revoked` are how the licence service fences a PC that is no longer the
-/// school server; the app then stops serving and goes read-only.
-pub fn persist_check(conn: &rusqlite::Connection, result: CheckResult, now: OffsetDateTime) -> rusqlite::Result<&'static str> {
-    let status = match result {
-        CheckResult::Active => "active",
-        CheckResult::Revoked => "revoked",
-        CheckResult::Moved => "moved",
-    };
-    conn.execute(
-        "UPDATE licence SET status=?1, last_check_at=?2",
-        rusqlite::params![status, now.format(&time::format_description::well_known::Rfc3339).unwrap_or_default()],
-    )?;
-    Ok(status)
-}
-
-/// Whether a re-check is due: no prior check, an unparseable timestamp, or more
-/// than [`RECHECK_DAYS`] since `last_check_at` (RFC-3339).
-pub fn should_recheck(last_check_at: Option<&str>, now: OffsetDateTime) -> bool {
-    match last_check_at {
-        None => true,
-        Some(s) => match OffsetDateTime::parse(s, &time::format_description::well_known::Rfc3339) {
-            Ok(last) => (now - last) >= time::Duration::days(RECHECK_DAYS),
-            Err(_) => true,
-        },
-    }
 }
 
 /// Default location of the machine-id fallback file (used on Android/tests where
@@ -210,9 +104,8 @@ pub fn machine_id_fallback_path(app_data_dir: &std::path::Path) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use base64::engine::general_purpose::STANDARD;
-    use base64::Engine;
     use ed25519_dalek::{Signer, SigningKey};
+    use vidya_core::licence::{encode_licence_key, machine_code, LicenceV2};
 
     fn keypair(seed: u8) -> (SigningKey, [u8; 32]) {
         let s = SigningKey::from_bytes(&[seed; 32]);
@@ -220,108 +113,59 @@ mod tests {
         (s, p)
     }
 
-    fn signed_body(lic: &Licence, signing: &SigningKey) -> String {
-        let raw = serde_json::to_vec(lic).unwrap();
-        let lic_b64 = STANDARD.encode(&raw);
-        let sig_b64 = STANDARD.encode(signing.sign(&raw).to_bytes());
-        serde_json::json!({ "licence": lic_b64, "signature": sig_b64 }).to_string()
-    }
-
-    fn sample(machine: &str) -> Licence {
-        Licence {
-            licence_id: "lic_1".into(),
-            school_id: "sch_1".into(),
+    fn make_key(machine: &str, signing: &SigningKey) -> String {
+        let lic = LicenceV2 {
+            v: 2,
+            licence_id: "lic-1".into(),
+            school_name: "Test School".into(),
+            machine_code: machine.into(),
+            issued_at: "2026-09-25T00:00:00Z".into(),
             plan: "perpetual".into(),
-            max_students: None,
-            max_devices: None,
-            issued_at: "2026-09-23T00:00:00Z".into(),
-            server_machine_id: machine.into(),
-        }
+            modules: vec!["core".into()],
+        };
+        let payload = serde_json::to_vec(&lic).unwrap();
+        let sig = signing.sign(&payload).to_bytes();
+        encode_licence_key(&payload, &sig)
     }
 
     #[test]
-    fn good_activation_verifies_and_binds_machine() {
-        let (signing, public) = keypair(7);
-        let body = signed_body(&sample("machine-A"), &signing);
-        let act = parse_activate(200, &body, "machine-A", &public).unwrap();
-        assert_eq!(act.licence.licence_id, "lic_1");
-        assert_eq!(act.licence.plan, "perpetual");
+    fn verifies_for_this_machine() {
+        let (signing, public) = keypair(5);
+        let mc = machine_code("this-pc");
+        let key = make_key(&mc, &signing);
+        let lic = verify_offline(&key, &mc, &[public]).unwrap();
+        assert_eq!(lic.licence_id, "lic-1");
+        assert_eq!(lic.school_name, "Test School");
+        assert_eq!(lic.plan, "perpetual");
+        assert!(!lic.payload_b64.is_empty() && !lic.signature_b64.is_empty());
     }
 
     #[test]
-    fn relay_secret_is_parsed_when_present_and_empty_when_absent() {
-        let (signing, public) = keypair(7);
-        // Absent → empty (backwards compatible with a pre-P05 service).
-        let body = signed_body(&sample("machine-A"), &signing);
-        assert_eq!(parse_activate(200, &body, "machine-A", &public).unwrap().relay_secret, "");
-        // Present → carried through.
-        let lic = sample("machine-A");
-        let raw = serde_json::to_vec(&lic).unwrap();
-        let with_secret = serde_json::json!({
-            "licence": STANDARD.encode(&raw),
-            "signature": STANDARD.encode(signing.sign(&raw).to_bytes()),
-            "relay_secret": "cnMtc2VjcmV0",
-        })
-        .to_string();
-        let act = parse_activate(200, &with_secret, "machine-A", &public).unwrap();
-        assert_eq!(act.relay_secret, "cnMtc2VjcmV0");
+    fn wrong_machine_is_other_machine() {
+        let (signing, public) = keypair(5);
+        let key = make_key(&machine_code("pc-A"), &signing);
+        assert_eq!(
+            verify_offline(&key, &machine_code("pc-B"), &[public]),
+            Err(LicenceError::OtherMachine)
+        );
     }
 
     #[test]
-    fn machine_mismatch_is_invalid() {
-        let (signing, public) = keypair(7);
-        let body = signed_body(&sample("machine-A"), &signing);
-        assert_eq!(parse_activate(200, &body, "machine-B", &public), Err(LicenceError::Invalid));
+    fn garbage_is_invalid() {
+        let (_s, public) = keypair(5);
+        assert_eq!(verify_offline("not-a-key", "0000-0000-0000-0", &[public]), Err(LicenceError::Invalid));
     }
 
     #[test]
-    fn wrong_key_is_invalid() {
-        let (signing, _public) = keypair(7);
+    fn tries_all_public_keys_for_rotation() {
+        let (signing, public) = keypair(5);
         let (_s2, wrong) = keypair(9);
-        let body = signed_body(&sample("machine-A"), &signing);
-        assert_eq!(parse_activate(200, &body, "machine-A", &wrong), Err(LicenceError::Invalid));
-    }
-
-    #[test]
-    fn http_error_codes_map() {
-        let (_s, public) = keypair(7);
-        assert_eq!(parse_activate(404, "{}", "m", &public), Err(LicenceError::CodeNotFound));
-        assert_eq!(parse_activate(409, "{}", "m", &public), Err(LicenceError::CodeAlreadyUsed));
-        assert_eq!(parse_activate(503, "", "m", &public), Err(LicenceError::Unreachable));
-        assert_eq!(parse_activate(500, "", "m", &public), Err(LicenceError::Invalid));
-    }
-
-    #[test]
-    fn error_codes_and_keys() {
-        assert_eq!(LicenceError::CodeAlreadyUsed.code(), "CODE_ALREADY_USED");
-        assert_eq!(LicenceError::Unreachable.message_key(), "licence.needs_internet");
-    }
-
-    #[test]
-    fn persist_check_updates_status() {
-        let mut c = crate::db::open_in_memory("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef").unwrap();
-        crate::db::run_migrations(&mut c).unwrap();
-        c.execute(
-            "INSERT INTO school(id,name,backup_salt,created_at,updated_at) VALUES ('sch','S',x'00','t','t')",
-            [],
-        ).unwrap();
-        c.execute(
-            "INSERT INTO licence(licence_id,school_id,plan,issued_at,signature,raw_json,status) VALUES ('lic','sch','perpetual','t','sig','{}','active')",
-            [],
-        ).unwrap();
-        let now = OffsetDateTime::parse("2026-09-23T00:00:00Z", &time::format_description::well_known::Rfc3339).unwrap();
-        assert_eq!(persist_check(&c, CheckResult::Moved, now).unwrap(), "moved");
-        let status: String = c.query_row("SELECT status FROM licence LIMIT 1", [], |r| r.get(0)).unwrap();
-        assert_eq!(status, "moved");
-    }
-
-    #[test]
-    fn recheck_timing() {
-        let fmt = &time::format_description::well_known::Rfc3339;
-        let now = OffsetDateTime::parse("2026-09-23T00:00:00Z", fmt).unwrap();
-        assert!(should_recheck(None, now));
-        assert!(should_recheck(Some("garbage"), now));
-        assert!(!should_recheck(Some("2026-09-10T00:00:00Z"), now)); // 13 days
-        assert!(should_recheck(Some("2026-08-01T00:00:00Z"), now)); // > 30 days
+        let mc = machine_code("this-pc");
+        let key = make_key(&mc, &signing);
+        // The right key is second in the list (rotation scenario).
+        let lic = verify_offline(&key, &mc, &[wrong, public]).unwrap();
+        assert_eq!(lic.licence_id, "lic-1");
+        // No matching key at all → Invalid.
+        assert_eq!(verify_offline(&key, &mc, &[wrong]), Err(LicenceError::Invalid));
     }
 }

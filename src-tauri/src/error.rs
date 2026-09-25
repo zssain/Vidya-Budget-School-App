@@ -97,9 +97,12 @@ mod tests {
 
     #[test]
     fn licence_error_maps() {
-        let e: CmdError = LicenceError::CodeAlreadyUsed.into();
-        assert_eq!(e.code, "CODE_ALREADY_USED");
-        assert_eq!(e.message_key, "licence.code_already_used");
+        // v2 offline licences (Phase 12): only Invalid / OtherMachine remain.
+        let e: CmdError = LicenceError::OtherMachine.into();
+        assert_eq!(e.code, "LICENCE_OTHER_MACHINE");
+        assert_eq!(e.message_key, "licence.other_machine");
+        let e2: CmdError = LicenceError::Invalid.into();
+        assert_eq!(e2.code, "LICENCE_INVALID");
     }
 
     #[test]

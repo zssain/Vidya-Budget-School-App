@@ -1,14 +1,20 @@
-//! Build-time configuration (docs/00-SYSTEM-CONTEXT.md §10, prompts/P03 Step 1).
+//! Build-time configuration (docs/00-SYSTEM-CONTEXT.md §10, prompts/P12 Step 6/8).
 //!
-//! `LICENCE_API`, `RELAY_URL`, the licence public key and the Google OAuth client
+//! The licence public key(s), the optional `RELAY_URL` and the Google OAuth client
 //! ids come from ONE build-time config file — never hard-coded anywhere else. The
 //! file for the active build profile is embedded at compile time with
 //! `include_str!`:
 //!
 //! * debug builds → `build-config/dev.json`
 //! * release builds → `build-config/release.json` (never committed; created from
-//!   `release.json.example`). `build.rs` fails a release build if any value is
-//!   empty, so a release binary can never ship blank config.
+//!   `release.json.example`). `build.rs` fails a release build if a required value
+//!   is empty or if it still uses the dev licence key.
+//!
+//! v2 (Phase 12): licences are verified **offline** — there is no `LICENCE_API`.
+//! `licence_public_keys` is a LIST so the owner can rotate the signing key (e.g. a
+//! lost laptop) while previously issued licences keep verifying (see
+//! `tools/licence-maker/README.md`). `relay_url` is optional (the off-by-default
+//! "Instant sync" module, §14).
 
 use serde::Deserialize;
 use std::sync::OnceLock;
@@ -19,15 +25,17 @@ const RAW: &str = include_str!("../build-config/dev.json");
 #[cfg(not(debug_assertions))]
 const RAW: &str = include_str!("../build-config/release.json");
 
-/// The five build-time values (docs/00-SYSTEM-CONTEXT.md §10). No other file may
+/// The build-time values (docs/00-SYSTEM-CONTEXT.md §10). No other file may
 /// contain these values.
 #[derive(Debug, Clone, Deserialize)]
 pub struct BuildConfig {
-    /// Base URL of the licence service, e.g. `http://127.0.0.1:8787` in dev.
-    pub licence_api: String,
-    /// STANDARD base64 of the licence service's 32-byte ed25519 public key.
-    pub licence_public_key: String,
-    /// Base URL of the Vidya relay (used from Phase 5; unused in Phase 3).
+    /// STANDARD base64 of one or more 32-byte ed25519 licence public keys. A
+    /// licence verifies if it is signed by ANY of these keys, so the owner can add
+    /// a new key (lost-laptop rotation) without invalidating old licences.
+    pub licence_public_keys: Vec<String>,
+    /// Base URL of the Vidya relay — OPTIONAL (the off-by-default "Instant sync"
+    /// module, §14). Empty when the relay add-on is not shipped.
+    #[serde(default)]
     pub relay_url: String,
     /// Google OAuth desktop client id (used from Phase 6).
     pub google_client_id_desktop: String,
@@ -44,15 +52,20 @@ pub fn get() -> &'static BuildConfig {
     })
 }
 
-/// Decode the licence public key into the 32 raw bytes vidya-core expects.
-///
-/// Returns `None` when the key is absent (an empty dev value before the dev
-/// licence service has been run) or not a valid 32-byte base64 key.
-pub fn licence_public_key() -> Option<[u8; 32]> {
+/// Decode every configured licence public key into the 32 raw bytes vidya-core
+/// expects. Malformed / non-32-byte entries are skipped. May be empty in a dev
+/// build before a keypair has been generated.
+pub fn licence_public_keys() -> Vec<[u8; 32]> {
     use base64::engine::general_purpose::STANDARD;
     use base64::Engine;
-    let raw = STANDARD.decode(get().licence_public_key.as_bytes()).ok()?;
-    raw.try_into().ok()
+    get()
+        .licence_public_keys
+        .iter()
+        .filter_map(|s| {
+            let raw = STANDARD.decode(s.as_bytes()).ok()?;
+            raw.try_into().ok()
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -63,17 +76,17 @@ mod tests {
     fn embedded_config_parses() {
         // The active profile's JSON must always deserialize.
         let cfg = get();
-        // dev.json ships a working local licence API.
-        assert!(!cfg.licence_api.is_empty(), "dev licence_api must be set");
+        // dev.json ships at least one licence public key.
+        assert!(!cfg.licence_public_keys.is_empty(), "dev licence_public_keys must be set");
     }
 
     #[test]
-    fn public_key_is_none_or_32_bytes() {
-        // Empty (before `cloud/licence` has generated a key) → None; otherwise a
-        // valid 32-byte ed25519 public key.
-        match licence_public_key() {
-            None => {}
-            Some(k) => assert_eq!(k.len(), 32),
+    fn public_keys_are_32_bytes() {
+        // dev ships one working 32-byte ed25519 key; all decoded keys are 32 bytes.
+        let keys = licence_public_keys();
+        assert!(!keys.is_empty(), "dev build must decode at least one public key");
+        for k in keys {
+            assert_eq!(k.len(), 32);
         }
     }
 }

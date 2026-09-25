@@ -4,7 +4,9 @@ resolver = "2"
 members = ["src-tauri", "crates/vidya-core"]
 # cloud/* are standalone dev/company services (their own Cargo.toml + [workspace]);
 # they must never be pulled into the shipped app build (prompts/P03 Step 2).
-exclude = ["cloud/licence"]
+# tools/licence-maker is the owner's laptop-only licence tool — never shipped or
+# built by the app workspace (prompts/P12 Step 7); it has its own [workspace].
+exclude = ["cloud/licence", "cloud/_archive", "tools/licence-maker"]
 
 # Release profile tuned for size (see docs/00-SYSTEM-CONTEXT.md §2 limits).
 [profile.release]

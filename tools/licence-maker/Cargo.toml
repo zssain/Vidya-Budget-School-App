@@ -1,0 +1,26 @@
+[package]
+name = "licence-maker"
+version = "1.0.0"
+edition = "2021"
+description = "Vidya offline licence maker — owner's laptop only, NEVER shipped (prompts/P12 Step 7)."
+publish = false
+
+# Deps are limited to the set named in prompts/P12 Step 7. No CLI-arg crate is
+# allowed, so argument parsing is done by hand in `src/main.rs`.
+[dependencies]
+ed25519-dalek = "2"
+rand = "0.8"
+sha2 = "0.10"
+base64 = "0.22"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+time = { version = "0.3", features = ["formatting", "parsing", "macros"] }
+uuid = { version = "1", features = ["v7"] }
+
+[[bin]]
+name = "licence-maker"
+path = "src/main.rs"
+
+# This crate is deliberately its OWN workspace so it is never pulled into the
+# shipped Vidya app build (the root workspace also lists it under `exclude`).
+[workspace]

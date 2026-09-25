@@ -95,10 +95,11 @@ export default function App() {
 
   const route = routeForState(store.app.state)
 
-  const handleActivate = (code: string) => {
+  // v2 (Phase 12): the field carries the offline licence key (or loaded .vlic text).
+  const handleActivate = (licenceKey: string) => {
     setActivateErr(null)
     api
-      .activate_licence(code, '')
+      .activate_licence(licenceKey)
       .then(() => refreshAppState())
       .catch((e) => setActivateErr(e as CmdError))
   }

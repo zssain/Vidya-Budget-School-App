@@ -1,0 +1,164 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Downloads · Vidya Budget School</title>
+<meta name="description" content="Download Vidya for Windows, macOS and Android. Each download under 40 MB. Verify every download with its SHA-256 checksum.">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header class="site">
+  <div class="wrap">
+    <a class="brand" href="index.html"><img class="logo" src="assets/vidya-horizontal-on-light.svg" alt="Vidya Budget School"></a>
+    <nav class="site">
+      <a href="index.html">Home</a>
+      <a href="how-to-buy.html">How to buy</a>
+      <a href="downloads.html" class="active">Downloads</a>
+      <a href="privacy.html">Privacy</a>
+      <a href="terms.html">Terms</a>
+      <a href="refund.html">Refund</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+  <div class="wrap">
+
+    <span class="eyebrow">Downloads</span>
+    <h1>Get Vidya</h1>
+    <p class="sub">Each download under 40 MB. Your school's data stays on your school's computer.</p>
+
+    <p class="muted small mt" id="rel-meta"></p>
+
+    <!-- Downloads render from releases.json (below). No framework — a small amount of
+         vanilla JS reads the file and builds the table. Verify each file with its SHA-256. -->
+    <div id="downloads" class="mt2">
+      <div class="card"><p class="muted">Loading the latest release…</p></div>
+    </div>
+
+    <div class="notice notice-info mt3">
+      <b>Not counted in the download size but installed by the operating system when needed:</b>
+      the OS web engine (on Windows 10, Microsoft WebView2 may be downloaded once during install; on Android, the Android System WebView), plus your school's data, backups and logs.
+    </div>
+
+    <div class="card mt">
+      <h3>How to verify a download (SHA-256)</h3>
+      <p class="muted small">Some builds are unsigned. Before installing, check the file's SHA-256 checksum matches the value shown here.</p>
+      <ul class="muted small" style="padding-left:18px;">
+        <li><b>Windows (PowerShell):</b> <code>Get-FileHash .\Vidya_&lt;ver&gt;_x64-setup.exe -Algorithm SHA256</code></li>
+        <li><b>macOS / Linux:</b> <code>shasum -a 256 Vidya_&lt;ver&gt;_universal.dmg</code></li>
+        <li><b>Android:</b> use a checksum app, or compute the hash on a PC after downloading.</li>
+      </ul>
+    </div>
+
+    <div class="card mt">
+      <h3>Installing on Android</h3>
+      <p class="muted small">Android may warn that the app is from an unknown source. Open the downloaded APK, then when prompted tap <b>Settings → Allow from this source</b> (or <b>Install unknown apps</b>), turn it on for your browser or Files app, go back and tap <b>Install</b>. Choose the file that matches your phone — most phones use <b>arm64-v8a</b>; older 32-bit phones use <b>armeabi-v7a</b>.</p>
+    </div>
+
+  </div>
+</main>
+
+<footer class="site">
+  <div class="wrap">
+    <div>
+      <div class="credit">Developed by Zuhair Hussain</div>
+      <div>© 2026 Zuhair Hussain · Hyderabad, Telangana</div>
+    </div>
+    <div>
+      <div>Support: <a href="mailto:mohammedzuhairhussain28@gmail.com">mohammedzuhairhussain28@gmail.com</a></div>
+      <div><a href="https://vidya.zuhairhussain.com">vidya.zuhairhussain.com</a> · <a href="privacy.html">Privacy</a> · <a href="terms.html">Terms</a> · <a href="refund.html">Refund</a></div>
+    </div>
+  </div>
+</footer>
+
+<script>
+// Vanilla JS ONLY (no framework). Reads releases.json (schema in
+// cloud/licence/releases.example.json) and renders the downloads table.
+// Sizes are decimal bytes (docs/00-SYSTEM-CONTEXT §2: 40 MB = 40,000,000).
+(function () {
+  var root = document.getElementById('downloads');
+  var meta = document.getElementById('rel-meta');
+
+  function esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+
+  function mb(bytes) {
+    if (!bytes) return '—';
+    return (bytes / 1000000).toFixed(1) + ' MB';
+  }
+
+  function signing(signedBy) {
+    // Schema disclosed that release builds may be unsigned: signed_by === null.
+    if (signedBy) {
+      return '<span class="pill pill-signed">Signed by ' + esc(signedBy) + '</span>';
+    }
+    return '<span class="pill pill-unsigned">Unsigned (verify the SHA-256)</span>';
+  }
+
+  function render(data) {
+    var rels = (data && data.releases) || [];
+    // Draft releases are never listed.
+    var rel = rels.filter(function (r) { return !r.draft; })[0];
+
+    if (!rel) {
+      root.innerHTML =
+        '<div class="card"><p class="muted">No public releases yet. Once a build is published it will appear here with its version, size and SHA-256 checksum.</p></div>';
+      return;
+    }
+
+    var m = 'Latest version <b>' + esc(rel.version) + '</b>';
+    if (rel.released_on) m += ' · released ' + esc(rel.released_on);
+    if (rel.notes_url) m += ' · <a href="' + esc(rel.notes_url) + '">Release notes</a>';
+    meta.innerHTML = m;
+
+    var order = { windows: 0, macos: 1, android: 2 };
+    var plats = (rel.platforms || []).slice().sort(function (a, b) {
+      return (order[a.os] == null ? 9 : order[a.os]) - (order[b.os] == null ? 9 : order[b.os]);
+    });
+
+    var rows = plats.map(function (p) {
+      var dl = p.url
+        ? '<a class="btn btn-primary" href="' + esc(p.url) + '">Download</a>'
+        : '<span class="muted small">Link pending</span>';
+      return (
+        '<tr>' +
+        '<td>' + esc(rel.version) + '</td>' +
+        '<td>' + esc(rel.released_on) + '</td>' +
+        '<td><div class="file">' + esc(p.label) + '</div>' +
+        '<div class="muted small">' + esc(p.file) + '</div>' +
+        '<div class="muted small">' + esc(p.requirements) + '</div></td>' +
+        '<td>' + mb(p.download_bytes) + '<div class="muted small">installed ' + mb(p.installed_bytes) + '</div></td>' +
+        '<td class="sha">' + (p.sha256 ? esc(p.sha256) : '—') + '</td>' +
+        '<td>' + signing(p.signed_by) + '</td>' +
+        '<td>' + dl + '</td>' +
+        '</tr>'
+      );
+    }).join('');
+
+    root.innerHTML =
+      '<div class="tablewrap"><table><thead><tr>' +
+      '<th>Version</th><th>Date</th><th>File</th><th>Size</th><th>SHA-256</th><th>Signing</th><th></th>' +
+      '</tr></thead><tbody>' + rows + '</tbody></table></div>';
+  }
+
+  fetch('releases.json', { cache: 'no-store' })
+    .then(function (r) {
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      return r.json();
+    })
+    .then(render)
+    .catch(function () {
+      root.innerHTML =
+        '<div class="card"><p class="muted">Could not load the release list right now. Please try again later, or email <a href="mailto:mohammedzuhairhussain28@gmail.com">mohammedzuhairhussain28@gmail.com</a>.</p></div>';
+    });
+})();
+</script>
+
+</body>
+</html>

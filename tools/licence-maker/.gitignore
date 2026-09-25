@@ -1,0 +1,9 @@
+# Never commit signing keys, minted licences, or the customer register.
+# (Cargo.lock IS committed — this is a binary crate; reproducible builds.)
+/target/
+*-signing.key
+public.key
+register.csv
+*.vlic
+# A key folder created inside the crate (keep it outside the repo instead).
+/keys/

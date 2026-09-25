@@ -95,47 +95,9 @@ fn build_ctx(data_dir: std::path::PathBuf) -> RtCtx {
     }
 }
 
-/// Re-check the licence with the service when due (§10, P05 Step 5). Unreachable →
-/// stay active (perpetual). An explicit `moved`/`revoked` is persisted; if this PC is
-/// `moved`, the server + relay tunnel are stopped and the UI goes read-only.
-async fn recheck_licence(app: &tauri::AppHandle) {
-    let ctx = app.state::<RtCtx>();
-    // Read the licence identity + last check time under the DB lock.
-    let due: Option<(String, String)> = ctx
-        .with_db(|conn| {
-            let row = conn
-                .query_row(
-                    "SELECT licence_id, COALESCE(last_check_at,'') FROM licence LIMIT 1",
-                    [],
-                    |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
-                )
-                .ok();
-            Ok(row)
-        })
-        .unwrap_or(None)
-        .and_then(|(id, last)| {
-            let last_opt = if last.is_empty() { None } else { Some(last.as_str()) };
-            if licence::should_recheck(last_opt, time::OffsetDateTime::now_utc()) {
-                Some((id, last))
-            } else {
-                None
-            }
-        });
-    let Some((licence_id, _)) = due else { return };
-
-    let api = config::get().licence_api.clone();
-    if let Some(result) = licence::check(&ctx.http, &api, &licence_id, &ctx.machine_id).await {
-        use vidya_core::licence::CheckResult;
-        let fenced = matches!(result, CheckResult::Moved | CheckResult::Revoked);
-        let _ = ctx.with_db(|conn| {
-            licence::persist_check(conn, result, time::OffsetDateTime::now_utc())?;
-            Ok(())
-        });
-        if fenced {
-            ctx.server_stop.notify_waiters();
-        }
-    }
-}
+// v2 (Phase 12): licences are perpetual and verified OFFLINE. There is no online
+// re-check — the 30-day `LICENCE_API` recheck task was removed. A PC is fenced to
+// read-only only through `exchange/epoch.json` (Step 5), never an online answer.
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
@@ -171,15 +133,6 @@ pub fn run() {
                 }
             }
 
-            // Best-effort licence re-check when due (P05 Step 5). A `moved`/`revoked`
-            // answer stops this PC serving; unreachable leaves it active (perpetual).
-            {
-                let handle = app.handle().clone();
-                tauri::async_runtime::spawn(async move {
-                    recheck_licence(&handle).await;
-                });
-            }
-
             // Automatic backups (P08 engine, wired P10): tick every TICK_SECS and
             // back up ONLY when the data changed since the last successful backup.
             // No-op until backups are enabled (no cached key) — see backup::schedule.
@@ -209,7 +162,7 @@ pub fn run() {
 fn invoke_handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'static {
     use commands::*;
     tauri::generate_handler![
-        app_state, activate_licence, setup_school, setup_session, setup_classes, setup_principal,
+        app_state, activate_licence, machine_code, setup_school, setup_session, setup_classes, setup_principal,
         create_recovery_key, confirm_recovery_key, create_pin, unlock, lock, switch_user,
         list_staff, list_classes, get_school, list_students, list_students_page, search_students, get_student,
         get_student_profile, create_student, check_duplicate_students, transfer_student, mark_student_left,
@@ -234,7 +187,7 @@ fn invoke_handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'stat
 fn invoke_handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'static {
     use commands::*;
     tauri::generate_handler![
-        app_state, activate_licence, setup_school, setup_session, setup_classes, setup_principal,
+        app_state, activate_licence, machine_code, setup_school, setup_session, setup_classes, setup_principal,
         create_recovery_key, confirm_recovery_key, create_pin, unlock, lock, switch_user,
         list_staff, list_classes, get_school, list_students, list_students_page, search_students, get_student,
         get_student_profile, create_student, check_duplicate_students, transfer_student, mark_student_left,

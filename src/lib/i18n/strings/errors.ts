@@ -36,6 +36,7 @@ const errors: Bundle = {
     'licence.code_already_used': 'This code has already been used by another school. Contact support.',
     'licence.code_not_found': "That activation code wasn't found. Please check it and try again.",
     'licence.invalid': 'This licence could not be verified. Contact support.',
+    'licence.other_machine': 'This licence key is for a different computer. Send this computer’s code to get the right key.',
     'licence.banner_revoked': 'This licence has been revoked. Contact support.',
     'licence.banner_moved': 'This school has moved to another computer. This one is read-only.',
 
@@ -136,6 +137,7 @@ errors.hi = {
   'licence.code_already_used': 'यह कोड किसी अन्य स्कूल द्वारा पहले ही उपयोग किया जा चुका है। सहायता से संपर्क करें।',
   'licence.code_not_found': 'वह एक्टिवेशन कोड नहीं मिला। कृपया जाँचें और फिर कोशिश करें।',
   'licence.invalid': 'इस लाइसेंस की पुष्टि नहीं हो सकी। सहायता से संपर्क करें।',
+  'licence.other_machine': 'यह लाइसेंस कुंजी किसी दूसरे कंप्यूटर के लिए है। सही कुंजी पाने के लिए इस कंप्यूटर का कोड भेजें।',
   'licence.banner_revoked': 'यह लाइसेंस रद्द कर दिया गया है। सहायता से संपर्क करें।',
   'licence.banner_moved': 'यह स्कूल दूसरे कंप्यूटर पर चला गया है। यह केवल-पढ़ने के लिए है।',
 

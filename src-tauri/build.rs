@@ -27,34 +27,40 @@ fn check_release_config() {
         .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
     let json: serde_json::Value = serde_json::from_str(&raw)
         .unwrap_or_else(|e| panic!("build-config/release.json is not valid JSON: {e}"));
-    // `relay_url` is OPTIONAL from v2: the relay is the off-by-default "Instant
-    // sync" module (00-SYSTEM-CONTEXT §14), so a release without it is valid —
-    // the school is reached over LAN and Google Drive. Every other value is
-    // required.
-    for key in [
-        "licence_api",
-        "licence_public_key",
-        "google_client_id_desktop",
-        "google_client_id_android",
-    ] {
+    // `relay_url` is OPTIONAL (the off-by-default "Instant sync" module, §14) and
+    // there is no `licence_api` in v2 (licences verify offline — prompts/P12
+    // Step 6). Every string value below is required.
+    for key in ["google_client_id_desktop", "google_client_id_android"] {
         let val = json.get(key).and_then(|v| v.as_str()).unwrap_or("");
         if val.trim().is_empty() {
             panic!(
                 "release build config value '{key}' is empty in build-config/release.json — \
-                 fill it before a release build (prompts/P03 Step 1)"
+                 fill it before a release build (prompts/P12 Step 6)"
             );
         }
     }
 
-    // A release must NEVER ship the DEV licence key (prompts/P09 §5). Generate a
-    // production keypair (`cargo run -p vidya-licence -- gen-prod-key`) and use
-    // its public key in build-config/release.json.
+    // At least one licence public key is required, and NONE may be the dev key
+    // (prompts/P09 §5, P12 Step 6.4). Mint a production keypair with
+    // `tools/licence-maker init` and put its public.key here.
     const DEV_LICENCE_PUBLIC_KEY: &str = "yLQ8lt26cM/ZdKnfaYGS/VgV6DT6CrAyLHS1br28XJs=";
-    if json.get("licence_public_key").and_then(|v| v.as_str()) == Some(DEV_LICENCE_PUBLIC_KEY) {
+    let keys = json
+        .get("licence_public_keys")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    let key_strs: Vec<&str> = keys.iter().filter_map(|v| v.as_str()).map(str::trim).filter(|s| !s.is_empty()).collect();
+    if key_strs.is_empty() {
         panic!(
-            "release build config uses the DEV licence public key — generate a production \
-             keypair (cloud/licence gen-prod-key) and set its public key in \
-             build-config/release.json (prompts/P09 §5, docs/DEPLOY-FLY.md)"
+            "release build config 'licence_public_keys' is empty in build-config/release.json — \
+             add the public key from `tools/licence-maker init` (prompts/P12 Step 6/7)"
+        );
+    }
+    if key_strs.contains(&DEV_LICENCE_PUBLIC_KEY) {
+        panic!(
+            "release build config uses the DEV licence public key — mint a production keypair \
+             (`tools/licence-maker init`) and use its public.key in build-config/release.json \
+             (prompts/P09 §5, P12 Step 6.4)"
         );
     }
 }

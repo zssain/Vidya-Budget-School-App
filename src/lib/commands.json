@@ -3,6 +3,7 @@
   "commands": [
     "app_state",
     "activate_licence",
+    "machine_code",
     "setup_school",
     "setup_session",
     "setup_classes",

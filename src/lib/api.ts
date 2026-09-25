@@ -612,8 +612,13 @@ export interface RequestInput {
 
 // ---- Commands (one wrapper per registered command) -----------------------
 export const app_state = () => invoke<AppStateResponse>('app_state')
-export const activate_licence = (code: string, schoolName: string) =>
-  invoke<AppStateResponse>('activate_licence', { code, schoolName })
+// v2 (Phase 12): licences are offline files. `licenceKey` is the pasted key or the
+// text of a loaded `.vlic`; verified offline against this computer's machine code
+// and the build-config public key(s). No online activation, no LICENCE_API.
+export const activate_licence = (licenceKey: string) =>
+  invoke<AppStateResponse>('activate_licence', { licenceKey })
+/** This computer's machine code (`XXXX-XXXX-XXXX-C`) for Welcome → Set up. */
+export const machine_code = () => invoke<string>('machine_code')
 export const setup_school = (input: SchoolInput) => invoke<void>('setup_school', { input })
 export const setup_session = (input: SessionInput) => invoke<void>('setup_session', { input })
 export const setup_classes = (sections: ClassInput[]) => invoke<void>('setup_classes', { sections })

@@ -82,47 +82,44 @@ fn bump_setup_step(conn: &Connection, step: i64) -> CmdResult<()> {
 
 // ============================================================= licence =======
 
-pub async fn activate_licence_impl(state: &State<'_, RtCtx>, code: &str, school_name: &str) -> CmdResult<AppStateResponse> {
-    let public_key = crate::config::licence_public_key()
-        .ok_or_else(|| CmdError::new("LICENCE_INVALID", "licence.invalid", serde_json::Value::Null))?;
-    let api = crate::config::get().licence_api.clone();
-    let app_version = env!("CARGO_PKG_VERSION");
-
-    let activation = crate::licence::activate(
-        &state.http,
-        &api,
-        code,
-        school_name,
-        &state.machine_id,
-        app_version,
-        &public_key,
-    )
-    .await?;
+/// Verify a pasted licence **key** (or the text of a loaded `.vlic` file) offline
+/// and hold it until the wizard creates the school row (prompts/P12 Step 6). No
+/// network, no `LICENCE_API`: the ed25519 signature is checked against the
+/// build-config public key(s) and the licence's machine code must match this PC.
+pub fn activate_licence_impl(state: &State<RtCtx>, licence_key: &str) -> CmdResult<AppStateResponse> {
+    let keys = crate::config::licence_public_keys();
+    if keys.is_empty() {
+        // A dev build before a keypair exists, or a misbuilt release.
+        return Err(CmdError::new("LICENCE_INVALID", "licence.invalid", serde_json::Value::Null));
+    }
+    let machine_code = vidya_core::licence::machine_code(&state.machine_id);
+    let lic = crate::licence::verify_offline(licence_key, &machine_code, &keys)?;
 
     // Hold the verified licence until the wizard creates the school row (the
-    // licence table FK needs a school). Persist encrypted in app_kv.
+    // licence table FK needs a school). Persist encrypted in app_kv. v2 licences
+    // are perpetual and unlimited (no max_students/max_devices, no online check).
     let pending = serde_json::json!({
-        "licence_id": activation.licence.licence_id,
-        "school_id": activation.licence.school_id,
-        "plan": activation.licence.plan,
-        "max_students": activation.licence.max_students,
-        "max_devices": activation.licence.max_devices,
-        "issued_at": activation.licence.issued_at,
-        "signature": activation.signature_b64,
-        "raw_json": activation.licence_b64,
+        "licence_id": lic.licence_id,
+        "plan": lic.plan,
+        "max_students": serde_json::Value::Null,
+        "max_devices": serde_json::Value::Null,
+        "issued_at": lic.issued_at,
+        "signature": lic.signature_b64,
+        "raw_json": lic.payload_b64,
     });
     state.with_db(|conn| {
         kv::set(conn, KV_PENDING_LICENCE, &pending)?;
-        // Keep the relay secret issued at activation (P05 §10). Only store a
-        // non-empty one so a re-activation against a pre-P05 service can't wipe it.
-        if !activation.relay_secret.is_empty() {
-            kv::set(conn, crate::state::KV_RELAY_SECRET, &activation.relay_secret)?;
-        }
         Ok(())
     })?;
     // Return the new app state (should be `activated`).
     let session = state.session.lock().map_err(|_| CmdError::internal("lock"))?.clone();
     state.with_db(|conn| Ok(crate::state::compute(conn, session)?))
+}
+
+/// This computer's display machine code (`XXXX-XXXX-XXXX-C`), shown on Welcome →
+/// Set up so the buyer can send it with their UPI payment (prompts/P12 Step 6.2).
+pub fn machine_code_impl(state: &State<RtCtx>) -> String {
+    vidya_core::licence::machine_code(&state.machine_id)
 }
 
 // ============================================================== setup ========
@@ -162,11 +159,13 @@ pub fn setup_school_logic(conn: &mut Connection, input: &SchoolInput) -> CmdResu
     if let Some(p) = kv::get::<serde_json::Value>(conn, KV_PENDING_LICENCE)? {
         let get = |k: &str| p.get(k).and_then(|v| v.as_str()).unwrap_or("").to_string();
         let get_u = |k: &str| p.get(k).and_then(|v| v.as_u64()).map(|n| n as i64);
+        // v2 licences are verified offline and never re-checked, so last_check_at
+        // stays NULL (honest: no online check ever happened).
         conn.execute(
             "INSERT OR IGNORE INTO licence(licence_id,school_id,plan,issued_at,max_students,max_devices,signature,raw_json,status,last_check_at) \
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,'active',?9)",
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,'active',NULL)",
             params![get("licence_id"), school_id, get("plan"), get("issued_at"),
-                get_u("max_students"), get_u("max_devices"), get("signature"), get("raw_json"), now],
+                get_u("max_students"), get_u("max_devices"), get("signature"), get("raw_json")],
         )?;
     }
     bump_setup_step(conn, 1)?;
