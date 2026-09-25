@@ -2351,6 +2351,7 @@ pub fn record_payment_logic(
     let sync_state = if confirmed { "confirmed" } else { "on_device" };
     let confirmed_at = if confirmed { Some(now.clone()) } else { None };
 
+    let school_id = single_school_id(conn)?;
     let ctx = WriteCtx { mode: device_mode };
     let dto = {
         let pid = pid.clone();
@@ -2369,6 +2370,15 @@ pub fn record_payment_logic(
                 tx.execute(
                     "INSERT INTO payment_allocation(id,payment_id,fee_due_id,amount_paise,kind) VALUES (?1,?2,?3,?4,?5)",
                     params![new_id("al"), pid, a.due_id, a.amount.get(), match a.kind { fees::AllocKind::Due => "due", fees::AllocKind::AdvanceCredit => "advance_credit" }],
+                )?;
+            }
+            // v2 (P13): the school server writes the official balanced receipt
+            // voucher in the SAME transaction. A client device leaves it to the
+            // server (which posts it when it confirms the synced payment).
+            if confirmed {
+                crate::ledger::post_payment_voucher(
+                    tx, &pid, &receipt_no, mode, input.amount_paise, &now,
+                    Some(actor_s.id.as_str()), dev.as_deref(), school_id.as_deref(), &now, "confirmed",
                 )?;
             }
             let audit = AuditEntry {
@@ -2620,6 +2630,22 @@ pub fn decide_request_logic(
     let note_owned = note.map(str::to_string);
     let actor_id = actor_s.id.clone();
 
+    // v2 (P13): a payment_reversal also writes the balanced reversal voucher in the
+    // same transaction. Fetch the original payment's mode/amount/receipt first.
+    let rev_id = new_id("rev");
+    let school_id = single_school_id(conn)?;
+    let reversal_pay: Option<(PaymentMode, i64, String)> = if kind == "payment_reversal" {
+        let row: Option<(String, i64, String)> = conn
+            .query_row("SELECT mode, amount_paise, receipt_no FROM payment WHERE id=?1", params![target_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .optional()?;
+        match row {
+            Some((m, amt, rno)) => Some((payment_mode_from(&m)?, amt, rno)),
+            None => None,
+        }
+    } else {
+        None
+    };
+
     with_write(conn, &ctx, move |tx| {
         let apply_state = if applied { "applied" } else { "not_applied" };
         let applied_at = if applied { Some(now.clone()) } else { None };
@@ -2638,8 +2664,15 @@ pub fn decide_request_logic(
                 // Append a reversal row (append-only) referencing the payment.
                 tx.execute(
                     "INSERT INTO reversal(id,payment_id,reason,request_id,approved_by,applied_at) VALUES (?1,?2,?3,?4,?5,?6)",
-                    params![new_id("rev"), target_id, req.reason, req_id, actor_id, now],
+                    params![rev_id, target_id, req.reason, req_id, actor_id, now],
                 )?;
+                // The balanced reversal voucher (Dr Fee income, Cr money account).
+                if let Some((mode, amount, receipt_no)) = &reversal_pay {
+                    crate::ledger::post_reversal_voucher(
+                        tx, &rev_id, receipt_no, *mode, *amount, &now,
+                        Some(actor_id.as_str()), school_id.as_deref(), &now, "confirmed",
+                    )?;
+                }
             }
             _ => {} // marks_correction / student_details / access_change → applied in P7
         }
@@ -4267,6 +4300,51 @@ mod tests {
         let s = new_student(&mut c, "Riya Verma", Some("Ramesh Verma"), Some("9876543210"));
         let teacher = SessionStaff { id: "stf-meena".into(), name: "Meena Iyer".into(), role: "teacher".into() };
         assert_eq!(add_guardian_logic(&mut c, &teacher, None, DeviceMode::Server, &s, &ge("X", None)).unwrap_err().code, "FORBIDDEN");
+    }
+
+    // ---- Phase 13: ledger vouchers -----------------------------------------
+    #[test]
+    fn record_payment_posts_a_balanced_receipt_voucher() {
+        let mut c = seeded();
+        let dto = record_payment_logic(
+            &mut c, &accountant(), Some("dev-a2"), DeviceMode::Server,
+            &PaymentInput { student_id: "stu-kavya-singh".into(), amount_paise: 310_000, mode: "upi".into(), reference: Some("426518903214".into()) },
+        ).unwrap();
+        let (kind, d, cr): (String, i64, i64) = c.query_row(
+            "SELECT v.kind, COALESCE(SUM(le.debit_paise),0), COALESCE(SUM(le.credit_paise),0) \
+             FROM voucher v JOIN ledger_entry le ON le.voucher_id=v.id WHERE v.source_table='payment' AND v.source_id=?1",
+            params![dto.id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        ).unwrap();
+        assert_eq!(kind, "receipt");
+        assert_eq!(d, 310_000);
+        assert_eq!(cr, 310_000, "voucher balances");
+        // UPI → the bank account is debited.
+        let bank: i64 = c.query_row(
+            "SELECT COALESCE(SUM(le.debit_paise),0) FROM ledger_entry le JOIN voucher v ON v.id=le.voucher_id WHERE v.source_id=?1 AND le.account_id='bank'",
+            params![dto.id], |r| r.get(0),
+        ).unwrap();
+        assert_eq!(bank, 310_000);
+        assert_eq!(crate::ledger::ledger_imbalance(&c).unwrap(), 0, "whole book balances");
+    }
+
+    #[test]
+    fn reversal_posts_the_opposite_voucher() {
+        let mut c = seeded();
+        let dto = record_payment_logic(
+            &mut c, &accountant(), Some("dev-a2"), DeviceMode::Server,
+            &PaymentInput { student_id: "stu-kavya-singh".into(), amount_paise: 310_000, mode: "cash".into(), reference: Some(String::new()) },
+        ).unwrap();
+        reverse_payment_logic(&mut c, &principal(), DeviceMode::Server, &dto.id, "duplicate payment").unwrap();
+        let rev: i64 = c.query_row("SELECT COUNT(*) FROM voucher WHERE kind='reversal'", [], |r| r.get(0)).unwrap();
+        assert_eq!(rev, 1, "one reversal voucher");
+        // Receipt + reversal net to zero on Fee income.
+        let fee_net: i64 = c.query_row(
+            "SELECT COALESCE(SUM(le.debit_paise - le.credit_paise),0) FROM ledger_entry le JOIN voucher v ON v.id=le.voucher_id \
+             WHERE le.account_id='fee_income' AND ((v.source_table='payment' AND v.source_id=?1) OR (v.source_table='reversal' AND v.source_id IN (SELECT id FROM reversal WHERE payment_id=?1)))",
+            params![dto.id], |r| r.get(0),
+        ).unwrap();
+        assert_eq!(fee_net, 0, "receipt+reversal cancel on Fee income");
+        assert_eq!(crate::ledger::ledger_imbalance(&c).unwrap(), 0, "whole book still balances");
     }
 
     #[test]

@@ -15,8 +15,10 @@ use vidya_core::types::Role;
 use crate::sync::apply::read_row_json;
 use crate::sync::protocol::Change;
 
-/// Tables a teacher device must NEVER receive (DONE-MEANS #4).
-pub const FEE_TABLES: &[&str] = &["fee_head", "fee_due", "payment", "payment_allocation", "reversal"];
+/// Tables a teacher device must NEVER receive (DONE-MEANS #4). Includes the
+/// general ledger (P13) — vouchers/entries/accounts are finance-only.
+pub const FEE_TABLES: &[&str] =
+    &["fee_head", "fee_due", "payment", "payment_allocation", "reversal", "ledger_account", "voucher", "ledger_entry"];
 /// Tables an accountant device must never receive (attendance/marks).
 pub const MARK_TABLES: &[&str] = &["attendance_sheet", "attendance_mark", "marks_sheet", "mark_entry"];
 
@@ -244,6 +246,7 @@ pub fn snapshot(conn: &Connection, actor: &Actor) -> rusqlite::Result<Vec<Change
             for t in ["class", "class_subject", "student", "enrollment", "guardian", "student_guardian",
                       "attendance_sheet", "attendance_mark",
                       "fee_head", "fee_due", "payment", "payment_allocation", "reversal", "request",
+                      "ledger_account", "voucher", "ledger_entry",
                       "marks_sheet", "mark_entry", "exam", "exam_subject"] {
                 for id in ids_of(conn, &format!("SELECT id FROM {t}"), &[])? {
                     push(conn, t, &id, None)?;
@@ -251,7 +254,7 @@ pub fn snapshot(conn: &Connection, actor: &Actor) -> rusqlite::Result<Vec<Change
             }
         }
         Role::Accountant => {
-            for t in ["class", "class_subject", "student", "enrollment", "guardian", "student_guardian", "fee_head", "fee_due", "payment", "payment_allocation", "reversal"] {
+            for t in ["class", "class_subject", "student", "enrollment", "guardian", "student_guardian", "fee_head", "fee_due", "payment", "payment_allocation", "reversal", "ledger_account", "voucher", "ledger_entry"] {
                 for id in ids_of(conn, &format!("SELECT id FROM {t}"), &[])? {
                     push(conn, t, &id, None)?;
                 }

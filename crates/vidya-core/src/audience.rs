@@ -79,6 +79,8 @@ pub fn audience_for(table: &str, class_id: Option<&str>) -> CoreResult<Audience>
         "fee_head" | "fee_due" | "payment" | "payment_allocation" | "reversal" => {
             Ok(Audience::Finance)
         }
+        // General ledger (P13): financial records, Finance audience.
+        "ledger_account" | "voucher" | "ledger_entry" => Ok(Audience::Finance),
         // ---- class-scoped academic data ------------------------------------
         "attendance_sheet" | "attendance_mark" | "marks_sheet" | "mark_entry" | "exam"
         | "exam_subject" => match class_id {
@@ -135,7 +137,7 @@ mod tests {
 
     #[test]
     fn finance_tables_map_to_finance() {
-        for t in ["fee_head", "fee_due", "payment", "payment_allocation", "reversal"] {
+        for t in ["fee_head", "fee_due", "payment", "payment_allocation", "reversal", "ledger_account", "voucher", "ledger_entry"] {
             assert_eq!(audience_for(t, None).unwrap(), Audience::Finance, "{t}");
         }
     }

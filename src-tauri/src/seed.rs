@@ -56,6 +56,9 @@ pub fn seed_demo_school(conn: &mut Connection, now: OffsetDateTime) -> rusqlite:
     academics(&tx)?;
     requests(&tx, &ctx)?;
     tx.commit()?;
+    // v2 (P13): the seed inserts payments/reversals directly, so post the derived
+    // balanced vouchers for them (idempotent).
+    crate::ledger::backfill_vouchers(conn)?;
     Ok(())
 }
 

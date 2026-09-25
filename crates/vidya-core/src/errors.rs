@@ -52,6 +52,8 @@ pub enum CoreError {
     EpochInvalid,
     #[error("module off: {module}")]
     ModuleOff { module: String },
+    #[error("ledger voucher is not balanced")]
+    LedgerUnbalanced,
     #[error("internal error: {id}")]
     Internal { id: String },
 }
@@ -83,6 +85,7 @@ impl CoreError {
             CoreError::EpochOld => "EPOCH_OLD",
             CoreError::EpochInvalid => "EPOCH_INVALID",
             CoreError::ModuleOff { .. } => "MODULE_OFF",
+            CoreError::LedgerUnbalanced => "LEDGER_UNBALANCED",
             CoreError::Internal { .. } => "INTERNAL",
         }
     }

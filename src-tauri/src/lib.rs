@@ -14,6 +14,7 @@ pub mod drive_account;
 pub mod error;
 pub mod guardians;
 pub mod kv;
+pub mod ledger;
 pub mod licence;
 pub mod modules;
 pub mod reliability;
@@ -64,7 +65,15 @@ fn build_ctx(data_dir: std::path::PathBuf) -> RtCtx {
             db_key_hex = Some(hex.clone());
             match db::open_encrypted(&db_path, &hex) {
                 Ok(mut conn) => match db::run_migrations(&mut conn) {
-                    Ok(_) => (Some(conn), false),
+                    Ok(_) => {
+                        // v2 (P13): post derived vouchers for any pre-ledger
+                        // payments/reversals (v1 upgrade). Idempotent; best-effort
+                        // so a hiccup never blocks startup.
+                        if let Err(e) = ledger::backfill_vouchers(&mut conn) {
+                            tracing::warn!("voucher backfill: {e}");
+                        }
+                        (Some(conn), false)
+                    }
                     Err(e) => {
                         tracing::error!("migration failed: {e}");
                         (None, false)
