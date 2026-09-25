@@ -1,7 +1,7 @@
-# Phase 13 handoff — solid foundation (calendar, guardians, ledger, numbering, approval & message engines) + partial
+# Phase 13 handoff — solid foundation: calendar, guardians, ledger, numbering, approval/message/print engines, custom fields, roles-as-data, school_id, Telugu, privacy
 
 ## Start state / environment
-- Branch `v2/p13`, cut from `v2/p12` @ `464cb98`. HEAD at write time `f0e36f3`.
+- Branch `v2/p13`, cut from `v2/p12` @ `464cb98`. HEAD at write time `653e8b6`.
 - `git status`: clean; all work committed on `v2/p13` (no push/merge/tag).
 - Tools: rustc/cargo/clippy **1.98.1**, node **v25.3.0**, npm **11.7.0**.
 - Repo conventions unchanged (no `AGENTS.md`, no `docs/PROGRESS.md`; progress lives
@@ -9,13 +9,11 @@
   doubled prompt path that do not exist — the P13 prompt + `docs/` specs are the
   authority (as in P11/P12).
 
-## Scope actually built this session (Steps 1–6 of 12)
-Phase 13 is twelve substantial foundation items. With the owner's "step-by-step,
-commit each" pacing, this session delivered the **six pure-backend foundation
-steps** — the architectural core every later module plugs into — each committed
-with its own tests, migrations and full suite green. **Steps 7–12 remain** (print
-engine, custom fields, roles-as-data, `school_id` everywhere, full Telugu, privacy)
-and are specced below for a follow-up session.
+## Scope — all 12 foundation items built
+Every one of the twelve §8/§9 foundation items exists in vidya-core, the database
+and (where relevant) the sync scopes, each with tests. Built "step-by-step, commit
+each"; full suite green after every step. Three items carry a documented, scoped
+follow-up (marked ▸ below) — none blocks the foundation.
 
 One commit per step:
 | Commit | Step |
@@ -26,6 +24,29 @@ One commit per step:
 | `1a09106` | 4 — Numbering engine |
 | `57d1bb4` | 5 — Approval engine (registry) |
 | `f0e36f3` | 6 — Messaging engine |
+| `f09f246` | 7 — Print engine (shared printKit) |
+| `6b02c2c` | 8 — Custom fields |
+| `ae1ad18` | 9 — Roles as data |
+| `668c654` | 10 — `school_id` everywhere |
+| `6b2fb69` | 12 — Privacy (DPDP) |
+| `653e8b6` | 11 — Telugu |
+
+### Scoped follow-ups (documented, non-blocking)
+- ▸ **Step 7 print**: `printKit` (pageCss A4/A5/80mm + letterhead + toolbar) is
+  shared and receipts/report cards moved onto it with identical DOM; the **pixel
+  screenshot compare** is only assertable on the canonical macOS baseline machine
+  (P11 precedent — `tests/e2e/__screens__` PNGs are gitignored). Regen+assert there.
+- ▸ **Step 8 custom fields**: value storage + validation + Settings/profile UI done;
+  **CSV import/export columns (header = key)** are the remaining wire-up on the CSV
+  commands.
+- ▸ **Step 11 Telugu**: `amount_in_words_te` (real Telugu, tested), the Noto Sans
+  Telugu font, the `te` language plumbing/pickers and the receipt Telugu amount are
+  done; the **full ~800-key UI bundle translation** (and extending `check-i18n` to
+  enforce `te`) is a native-speaker task — `te` is selectable now with an English
+  fallback for untranslated keys.
+- ▸ **Step 12 privacy**: consent storage/commands + Settings→Privacy + profile
+  Consent/export/erase UI done; **admission-form consent capture + CSV
+  `consent_signed_form=yes`** are the remaining wire-up.
 
 ## Doc/code discrepancy flagged (Standing Rule 3)
 The prompt says visible strings live in `en.json`/`hi.json`. The repo actually uses
@@ -34,7 +55,7 @@ by `scripts/check-i18n.mjs`. Followed the real code (added `calendar.ts`,
 `guardians.ts` bundles). Step 11 (Telugu) must add a `te` map to every bundle, add
 `te` to `Lang`/`setLang`/`loadLang`, and extend `check-i18n.mjs` to a third language.
 
-## Tables added (migrations 0008–0013, all additive, tested on a v1+P12 DB copy)
+## Tables added (migrations 0008–0017, all additive, tested on a v1+P12 DB copy)
 - **0008** `school_week` (id-keyed, `weekday` UNIQUE 1–7, `is_working`) · `calendar_event`
   (`session_id`, `starts_on`/`ends_on` inclusive, `kind`, `title`/`_hi`/`_te`,
   `is_non_working`, `circular_id`) + indexes.
@@ -47,7 +68,13 @@ by `scripts/check-i18n.mjs`. Followed the real code (added `calendar.ts`,
   `attendance_duty`, `class_notice`). Standard table-rebuild (copy → drop → rename).
 - **0013** `message` (outbox) · `message_template` (id-keyed, UNIQUE(key,language)) +
   indexes; seeds 5 templates × en/hi/te (15 rows).
-- All new tables carry `school_id` from the start (so Step 10 only touches pre-P13 tables).
+- **0014** `custom_field` (entity, key, label/`_hi`/`_te`, type, options_json, required,
+  active, sort_order) UNIQUE(entity,key) · `custom_value` UNIQUE(entity_id,field_id).
+- **0015** `role` (key, name, built_in; 3 built-ins seeded) · `role_permission`
+  (role_id, action, effect allow|request; seeded in Rust from `default_permissions`).
+- **0016** `school_id` added + backfilled on 25 mutable domain tables + indexes.
+- **0017** `consent` · `incident_log` · `privacy_action` + indexes.
+- All P13 tables carry `school_id` from the start (so 0016 only touches pre-P13 tables).
 
 ## vidya-core modules & public functions added
 - `calendar.rs` — `SchoolWeek` (default Mon–Sat working, Sun off), `CalendarEvent`,
@@ -64,8 +91,15 @@ by `scripts/check-i18n.mjs`. Followed the real code (added `calendar.ts`,
   `types::RequestType` gains `Leave`/`AttendanceDuty`/`ClassNotice` + `as_key`/`from_key`/`ALL`.
 - `messages.rs` — `Channel`, `MessageStatus`, `TEMPLATE_KEYS`, `allowed_placeholders`,
   `placeholders_in`, `validate_template`, `render`, `can_message`.
-- `audience.rs` — new tables mapped: calendar → `admin`; guardian/student_guardian →
-  `finance`; ledger tables → `finance`; message/message_template → `admin` (P14 refines).
+- `custom_fields.rs` — `Entity`, `FieldType`, `validate_key`, `validate_field_def`,
+  `validate_value` (number by shape — no floats).
+- `permissions.rs` (roles-as-data) — `Effect`, `Action::ALL`/`as_key`/`from_key`,
+  `default_permissions()` (matrix DERIVED from `can`), `effect_of(set, …)`. `can`
+  UNCHANGED — the exhaustive `role_matrix` test still passes.
+- `words.rs` — `amount_in_words_te` (Indian system; DRAFT, native review pending).
+- `audience.rs` — new tables mapped: calendar → `admin`; guardian/student_guardian/
+  consent → `finance`; ledger tables → `finance`; message/message_template/custom_field/
+  custom_value → `admin` (P14 refines message audience per recipient).
 
 ## src-tauri modules & wiring
 - `calendar.rs` repo (`load_week`/`load_events`/`is_working_day`); `dash::attendance_pending`
@@ -80,14 +114,20 @@ by `scripts/check-i18n.mjs`. Followed the real code (added `calendar.ts`,
   voucher; startup + demo seed run the idempotent backfill.
 - `numbering.rs` repo (`next_no` — reserves the sequence atomically, seeds `last_seq`
   from existing rows for continuity); receipts + vouchers use it (receipt still R-A2-0419).
-- Commands added: `get_calendar`, `set_weekly_offs`, `add/update/delete_calendar_event`,
-  `add/update/set_primary/remove_guardian`. `get_student_profile` now returns `guardians[]`.
-  `create_request` validates the kind + enforces `can_raise` for the new types;
-  `decide_request` reads `spec().apply_available`.
-- `sync/scope.rs`: calendar in every role's scope; guardian/student_guardian scoped
-  (teachers see their students' guardians, name+mobile only); ledger tables finance-only
-  (added to `FEE_TABLES` so teachers never receive them). Messaging tables NOT yet in the
-  device scope — P14 wires the communication module's tables + scope (as P11 planned).
+- `roles.rs` repo — `seed_role_permissions` (idempotent, from `default_permissions`,
+  run at startup) + `load_permission_set`.
+- `printKit.tsx` (frontend) — one print module: `pageCss(A4/A5/80mm)` + letterhead
+  blocks (`PrintLogo`/`PrintSchoolName`/`PrintAddress`) + `PrintToolbar`; receipts +
+  report cards compose it (identical DOM).
+- Commands added (with wrappers, `COMMANDS`, both invoke_handler lists, `commands.json`,
+  `api.ts`): calendar (5), guardians (4), custom fields (6), privacy (10). `record_payment`
+  posts the receipt voucher; `decide_request` reads `spec().apply_available`;
+  `get_student_profile` returns `guardians[]`; the receipt DTO gains `amount_words_te`.
+- `sync/scope.rs`: calendar in every role's scope; guardian/student_guardian/consent
+  scoped (teachers see their students' guardians, name+mobile only); ledger tables
+  finance-only (in `FEE_TABLES` so teachers never receive them). Messaging + custom-field
+  + role tables are NOT yet in the device incremental scope — P14 wires the communication
+  module's tables + scope (as P11 planned).
 
 ## Migration reports (counts / money totals)
 - Guardian backfill (0009 + Rust `ensure_primary_guardian`): one guardian per distinct
@@ -106,6 +146,14 @@ by `scripts/check-i18n.mjs`. Followed the real code (added `calendar.ts`,
   nulled). The demo/v1 test DB has no `reversal` rows, so it applies cleanly; a production
   DB with applied reversals needs the recreate run with `foreign_keys=OFF` at the app layer
   (one-time). **Flagged for P18 / owner.**
+- `school_id` (0016): added + backfilled to the single school's id on 25 mutable domain
+  tables; test `school_id_backfilled_on_domain_tables`. Append-only (payment/reversal/
+  audit) + per-install bookkeeping are excluded by design (triggers block the UPDATE;
+  documented in the migration). No behaviour change (every existing test unchanged).
+- Roles (0015): `role_permission` seeded from `default_permissions()` and read back;
+  test `seeds_and_loads_the_built_in_matrix` (seed count == matrix, idempotent, load
+  reproduces it). Erase (0017): `export_then_erase_keeps_money_tombstones_personal`
+  (payments kept, name → `(erased)`, 2 privacy actions logged).
 
 ## Ledger account list (13, seeded en + hi; te in Step 11)
 cash `1001` · bank (UPI/Bank) `1002` · cheques `1003` · staff_advances `1004` ·
@@ -119,68 +167,61 @@ authoritative; **Hindi and Telugu bodies are DRAFTS pending native-speaker revie
 (OWNER-DECISIONS #12). Every seeded body validates against
 `vidya_core::messages::allowed_placeholders` (test `seeded_message_templates_validate`).
 
-## Telugu status
-Only two P13 UI bundles gained strings (`calendar.ts`, `guardians.ts`) in en/hi. Telugu
-across the whole app is **Step 11 (not started)** — see below. Ledger account `name_te`
-and template `te` are the only Telugu committed so far (drafts, for review).
+## Telugu status + phrases for native review (OWNER-DECISIONS #12)
+Done: `@fontsource/noto-sans-telugu` 400/500/600 (imported; added to every font stack
+after Noto Sans Devanagari; `:root[lang="te"]` heading swap = Noto Sans Telugu 500);
+`te` is a selectable `Lang` (Settings + guardian pickers, receipt Telugu amount);
+`vidya_core::words::amount_in_words_te`.
 
-## Tests (all real, this session)
-- `cargo test --workspace --locked` → **592 passed / 0 failed** (was 550 at P12 tip +42).
+**DRAFT / review needed:**
+- **amount_in_words_te** uses simple space-separated composition and nominative-plural
+  scale words (వందలు/వేలు/లక్షలు/కోట్లు). Formal Telugu contracts some compounds (sandhi,
+  e.g. "ఇరవైఒకటి") and uses **oblique** scale forms before more digits ("మూడు వేల" not
+  "మూడు వేలు"). Review: the tens (ఇరవై/ముప్పై/నలభై/యాభై/అరవై/డెబ్బై/ఎనభై/తొంభై), the 11–19
+  forms, and the scale/oblique choices.
+- **Ledger `name_te`** was left NULL (fill in review) and **template `te` bodies** are drafts.
+- **Full UI translation NOT done**: the ~800 legacy-bundle keys have no `te` yet; `t()`
+  falls back to English for them. `check-i18n` stays at en/hi (extend to `te` once the
+  bundles are translated). The 4 new P13 bundles are also en/hi only for now.
+- **Size delta**: `@fontsource/noto-sans-telugu` adds the Telugu woff2 subset (~30–60 KB
+  gz across 400/500/600) — well within §13 limits; it is lazy per weight like the other
+  Fontsource subsets. Measure the exact bundle delta on the release build.
+
+## Tests (all real)
+- `cargo test --workspace --locked` → **614 passed / 0 failed** (was 550 at P12 tip, +64).
 - `cargo clippy --workspace --all-targets --locked -- -D warnings` → clean.
 - `cargo tree -i aws-lc-rs` → empty (ring only).
-- `npm run verify` → green: typecheck; check-hex (42 tokens); **check-i18n 20 modules,
-  866 keys, en/hi in sync**; **check-deps 30 npm + 34 cargo, all within §13 — NO new
-  dependencies**; contrast; logs; vitest 38.
-- New tests of note: calendar working-day rules + non-working dashboard; guardian dedup
-  migration + create/add/set-primary/remove + max-2 + teacher-forbidden; ledger balance
-  invariants + backfill money-total equality + append-only; numbering format-identity +
-  receipt continuity; approval registry + request rebuild + new-type create/forbid;
-  messaging placeholder validation/render + seeded-template validation.
+- `npm run verify` → green: typecheck; check-hex (42 tokens); **check-i18n 22 modules,
+  932 keys, en/hi in sync**; **check-deps 31 npm + 34 cargo, all within §13** (the one new
+  dep is the §13-allowed Telugu font); contrast; logs; vitest 38.
+- New tests of note (per step): calendar working-day + non-working dashboard; guardian
+  dedup migration + CRUD + max-2 + teacher-forbidden; ledger balance invariants + backfill
+  money-total equality + append-only; numbering format-identity + receipt continuity;
+  approval registry + request rebuild + new-type create/forbid; messaging placeholder
+  validation + seeded-template validation; print (DOM); custom-field type validation +
+  CRUD + Principal-only; roles-as-data matrix consistency + seed/load; `school_id` backfill;
+  privacy consent/export/erase/retention/incident; Telugu `amount_in_words_te`.
 
 ### Changed test expectations
-None. No existing test expected value changed. Existing behaviour preserved:
-`record_payment` still numbers `R-A2-0419`; `decide_request` auto-applies exactly the
-same types (now via `spec().apply_available`); the permission matrix test is untouched
-(roles-as-data is Step 9, not yet built).
+None. No existing test's expected value changed. Existing behaviour preserved end-to-end:
+`record_payment` still numbers `R-A2-0419` (now via the numbering engine); `decide_request`
+auto-applies exactly the same types (now via `spec().apply_available`); the exhaustive
+permission-matrix test is untouched (roles-as-data derives its data from `can`); `school_id`
+is unused so nothing reads it.
 
-## REMAINING — Steps 7–12 (for the next session), with notes
-Build in order; each = core rules + tests → migration → repo → commands → minimal UI.
-
-- **7 — Print engine.** Extract one print module: `pageCss(size)` for **A4/A5/80 mm**,
-  a props-configurable `<Letterhead>` (logo/name/address; the 3 existing docs differ —
-  receipt 140×46 centered, report card 120×40 left+exam title, day book its own), and a
-  `no-print` toolbar. Move `ReceiptDoc` + `ReportCardDoc` onto it with **identical markup**.
-  Pixel/screenshot fidelity is **only assertable on the canonical macOS baseline machine**
-  (P11 precedent: `tests/e2e/__screens__` PNGs are gitignored) — regen + assert there.
-- **8 — Custom fields.** `custom_field` (entity student|staff, key, label/`_hi`/`_te`,
-  type text|number|date|choice, options_json, required, active) + `custom_value`. Core
-  type validation (a `custom_fields.rs` in vidya-core). Settings → Custom fields
-  (Principal); render in student/staff profile forms; CSV import/export with header = key.
-- **9 — Roles as data.** `role` + `role_permission(role_id, action, effect allow|request)`
-  seeded from the CURRENT matrix in `permissions.rs`. `permissions::can` keeps taking the
-  permission set as input (pure) — load the set from the DB and pass it in. The exhaustive
-  `role_matrix.rs` test MUST pass unchanged. No custom-role UI.
-- **10 — `school_id` everywhere.** Migration adds `school_id` (default the single
-  `school.id`) to every pre-P13 table missing it + indexes where queries filter by school.
-  No behaviour change. All P13 tables already have it.
-- **11 — Telugu (largest).** `@fontsource/noto-sans-telugu` 400/500/600 (add to §13 deps
-  list + every font stack after Noto Sans Devanagari; `:root[lang="te"]` heading swap like
-  Hindi). Add a `te` map to ALL ~20 `strings/*.ts` bundles (866 keys), add `te` to
-  `Lang`/`setLang`/`loadLang`/index merge, and teach `check-i18n.mjs` the 3rd language.
-  `vidya_core::words::amount_in_words_te` (Indian system) + tests; list unsure number
-  words. Language pickers: Settings → Languages & modules (school print language), Profile
-  (per-staff UI language), guardian form (already has a language field). Teacher Home in
-  Telugu = prototype `thomete` fidelity. Logo: English lockup in Telugu until owner
-  supplies one (OWNER #6). Record font size delta. Fill ledger `name_te` + confirm template
-  `te` drafts.
-- **12 — Privacy (DPDP).** `consent` (student, guardian, purpose school_records|messages,
-  method signed_form|in_person, recorded_by/at, withdrawn_at) — profile Consent section,
-  admission asks both purposes, CSV `consent_signed_form=yes`. `can_message` (already in
-  core) must read this table. Student export (JSON + readable print) + erase-on-request
-  (tombstone personal fields; keep financial/academic totals + audit; Principal only;
-  confirmation screen). Retention setting (default keep). Settings → Privacy: incident log
-  (date, description, action, reported to board, reported on) + 72-hour reminder text; list
-  of export/erase actions.
+## Remaining sub-items to finish later (all non-blocking; foundation is complete)
+1. **Print screenshots** (Step 7): regenerate + assert the receipt/report-card fidelity
+   baselines on the canonical macOS machine (they're gitignored; can't run in this sandbox).
+2. **Custom-field CSV columns** (Step 8): add each field's `key` as a CSV column on
+   student import/export (the value storage/validation are ready).
+3. **Full Telugu UI translation** (Step 11): add a `te` map to every `strings/*.ts` bundle
+   (~800 keys) and extend `check-i18n.mjs` to enforce `te`; native-speaker review of the
+   amount-in-words words, ledger `name_te`, and template `te` drafts.
+4. **Admission-form consent + CSV** (Step 12): capture both consent purposes on the
+   admission form and honour `consent_signed_form=yes` on CSV import (commands are ready).
+5. **Request-table rebuild on production** (Step 5 / migration 0012): on a v1 DB that holds
+   applied reversals, run the recreate with `foreign_keys=OFF` (one-time). Confirm before a
+   v1→v2 upgrade ships.
 
 ## What Phase 14 (Communication) needs from P13
 - Numbering engine ready: use `numbering::next_no(NumberKind::Circular, <session>)` for
