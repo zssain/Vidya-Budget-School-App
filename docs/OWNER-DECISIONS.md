@@ -29,6 +29,11 @@ answered (or the default is the confirmed choice).
 ## Notes
 - **No public release has happened** (repo has no git tags; release infra is present but unused),
   so the app identifier (#1) is not yet locked. Phase 11 reports it and does not change it.
+- **Phase 12** surfaced #2 (Price `[PRICE]`), #11 (UPI QR `site/assets/upi-qr.png`), #14 (code
+  signing) and #15 (GST) on the committed static `site/` and in `docs/SELLING.md` as honest
+  placeholders/drafts. New build-time value: **`licence_public_keys`** (an array in
+  `src-tauri/build-config/*.json`, enabling signing-key rotation) — the owner mints the first key
+  with `tools/licence-maker init` and pastes its `public.key`. There is no longer a `licence_api`.
 - Decisions retired by v2: the P10 online payment-provider/webhook and the licence backend/API-
   shape questions are superseded by manual UPI + offline licence files (see `02-V2-CHANGES §2/§7`
   and `docs/phase-notes/phase-10.md`).
