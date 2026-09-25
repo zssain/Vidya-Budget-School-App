@@ -98,6 +98,11 @@ pub const COMMANDS: &[&str] = &[
     "set_accent",
     "list_modules",
     "set_module",
+    "get_calendar",
+    "set_weekly_offs",
+    "add_calendar_event",
+    "update_calendar_event",
+    "delete_calendar_event",
     "verify_audit_chain",
     "backup_status",
     "backup_now",
@@ -429,6 +434,46 @@ pub fn list_modules(state: State<RtCtx>) -> CmdResult<Vec<ModuleDto>> {
 pub fn set_module(state: State<RtCtx>, key: String, enabled: bool) -> CmdResult<()> {
     let actor = state.require_session()?;
     state.with_db(|conn| set_module_logic(conn, &actor, &key, enabled))
+}
+
+// --------------------------------------------------------------- calendar -----
+
+#[tauri::command]
+pub fn get_calendar(state: State<RtCtx>) -> CmdResult<CalendarDto> {
+    let actor = state.require_session()?;
+    state.with_db(|conn| get_calendar_logic(conn, &actor))
+}
+
+#[tauri::command]
+pub fn set_weekly_offs(state: State<RtCtx>, working: Vec<bool>) -> CmdResult<()> {
+    let actor = state.require_session()?;
+    let device_id = state.device_id.lock().map_err(|_| crate::error::CmdError::internal("lock"))?.clone();
+    let mode = state.device_mode;
+    state.with_db(|conn| set_weekly_offs_logic(conn, &actor, device_id.as_deref(), mode, &working))
+}
+
+#[tauri::command]
+pub fn add_calendar_event(state: State<RtCtx>, input: CalendarEventInput) -> CmdResult<CalendarEventDto> {
+    let actor = state.require_session()?;
+    let device_id = state.device_id.lock().map_err(|_| crate::error::CmdError::internal("lock"))?.clone();
+    let mode = state.device_mode;
+    state.with_db(|conn| add_calendar_event_logic(conn, &actor, device_id.as_deref(), mode, &input))
+}
+
+#[tauri::command]
+pub fn update_calendar_event(state: State<RtCtx>, id: String, input: CalendarEventInput) -> CmdResult<CalendarEventDto> {
+    let actor = state.require_session()?;
+    let device_id = state.device_id.lock().map_err(|_| crate::error::CmdError::internal("lock"))?.clone();
+    let mode = state.device_mode;
+    state.with_db(|conn| update_calendar_event_logic(conn, &actor, device_id.as_deref(), mode, &id, &input))
+}
+
+#[tauri::command]
+pub fn delete_calendar_event(state: State<RtCtx>, id: String) -> CmdResult<()> {
+    let actor = state.require_session()?;
+    let device_id = state.device_id.lock().map_err(|_| crate::error::CmdError::internal("lock"))?.clone();
+    let mode = state.device_mode;
+    state.with_db(|conn| delete_calendar_event_logic(conn, &actor, device_id.as_deref(), mode, &id))
 }
 
 // ------------------------------------------------------------- academics ------

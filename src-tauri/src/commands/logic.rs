@@ -3527,6 +3527,338 @@ pub fn set_module_logic(conn: &mut Connection, actor_s: &SessionStaff, key: &str
     Ok(())
 }
 
+// ============================================================ calendar =======
+
+/// A calendar event row (holiday / exam / event) for the UI.
+#[derive(Debug, Serialize)]
+pub struct CalendarEventDto {
+    pub id: String,
+    pub session_id: Option<String>,
+    pub starts_on: String,
+    pub ends_on: String,
+    pub kind: String,
+    pub title: String,
+    pub title_hi: Option<String>,
+    pub title_te: Option<String>,
+    pub is_non_working: bool,
+    pub circular_id: Option<String>,
+}
+
+/// The whole calendar for the Settings screen: the weekly pattern + all events.
+#[derive(Debug, Serialize)]
+pub struct CalendarDto {
+    /// Working flag per weekday, index 0 = Monday … 6 = Sunday.
+    pub week: [bool; 7],
+    pub events: Vec<CalendarEventDto>,
+}
+
+/// Add/edit payload for a calendar event.
+#[derive(Debug, Deserialize)]
+pub struct CalendarEventInput {
+    pub starts_on: String,
+    pub ends_on: String,
+    pub kind: String,
+    pub title: String,
+    #[serde(default)]
+    pub title_hi: Option<String>,
+    #[serde(default)]
+    pub title_te: Option<String>,
+    #[serde(default)]
+    pub is_non_working: bool,
+}
+
+fn single_school_id(conn: &Connection) -> CmdResult<Option<String>> {
+    Ok(conn.query_row("SELECT id FROM school LIMIT 1", [], |r| r.get(0)).optional()?)
+}
+
+fn current_session_id(conn: &Connection) -> CmdResult<Option<String>> {
+    Ok(conn
+        .query_row("SELECT id FROM academic_session WHERE is_current=1 LIMIT 1", [], |r| r.get(0))
+        .optional()?)
+}
+
+fn read_calendar_event(conn: &Connection, id: &str) -> CmdResult<CalendarEventDto> {
+    conn.query_row(
+        "SELECT id, session_id, starts_on, ends_on, kind, title, title_hi, title_te, is_non_working, circular_id \
+         FROM calendar_event WHERE id=?1",
+        params![id],
+        |r| {
+            Ok(CalendarEventDto {
+                id: r.get(0)?,
+                session_id: r.get(1)?,
+                starts_on: r.get(2)?,
+                ends_on: r.get(3)?,
+                kind: r.get(4)?,
+                title: r.get(5)?,
+                title_hi: r.get(6)?,
+                title_te: r.get(7)?,
+                is_non_working: r.get::<_, i64>(8)? != 0,
+                circular_id: r.get(9)?,
+            })
+        },
+    )
+    .optional()?
+    .ok_or_else(CmdError::not_found)
+}
+
+/// The calendar (weekly pattern + events). Any signed-in role may read it — it is
+/// school-wide info used by attendance and dashboards.
+pub fn get_calendar_logic(conn: &mut Connection, _actor_s: &SessionStaff) -> CmdResult<CalendarDto> {
+    let week = crate::calendar::load_week(conn)?;
+    let mut stmt = conn.prepare(
+        "SELECT id, session_id, starts_on, ends_on, kind, title, title_hi, title_te, is_non_working, circular_id \
+         FROM calendar_event ORDER BY starts_on, id",
+    )?;
+    let events = stmt
+        .query_map([], |r| {
+            Ok(CalendarEventDto {
+                id: r.get(0)?,
+                session_id: r.get(1)?,
+                starts_on: r.get(2)?,
+                ends_on: r.get(3)?,
+                kind: r.get(4)?,
+                title: r.get(5)?,
+                title_hi: r.get(6)?,
+                title_te: r.get(7)?,
+                is_non_working: r.get::<_, i64>(8)? != 0,
+                circular_id: r.get(9)?,
+            })
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(CalendarDto { week: week.working, events })
+}
+
+/// Validate an event input; returns the trimmed title. Shared by add/update.
+fn validate_event_input(input: &CalendarEventInput) -> CmdResult<String> {
+    let start = vidya_core::calendar::parse_date(&input.starts_on)
+        .ok_or_else(|| CmdError::validation("starts_on", "date"))?;
+    let end = vidya_core::calendar::parse_date(&input.ends_on)
+        .ok_or_else(|| CmdError::validation("ends_on", "date"))?;
+    if end < start {
+        return Err(CmdError::validation("ends_on", "before_start"));
+    }
+    if !matches!(input.kind.as_str(), "holiday" | "exam" | "event") {
+        return Err(CmdError::validation("kind", "unknown"));
+    }
+    let title = input.title.trim();
+    if title.is_empty() {
+        return Err(CmdError::validation("title", "required"));
+    }
+    Ok(title.to_string())
+}
+
+/// Set which weekdays are working (Settings → Session & terms → Weekly off days).
+/// `working` is length 7, index 0 = Monday … 6 = Sunday. Principal only; audited;
+/// upserts all seven `school_week` rows and emits one op per weekday so devices
+/// receive the change (audience `admin`).
+pub fn set_weekly_offs_logic(
+    conn: &mut Connection,
+    actor_s: &SessionStaff,
+    device_id: Option<&str>,
+    device_mode: DeviceMode,
+    working: &[bool],
+) -> CmdResult<()> {
+    let actor = actor_from(conn, actor_s)?;
+    require_allow(&actor, Action::Settings, &Target { kind: TargetKind::School, ..Default::default() })?;
+    if working.len() != 7 {
+        return Err(CmdError::validation("working", "len_7"));
+    }
+    let now = now_iso();
+    let school_id = single_school_id(conn)?;
+    let sync_state = if device_mode == DeviceMode::Server { "confirmed" } else { "on_device" };
+    let dev = device_id.unwrap_or_default().to_string();
+    let tx = conn.transaction()?;
+    for (i, &is_working) in working.iter().enumerate() {
+        let weekday = (i + 1) as i64; // ISO 1=Mon … 7=Sun
+        let id = format!("wk-{weekday}");
+        tx.execute(
+            "INSERT INTO school_week(id, weekday, is_working, school_id, created_at, updated_at, updated_by_staff, updated_by_device, sync_state) \
+             VALUES (?1,?2,?3,?4,?5,?5,?6,?7,?8) \
+             ON CONFLICT(id) DO UPDATE SET is_working=excluded.is_working, updated_at=excluded.updated_at, \
+               updated_by_staff=excluded.updated_by_staff, updated_by_device=excluded.updated_by_device, \
+               sync_state=excluded.sync_state, version=version+1",
+            params![id, weekday, is_working as i64, school_id, now, actor_s.id, dev, sync_state],
+        )?;
+        crate::write::append_op(&tx, device_mode, &Op {
+            op_id: new_id("op"),
+            hlc: now.clone(),
+            device_id: dev.clone(),
+            staff_id: actor_s.id.clone(),
+            audience: "admin".into(),
+            table: "school_week".into(),
+            record_id: id,
+            kind: "update".into(),
+            payload: "{}".into(),
+            base_version: None,
+            server_epoch: 1,
+        })?;
+    }
+    crate::security::audit::append(&tx, &AuditEntry {
+        at: now.clone(),
+        staff_id: Some(actor_s.id.clone()),
+        action: "set_weekly_offs".into(),
+        table: Some("school_week".into()),
+        after_json: Some(serde_json::json!({ "working": working }).to_string()),
+        ..Default::default()
+    })?;
+    tx.commit()?;
+    Ok(())
+}
+
+/// Add a calendar event (Principal only; audited; synced under `admin`).
+pub fn add_calendar_event_logic(
+    conn: &mut Connection,
+    actor_s: &SessionStaff,
+    device_id: Option<&str>,
+    device_mode: DeviceMode,
+    input: &CalendarEventInput,
+) -> CmdResult<CalendarEventDto> {
+    let actor = actor_from(conn, actor_s)?;
+    require_allow(&actor, Action::Settings, &Target { kind: TargetKind::School, ..Default::default() })?;
+    let title = validate_event_input(input)?;
+    let id = new_id("cal");
+    let now = now_iso();
+    let session_id = current_session_id(conn)?;
+    let school_id = single_school_id(conn)?;
+    let sync_state = if device_mode == DeviceMode::Server { "confirmed" } else { "on_device" };
+    let ctx = WriteCtx { mode: device_mode };
+    let (id2, kind, hi, te, non_working) =
+        (id.clone(), input.kind.clone(), input.title_hi.clone(), input.title_te.clone(), input.is_non_working);
+    let (starts, ends) = (input.starts_on.clone(), input.ends_on.clone());
+    let dev = device_id.map(str::to_string);
+    with_write(conn, &ctx, move |tx| {
+        tx.execute(
+            "INSERT INTO calendar_event(id, session_id, starts_on, ends_on, kind, title, title_hi, title_te, is_non_working, school_id, created_at, updated_at, updated_by_staff, updated_by_device, sync_state) \
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?11,?12,?13,?14)",
+            params![id2, session_id, starts, ends, kind, title, hi, te, non_working as i64, school_id, now, actor_s.id, dev, sync_state],
+        )?;
+        let audit = AuditEntry {
+            at: now.clone(),
+            staff_id: Some(actor_s.id.clone()),
+            action: "add_calendar_event".into(),
+            table: Some("calendar_event".into()),
+            record_id: Some(id2.clone()),
+            after_json: Some(serde_json::json!({ "title": title, "kind": kind, "starts_on": starts, "ends_on": ends, "is_non_working": non_working }).to_string()),
+            ..Default::default()
+        };
+        let op = Op {
+            op_id: new_id("op"),
+            hlc: now.clone(),
+            device_id: dev.clone().unwrap_or_default(),
+            staff_id: actor_s.id.clone(),
+            audience: "admin".into(),
+            table: "calendar_event".into(),
+            record_id: id2.clone(),
+            kind: "insert".into(),
+            payload: "{}".into(),
+            base_version: None,
+            server_epoch: 1,
+        };
+        Ok(Effect { value: (), audit, op })
+    })?;
+    read_calendar_event(conn, &id)
+}
+
+/// Edit a calendar event (Principal only; audited; synced).
+pub fn update_calendar_event_logic(
+    conn: &mut Connection,
+    actor_s: &SessionStaff,
+    device_id: Option<&str>,
+    device_mode: DeviceMode,
+    id: &str,
+    input: &CalendarEventInput,
+) -> CmdResult<CalendarEventDto> {
+    let actor = actor_from(conn, actor_s)?;
+    require_allow(&actor, Action::Settings, &Target { kind: TargetKind::School, ..Default::default() })?;
+    let title = validate_event_input(input)?;
+    // Must exist.
+    read_calendar_event(conn, id)?;
+    let now = now_iso();
+    let ctx = WriteCtx { mode: device_mode };
+    let (id2, kind, hi, te, non_working) =
+        (id.to_string(), input.kind.clone(), input.title_hi.clone(), input.title_te.clone(), input.is_non_working);
+    let (starts, ends) = (input.starts_on.clone(), input.ends_on.clone());
+    let dev = device_id.map(str::to_string);
+    with_write(conn, &ctx, move |tx| {
+        tx.execute(
+            "UPDATE calendar_event SET starts_on=?2, ends_on=?3, kind=?4, title=?5, title_hi=?6, title_te=?7, is_non_working=?8, \
+               updated_at=?9, updated_by_staff=?10, updated_by_device=?11, version=version+1 WHERE id=?1",
+            params![id2, starts, ends, kind, title, hi, te, non_working as i64, now, actor_s.id, dev],
+        )?;
+        let audit = AuditEntry {
+            at: now.clone(),
+            staff_id: Some(actor_s.id.clone()),
+            action: "update_calendar_event".into(),
+            table: Some("calendar_event".into()),
+            record_id: Some(id2.clone()),
+            after_json: Some(serde_json::json!({ "title": title, "kind": kind, "starts_on": starts, "ends_on": ends, "is_non_working": non_working }).to_string()),
+            ..Default::default()
+        };
+        let op = Op {
+            op_id: new_id("op"),
+            hlc: now.clone(),
+            device_id: dev.clone().unwrap_or_default(),
+            staff_id: actor_s.id.clone(),
+            audience: "admin".into(),
+            table: "calendar_event".into(),
+            record_id: id2.clone(),
+            kind: "update".into(),
+            payload: "{}".into(),
+            base_version: None,
+            server_epoch: 1,
+        };
+        Ok(Effect { value: (), audit, op })
+    })?;
+    read_calendar_event(conn, id)
+}
+
+/// Delete a calendar event (Principal only; audited; synced). `calendar_event`
+/// is not append-only (it carries no money/audit), so the row is removed and a
+/// delete op is emitted.
+pub fn delete_calendar_event_logic(
+    conn: &mut Connection,
+    actor_s: &SessionStaff,
+    device_id: Option<&str>,
+    device_mode: DeviceMode,
+    id: &str,
+) -> CmdResult<()> {
+    let actor = actor_from(conn, actor_s)?;
+    require_allow(&actor, Action::Settings, &Target { kind: TargetKind::School, ..Default::default() })?;
+    let before = read_calendar_event(conn, id)?;
+    let now = now_iso();
+    let ctx = WriteCtx { mode: device_mode };
+    let id2 = id.to_string();
+    let dev = device_id.map(str::to_string);
+    let before_json = serde_json::json!({ "title": before.title, "kind": before.kind, "starts_on": before.starts_on, "ends_on": before.ends_on }).to_string();
+    with_write(conn, &ctx, move |tx| {
+        tx.execute("DELETE FROM calendar_event WHERE id=?1", params![id2])?;
+        let audit = AuditEntry {
+            at: now.clone(),
+            staff_id: Some(actor_s.id.clone()),
+            action: "delete_calendar_event".into(),
+            table: Some("calendar_event".into()),
+            record_id: Some(id2.clone()),
+            before_json: Some(before_json),
+            ..Default::default()
+        };
+        let op = Op {
+            op_id: new_id("op"),
+            hlc: now.clone(),
+            device_id: dev.clone().unwrap_or_default(),
+            staff_id: actor_s.id.clone(),
+            audience: "admin".into(),
+            table: "calendar_event".into(),
+            record_id: id2.clone(),
+            kind: "delete".into(),
+            payload: "{}".into(),
+            base_version: None,
+            server_epoch: 1,
+        };
+        Ok(Effect { value: (), audit, op })
+    })?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -3548,6 +3880,103 @@ mod tests {
 
     fn principal() -> SessionStaff {
         SessionStaff { id: "stf-priya".into(), name: "Priya Sharma".into(), role: "principal".into() }
+    }
+
+    // ---- Phase 13: calendar ------------------------------------------------
+    #[test]
+    fn calendar_defaults_then_weekly_offs_edit() {
+        let mut c = seeded();
+        // Fresh: no school_week rows → default (Mon–Sat working, Sunday off).
+        let cal = get_calendar_logic(&mut c, &principal()).unwrap();
+        assert_eq!(cal.week, [true, true, true, true, true, true, false]);
+        assert!(cal.events.is_empty());
+        // Make Saturday (index 5) a weekly off too.
+        set_weekly_offs_logic(
+            &mut c, &principal(), None, DeviceMode::Server,
+            &[true, true, true, true, true, false, false],
+        )
+        .unwrap();
+        let cal = get_calendar_logic(&mut c, &principal()).unwrap();
+        assert_eq!(cal.week, [true, true, true, true, true, false, false]);
+        // The repo agrees: 2026-09-26 (Saturday) is now non-working.
+        assert!(!crate::calendar::is_working_day(&c, "2026-09-26").unwrap());
+        // Audited, and one op per weekday landed in op_log (Server mode).
+        let ops: i64 = c.query_row("SELECT count(*) FROM op_log WHERE \"table\"='school_week'", [], |r| r.get(0)).unwrap();
+        assert_eq!(ops, 7);
+    }
+
+    #[test]
+    fn weekly_offs_must_be_length_7() {
+        let mut c = seeded();
+        let e = set_weekly_offs_logic(&mut c, &principal(), None, DeviceMode::Server, &[true, false]).unwrap_err();
+        assert_eq!(e.code, "VALIDATION");
+    }
+
+    #[test]
+    fn add_update_delete_calendar_event() {
+        let mut c = seeded();
+        let input = CalendarEventInput {
+            starts_on: "2026-10-02".into(),
+            ends_on: "2026-10-02".into(),
+            kind: "holiday".into(),
+            title: "Gandhi Jayanti".into(),
+            title_hi: None,
+            title_te: None,
+            is_non_working: true,
+        };
+        let ev = add_calendar_event_logic(&mut c, &principal(), None, DeviceMode::Server, &input).unwrap();
+        assert_eq!(ev.title, "Gandhi Jayanti");
+        assert!(ev.is_non_working);
+        // The day is now non-working per the repo.
+        assert!(!crate::calendar::is_working_day(&c, "2026-10-02").unwrap());
+
+        // Update: extend to a range and rename.
+        let upd = CalendarEventInput {
+            starts_on: "2026-10-02".into(),
+            ends_on: "2026-10-03".into(),
+            kind: "holiday".into(),
+            title: "Gandhi Jayanti (extended)".into(),
+            title_hi: None,
+            title_te: None,
+            is_non_working: true,
+        };
+        let ev2 = update_calendar_event_logic(&mut c, &principal(), None, DeviceMode::Server, &ev.id, &upd).unwrap();
+        assert_eq!(ev2.ends_on, "2026-10-03");
+        assert!(!crate::calendar::is_working_day(&c, "2026-10-03").unwrap());
+
+        // Delete.
+        delete_calendar_event_logic(&mut c, &principal(), None, DeviceMode::Server, &ev.id).unwrap();
+        assert!(get_calendar_logic(&mut c, &principal()).unwrap().events.is_empty());
+        assert!(crate::calendar::is_working_day(&c, "2026-10-02").unwrap()); // working again
+    }
+
+    #[test]
+    fn add_event_rejects_bad_dates_and_kind() {
+        let mut c = seeded();
+        let bad_range = CalendarEventInput {
+            starts_on: "2026-10-05".into(), ends_on: "2026-10-01".into(),
+            kind: "holiday".into(), title: "x".into(), title_hi: None, title_te: None, is_non_working: true,
+        };
+        assert_eq!(add_calendar_event_logic(&mut c, &principal(), None, DeviceMode::Server, &bad_range).unwrap_err().code, "VALIDATION");
+        let bad_kind = CalendarEventInput {
+            starts_on: "2026-10-01".into(), ends_on: "2026-10-01".into(),
+            kind: "party".into(), title: "x".into(), title_hi: None, title_te: None, is_non_working: false,
+        };
+        assert_eq!(add_calendar_event_logic(&mut c, &principal(), None, DeviceMode::Server, &bad_kind).unwrap_err().code, "VALIDATION");
+    }
+
+    #[test]
+    fn accountant_can_read_but_not_edit_calendar() {
+        let mut c = seeded();
+        // Reading is allowed for any role.
+        assert!(get_calendar_logic(&mut c, &accountant()).is_ok());
+        // Editing is Principal-only (Settings).
+        let input = CalendarEventInput {
+            starts_on: "2026-10-02".into(), ends_on: "2026-10-02".into(),
+            kind: "holiday".into(), title: "x".into(), title_hi: None, title_te: None, is_non_working: true,
+        };
+        assert_eq!(add_calendar_event_logic(&mut c, &accountant(), None, DeviceMode::Server, &input).unwrap_err().code, "FORBIDDEN");
+        assert_eq!(set_weekly_offs_logic(&mut c, &accountant(), None, DeviceMode::Server, &[true; 7]).unwrap_err().code, "FORBIDDEN");
     }
 
     fn head_input(name: &str, amount: i64) -> FeeHeadInput {

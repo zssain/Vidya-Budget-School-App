@@ -4,6 +4,7 @@ import { Pill } from '@/components/desktop/Pill'
 import { t } from '@/lib/i18n'
 import * as api from '@/lib/api'
 import type { SchoolDto } from '@/lib/api'
+import CalendarSettings from './CalendarSettings'
 
 // Session switcher (prompts/P07 Shared). One session exists until a rollover
 // (Phase 8). Past sessions render read-only with the gold banner; the read-only
@@ -26,6 +27,9 @@ export default function SessionScreen() {
         {school?.session_read_only ? <Pill variant="neutral">{t('session.readOnly')}</Pill> : null}
       </div>
       <div style={{ fontSize: '13px', color: 'var(--muted)' }}>{t('session.note')}</div>
+
+      {/* School calendar (P13): weekly off days + holidays/events. */}
+      <CalendarSettings />
     </div>
   )
 }

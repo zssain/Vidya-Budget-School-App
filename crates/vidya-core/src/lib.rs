@@ -12,6 +12,7 @@ pub mod admissions;
 pub mod attendance;
 pub mod audience;
 pub mod backup;
+pub mod calendar;
 pub mod conflicts;
 pub mod csv;
 pub mod epoch;

@@ -40,22 +40,17 @@ pub struct Effect<T> {
     pub op: Op,
 }
 
-/// Run `f` and its bookkeeping in ONE transaction; roll everything back on any error.
-pub fn with_write<T>(
-    conn: &mut Connection,
-    ctx: &WriteCtx,
-    f: impl FnOnce(&Transaction) -> rusqlite::Result<Effect<T>>,
-) -> rusqlite::Result<T> {
-    let tx = conn.transaction()?;
-    let eff = f(&tx)?;
-    audit::append(&tx, &eff.audit)?;
-    let op = &eff.op;
-    match ctx.mode {
+/// Append one op to `op_log` (Server) or `outbox` (Client) on an open
+/// transaction. Use this when a single logical change emits **several** ops
+/// (e.g. the seven `school_week` rows of a weekly-offs edit) inside one
+/// transaction; for the common one-op change use [`with_write`].
+pub fn append_op(tx: &Transaction, mode: DeviceMode, op: &Op) -> rusqlite::Result<()> {
+    match mode {
         DeviceMode::Server => {
             tx.execute(
                 "INSERT INTO op_log(op_id, hlc, device_id, staff_id, \"table\", record_id, kind, payload, applied_at) \
                  VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
-                params![op.op_id, op.hlc, op.device_id, op.staff_id, op.table, op.record_id, op.kind, op.payload, eff.audit.at],
+                params![op.op_id, op.hlc, op.device_id, op.staff_id, op.table, op.record_id, op.kind, op.payload, op.hlc],
             )?;
         }
         DeviceMode::Client => {
@@ -66,6 +61,19 @@ pub fn with_write<T>(
             )?;
         }
     }
+    Ok(())
+}
+
+/// Run `f` and its bookkeeping in ONE transaction; roll everything back on any error.
+pub fn with_write<T>(
+    conn: &mut Connection,
+    ctx: &WriteCtx,
+    f: impl FnOnce(&Transaction) -> rusqlite::Result<Effect<T>>,
+) -> rusqlite::Result<T> {
+    let tx = conn.transaction()?;
+    let eff = f(&tx)?;
+    audit::append(&tx, &eff.audit)?;
+    append_op(&tx, ctx.mode, &eff.op)?;
     tx.commit()?;
     Ok(eff.value)
 }

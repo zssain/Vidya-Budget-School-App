@@ -714,6 +714,42 @@ export const dashboard_teacher = () => invoke<TeacherDashboard>('dashboard_teach
 export const set_accent = (hex: string) => invoke<void>('set_accent', { hex })
 export const list_modules = () => invoke<ModuleRow[]>('list_modules')
 export const set_module = (key: string, enabled: boolean) => invoke<void>('set_module', { key, enabled })
+
+// ---- Phase 13: school calendar (weekly offs + holidays/exams/events) --------
+export interface CalendarEventDto {
+  id: string
+  session_id: string | null
+  starts_on: string
+  ends_on: string
+  kind: string
+  title: string
+  title_hi: string | null
+  title_te: string | null
+  is_non_working: boolean
+  circular_id: string | null
+}
+export interface CalendarDto {
+  /** Working flag per weekday, index 0 = Monday … 6 = Sunday. */
+  week: boolean[]
+  events: CalendarEventDto[]
+}
+export interface CalendarEventInput {
+  starts_on: string
+  ends_on: string
+  kind: string
+  title: string
+  title_hi?: string | null
+  title_te?: string | null
+  is_non_working: boolean
+}
+export const get_calendar = () => invoke<CalendarDto>('get_calendar')
+export const set_weekly_offs = (working: boolean[]) => invoke<void>('set_weekly_offs', { working })
+export const add_calendar_event = (input: CalendarEventInput) =>
+  invoke<CalendarEventDto>('add_calendar_event', { input })
+export const update_calendar_event = (id: string, input: CalendarEventInput) =>
+  invoke<CalendarEventDto>('update_calendar_event', { id, input })
+export const delete_calendar_event = (id: string) => invoke<void>('delete_calendar_event', { id })
+
 export const verify_audit_chain = () => invoke<AuditChainDto>('verify_audit_chain')
 export const backup_status = () => invoke<BackupStatusDto>('backup_status')
 export const backup_now = (recoveryKey?: string) =>

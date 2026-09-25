@@ -99,9 +99,14 @@ pub fn audience_for(table: &str, class_id: Option<&str>) -> CoreResult<Audience>
         // see roster changes but leave accountants unable to seal — worse.
         "student" | "enrollment" => Ok(Audience::Finance),
         // ---- principal-only administrative data ----------------------------
+        // Calendar (P13): Principal-edited school-wide config; every role reads it
+        // via the server snapshot (like the student roster). Pusher = Principal →
+        // `admin` is the pusher-consistent audience.
         "school" | "academic_session" | "term" | "subject" | "class" | "class_subject"
         | "staff" | "device" | "invite" | "conflict" | "review_flag" | "notification"
-        | "licence" | "grade_scale" | "grade_band" => Ok(Audience::Admin),
+        | "licence" | "grade_scale" | "grade_band" | "school_week" | "calendar_event" => {
+            Ok(Audience::Admin)
+        }
         // ---- request: audience follows the requester's own domain ----------
         // A request is sealed by whoever raises it, so its audience is the
         // requester's own (a teacher's correction under `class:<own>`, an
@@ -172,6 +177,8 @@ mod tests {
             "licence",
             "grade_scale",
             "grade_band",
+            "school_week",
+            "calendar_event",
         ] {
             assert_eq!(audience_for(t, None).unwrap(), Audience::Admin, "{t}");
         }

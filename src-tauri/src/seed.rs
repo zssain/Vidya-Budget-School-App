@@ -483,6 +483,23 @@ mod tests {
     }
 
     #[test]
+    fn attendance_pending_is_empty_on_non_working_days() {
+        let c = seeded();
+        // Working Wednesday: VII-B is pending.
+        assert_eq!(dash::attendance_pending(&c, "2026-09-23").unwrap().len(), 1);
+        // Sunday (default weekly off): nothing is expected.
+        assert!(dash::attendance_pending(&c, "2026-09-27").unwrap().is_empty());
+        // A holiday declared on the working Wednesday: also nothing expected.
+        c.execute(
+            "INSERT INTO calendar_event(id, starts_on, ends_on, kind, title, is_non_working, created_at, updated_at) \
+             VALUES ('ev-h','2026-09-23','2026-09-23','holiday','Local holiday',1,'t','t')",
+            [],
+        )
+        .unwrap();
+        assert!(dash::attendance_pending(&c, "2026-09-23").unwrap().is_empty());
+    }
+
+    #[test]
     fn demo_reproduces_principal_home_numbers() {
         let c = seeded();
         let d = dash::principal_dashboard(&c, "2026-09-23").unwrap();

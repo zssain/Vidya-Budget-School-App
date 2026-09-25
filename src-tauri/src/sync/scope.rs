@@ -88,6 +88,10 @@ pub fn visible_row(conn: &Connection, actor: &Actor, table: &str, id: &str) -> r
         }
         Some(Change { table: table.into(), record_id: id.into(), payload, server_seq: 0, hlc: None })
     };
+    // Calendar (P13) is school-wide info every role reads (attendance/dashboards).
+    if table == "school_week" || table == "calendar_event" {
+        return Ok(mk(row, None));
+    }
     match actor.role {
         Role::Principal => Ok(mk(row, None)),
         Role::Accountant => {
@@ -175,11 +179,13 @@ pub fn snapshot(conn: &Connection, actor: &Actor) -> rusqlite::Result<Vec<Change
         Ok(())
     };
 
-    // Everyone: school, sessions, terms, subjects.
+    // Everyone: school, sessions, terms, subjects, calendar (P13).
     for id in ids_of(conn, "SELECT id FROM school", &[])? { push(conn, "school", &id, None)?; }
     for id in ids_of(conn, "SELECT id FROM academic_session", &[])? { push(conn, "academic_session", &id, None)?; }
     for id in ids_of(conn, "SELECT id FROM term", &[])? { push(conn, "term", &id, None)?; }
     for id in ids_of(conn, "SELECT id FROM subject", &[])? { push(conn, "subject", &id, None)?; }
+    for id in ids_of(conn, "SELECT id FROM school_week", &[])? { push(conn, "school_week", &id, None)?; }
+    for id in ids_of(conn, "SELECT id FROM calendar_event", &[])? { push(conn, "calendar_event", &id, None)?; }
 
     // Staff — names only for non-Principal.
     let staff_filter = |row: &mut serde_json::Value| {

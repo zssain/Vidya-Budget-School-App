@@ -4,6 +4,7 @@
 //! the demo seed on top of the Phase-2 encrypted DB + audit chain + write helper.
 
 pub mod backup;
+pub mod calendar;
 pub mod commands;
 pub mod config;
 pub mod ctx;
@@ -176,6 +177,7 @@ fn invoke_handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'stat
         record_payment, list_payments, create_request, cancel_request, list_requests, get_request,
         decide_request, dashboard_principal, dashboard_accountant, dashboard_teacher, set_accent,
         list_modules, set_module,
+        get_calendar, set_weekly_offs, add_calendar_event, update_calendar_event, delete_calendar_event,
         verify_audit_chain, backup_status, backup_now,
         list_staff_access, add_staff, suspend_staff, remove_staff, create_invite, revoke_invite,
         set_class_teacher, assign_subject_teacher, effective_access, list_devices, revoke_device,
@@ -201,6 +203,7 @@ fn invoke_handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'stat
         record_payment, list_payments, create_request, cancel_request, list_requests, get_request,
         decide_request, dashboard_principal, dashboard_accountant, dashboard_teacher, set_accent,
         list_modules, set_module,
+        get_calendar, set_weekly_offs, add_calendar_event, update_calendar_event, delete_calendar_event,
         verify_audit_chain, backup_status, backup_now,
         list_staff_access, add_staff, suspend_staff, remove_staff, create_invite, revoke_invite,
         set_class_teacher, assign_subject_teacher, effective_access, list_devices, revoke_device,

@@ -257,6 +257,11 @@ pub fn attendance_today(conn: &Connection, today: &str) -> rusqlite::Result<Atte
 /// Classes with a `draft` (pending) attendance sheet today, each with its class
 /// teacher's name (§5: only the class teacher takes attendance for a class).
 pub fn attendance_pending(conn: &Connection, today: &str) -> rusqlite::Result<Vec<PendingClass>> {
+    // No attendance is expected on a non-working day (P13 calendar backbone): a
+    // weekly off or a holiday means dashboards list nothing as "not submitted".
+    if !crate::calendar::is_working_day(conn, today)? {
+        return Ok(Vec::new());
+    }
     let mut stmt = conn.prepare(
         "SELECT c.display, st.name \
          FROM attendance_sheet s JOIN class c ON c.id=s.class_id \
