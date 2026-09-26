@@ -442,6 +442,29 @@ fn expenses(tx: &rusqlite::Transaction, c: &Ctx) -> rusqlite::Result<()> {
         )?;
     }
     salaries(tx, c)?;
+    store(tx)?;
+    Ok(())
+}
+
+/// A few demo store items (prototype `store`). Inert unless the optional `store`
+/// module is turned on (default off); then they appear + sync.
+fn store(tx: &rusqlite::Transaction) -> rusqlite::Result<()> {
+    // (id, name, price_paise, stock, low_stock_at)
+    let items = [
+        ("itm-book", "Class VI book set", 245_000i64, 18i64, 5i64),
+        ("itm-shirt", "School shirt · size 28", 35_000, 42, 10),
+        ("itm-tie", "School tie", 12_000, 60, 10),
+        ("itm-notebook", "Notebook pack (12)", 48_000, 4, 5),
+        ("itm-belt", "Belt", 15_000, 35, 10),
+        ("itm-idcard", "ID card holder", 4_000, 120, 20),
+    ];
+    for (id, name, price, stock, low) in items {
+        tx.execute(
+            "INSERT INTO store_item(id,name,price_paise,stock,low_stock_at,active,created_at,updated_at,sync_state) \
+             VALUES (?1,?2,?3,?4,?5,1,'2026-04-01T09:00:00Z','2026-04-01T09:00:00Z','confirmed')",
+            params![id, name, price, stock, low],
+        )?;
+    }
     Ok(())
 }
 

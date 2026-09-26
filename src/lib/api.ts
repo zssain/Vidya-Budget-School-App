@@ -1000,6 +1000,54 @@ export const set_salary_structure = (input: SalaryStructureInput) =>
 export const give_advance = (input: AdvanceInput) => invoke<void>('give_advance', { input })
 export const pay_salaries = (month: string, mode: string, days: StaffDaysInput[] = []) =>
   invoke<PaySalariesResult>('pay_salaries', { month, mode, days })
+
+// School store (P15 Step 6, optional module `store`, prototype `store`).
+export interface StoreItemDto {
+  id: string
+  name: string
+  name_hi: string | null
+  name_te: string | null
+  price_paise: number
+  stock: number
+  low_stock_at: number
+  active: boolean
+  low_stock: boolean
+}
+export interface StoreItemInput {
+  id?: string | null
+  name: string
+  name_hi?: string | null
+  name_te?: string | null
+  price_paise: number
+  low_stock_at: number
+  active?: boolean
+}
+export interface SaleItemInput {
+  item_id: string
+  qty: number
+}
+export interface StoreSaleInput {
+  student_id?: string | null
+  guardian_id?: string | null
+  items: SaleItemInput[]
+  mode: string
+}
+export interface StoreSaleDto {
+  id: string
+  receipt_no: string
+  total_paise: number
+  confirmed: boolean
+}
+export interface StockAdjustInput {
+  item_id: string
+  delta_qty: number
+  reason: string
+}
+export const list_store_items = (includeInactive = false) =>
+  invoke<StoreItemDto[]>('list_store_items', { includeInactive })
+export const save_store_item = (input: StoreItemInput) => invoke<StoreItemDto>('save_store_item', { input })
+export const record_store_sale = (input: StoreSaleInput) => invoke<StoreSaleDto>('record_store_sale', { input })
+export const stock_adjust = (input: StockAdjustInput) => invoke<StoreItemDto>('stock_adjust', { input })
 export const update_fee_head = (id: string, input: FeeHeadInput) =>
   invoke<FeeHeadDto>('update_fee_head', { id, input })
 export const deactivate_fee_head = (id: string) => invoke<void>('deactivate_fee_head', { id })

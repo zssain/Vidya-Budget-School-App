@@ -23,6 +23,7 @@ import FeesScreen from '@/screens/desktop/FeesScreen'
 import ReceiptsScreen from '@/screens/desktop/ReceiptsScreen'
 import DayBookScreen from '@/screens/desktop/DayBookScreen'
 import AccountsScreen from '@/screens/desktop/AccountsScreen'
+import SchoolStoreScreen from '@/screens/desktop/SchoolStoreScreen'
 import AttendanceRegisterScreen from '@/screens/desktop/AttendanceRegisterScreen'
 import MyRequestsScreen from '@/screens/desktop/MyRequestsScreen'
 import InboxScreen from '@/screens/desktop/InboxScreen'
@@ -217,6 +218,8 @@ function desktopRoute(base: string, role: Role): { active: string; node: ReactNo
   if (base === '/principal/fees') return { active: 'fees', node: <FeesScreen /> }
   if (base === '/principal/accounts') return { active: 'accounts', node: <AccountsScreen role={role} /> }
   if (base === '/accountant/accounts') return { active: 'accounts', node: <AccountsScreen role={role} /> }
+  if (base === '/principal/schoolstore') return { active: 'schoolstore', node: <SchoolStoreScreen role={role} /> }
+  if (base === '/accountant/schoolstore') return { active: 'schoolstore', node: <SchoolStoreScreen role={role} /> }
   if (base === '/principal/receipts' || base === '/accountant/receipts')
     return { active: 'receipts', node: <ReceiptsScreen role={role} /> }
   if (base === '/principal/daybook') return { active: 'fees', node: <DayBookScreen /> }

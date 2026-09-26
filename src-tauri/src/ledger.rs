@@ -393,6 +393,28 @@ pub fn post_salary_voucher(
     Ok(vid)
 }
 
+/// Post a store-sale voucher (Dr money account for the mode, Cr Store income).
+#[allow(clippy::too_many_arguments)]
+pub fn post_store_sale_voucher(
+    tx: &Transaction,
+    voucher_no: &str,
+    sale_id: &str,
+    mode: PaymentMode,
+    total_paise: i64,
+    date_iso: &str,
+    created_by: Option<&str>,
+    device_id: Option<&str>,
+    school_id: Option<&str>,
+    now: &str,
+    sync_state: &str,
+) -> rusqlite::Result<String> {
+    post_voucher_dyn(
+        tx, voucher_no, "store_sale", &date_of(date_iso), Some("Store sale"), "store_sale", sale_id,
+        ledger::money_account_for_mode(mode), vidya_core::ledger::STORE_INCOME, total_paise,
+        created_by, device_id, school_id, now, sync_state,
+    )
+}
+
 /// Total debits minus credits across all ledger entries — must be exactly 0 if
 /// every voucher is balanced (a whole-book invariant used by tests).
 pub fn ledger_imbalance(conn: &Connection) -> rusqlite::Result<i64> {

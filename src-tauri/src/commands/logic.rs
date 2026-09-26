@@ -2795,6 +2795,249 @@ pub fn pay_salaries_logic(
     Ok(PaySalariesResult { paid: paid_count, total_net_paise: total_net })
 }
 
+// ============================================================== store =========
+//
+// P15 Step 6 (§10.3, optional module `store`). Items with price + stock; sales
+// with an S-… receipt + Store-income voucher (append-only); stock can't go
+// negative; price is snapshotted onto the sale. Principal manages items/stock;
+// Accountant + Principal record sales. Gated by require_module(store).
+
+#[derive(Debug, Serialize)]
+pub struct StoreItemDto {
+    pub id: String,
+    pub name: String,
+    pub name_hi: Option<String>,
+    pub name_te: Option<String>,
+    pub price_paise: i64,
+    pub stock: i64,
+    pub low_stock_at: i64,
+    pub active: bool,
+    pub low_stock: bool,
+}
+
+pub fn list_store_items_logic(conn: &mut Connection, actor_s: &SessionStaff, include_inactive: bool) -> CmdResult<Vec<StoreItemDto>> {
+    let actor = actor_from(conn, actor_s)?;
+    require_allow(&actor, Action::RecordStoreSale, &Target::of(TargetKind::Fee))?;
+    require_module_enabled(conn, vidya_core::modules::Module::Store)?;
+    let sql = if include_inactive {
+        "SELECT id, name, name_hi, name_te, price_paise, stock, low_stock_at, active FROM store_item ORDER BY name"
+    } else {
+        "SELECT id, name, name_hi, name_te, price_paise, stock, low_stock_at, active FROM store_item WHERE active=1 ORDER BY name"
+    };
+    let mut stmt = conn.prepare(sql)?;
+    let rows = stmt
+        .query_map([], |r| {
+            let stock: i64 = r.get(5)?;
+            let low_at: i64 = r.get(6)?;
+            Ok(StoreItemDto {
+                id: r.get(0)?,
+                name: r.get(1)?,
+                name_hi: r.get(2)?,
+                name_te: r.get(3)?,
+                price_paise: r.get(4)?,
+                stock,
+                low_stock_at: low_at,
+                active: r.get::<_, i64>(7)? != 0,
+                low_stock: vidya_core::store::is_low_stock(stock, low_at),
+            })
+        })?
+        .collect::<rusqlite::Result<_>>()?;
+    Ok(rows)
+}
+
+#[derive(Debug, Deserialize)]
+pub struct StoreItemInput {
+    pub id: Option<String>,
+    pub name: String,
+    pub name_hi: Option<String>,
+    pub name_te: Option<String>,
+    pub price_paise: i64,
+    pub low_stock_at: i64,
+    pub active: Option<bool>,
+}
+
+/// Create or update a store item (Principal). Stock is changed via `stock_adjust`,
+/// never here (a new item starts at 0 stock).
+pub fn save_store_item_logic(conn: &mut Connection, actor_s: &SessionStaff, input: &StoreItemInput) -> CmdResult<StoreItemDto> {
+    let actor = actor_from(conn, actor_s)?;
+    require_allow(&actor, Action::ManageStore, &Target::of(TargetKind::Fee))?;
+    require_module_enabled(conn, vidya_core::modules::Module::Store)?;
+    vidya_core::validation::validate_name(&input.name)?;
+    vidya_core::store::validate_item(input.price_paise, input.low_stock_at)?;
+    let now = now_iso();
+    let school_id = single_school_id(conn)?;
+    let id = match &input.id {
+        Some(id) => {
+            conn.execute(
+                "UPDATE store_item SET name=?1, name_hi=?2, name_te=?3, price_paise=?4, low_stock_at=?5, active=?6, updated_at=?7 WHERE id=?8",
+                params![input.name, input.name_hi, input.name_te, input.price_paise, input.low_stock_at, input.active.unwrap_or(true) as i64, now, id],
+            )?;
+            id.clone()
+        }
+        None => {
+            let id = new_id("item");
+            conn.execute(
+                "INSERT INTO store_item(id,name,name_hi,name_te,price_paise,stock,low_stock_at,active,school_id,created_at,updated_at,sync_state) \
+                 VALUES (?1,?2,?3,?4,?5,0,?6,1,?7,?8,?8,'confirmed')",
+                params![id, input.name, input.name_hi, input.name_te, input.price_paise, input.low_stock_at, school_id, now],
+            )?;
+            id
+        }
+    };
+    audit_action(conn, AuditEntry {
+        at: now, staff_id: Some(actor_s.id.clone()), action: "save_store_item".into(),
+        table: Some("store_item".into()), record_id: Some(id.clone()),
+        after_json: Some(serde_json::json!({ "name": input.name, "price_paise": input.price_paise }).to_string()),
+        ..Default::default()
+    })?;
+    list_store_items_logic(conn, actor_s, true)?.into_iter().find(|i| i.id == id).ok_or_else(CmdError::not_found)
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SaleItemInput {
+    pub item_id: String,
+    pub qty: i64,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct StoreSaleInput {
+    pub student_id: Option<String>,
+    pub guardian_id: Option<String>,
+    pub items: Vec<SaleItemInput>,
+    pub mode: String, // cash | upi | cheque
+}
+
+#[derive(Debug, Serialize)]
+pub struct StoreSaleDto {
+    pub id: String,
+    pub receipt_no: String,
+    pub total_paise: i64,
+    pub confirmed: bool,
+}
+
+/// Record a store sale (Accountant + Principal): validates stock, snapshots
+/// prices, decrements stock (stock_move), posts a Store-income voucher and an
+/// S-… receipt. Stock can never go negative (a bigger sale is blocked).
+pub fn record_store_sale_logic(
+    conn: &mut Connection,
+    actor_s: &SessionStaff,
+    device_id: Option<&str>,
+    device_mode: DeviceMode,
+    today: &str,
+    input: &StoreSaleInput,
+) -> CmdResult<StoreSaleDto> {
+    let actor = actor_from(conn, actor_s)?;
+    require_allow(&actor, Action::RecordStoreSale, &Target::of(TargetKind::Fee))?;
+    require_module_enabled(conn, vidya_core::modules::Module::Store)?;
+    let mode = payment_mode_from(&input.mode)?;
+
+    // Load each item's current price + stock + name; build the sale lines.
+    let mut lines = Vec::new();
+    let mut snapshot = Vec::new(); // items_json entries
+    for it in &input.items {
+        let (name, price, stock): (String, i64, i64) = conn
+            .query_row("SELECT name, price_paise, stock FROM store_item WHERE id=?1 AND active=1", params![it.item_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .optional()?
+            .ok_or_else(CmdError::not_found)?;
+        lines.push(vidya_core::store::SaleLine { item_id: it.item_id.clone(), qty: it.qty, price_paise: price, stock });
+        snapshot.push(serde_json::json!({ "item_id": it.item_id, "name": name, "qty": it.qty, "price_paise": price }));
+    }
+    let total = vidya_core::store::validate_sale(&lines)?;
+
+    let now = now_iso();
+    let date = today[..today.len().min(10)].to_string();
+    let sale_id = new_id("sale");
+    let confirmed = device_mode == DeviceMode::Server;
+    let sync_state = if confirmed { "confirmed" } else { "on_device" };
+    let (series, _) = receipt_series_and_last(conn, device_id)?;
+    let school_id = single_school_id(conn)?;
+    let ctx = WriteCtx { mode: device_mode };
+    let dev = device_id.map(str::to_string);
+    let items_json = serde_json::Value::Array(snapshot).to_string();
+    let sale_id2 = sale_id.clone();
+    let student = input.student_id.clone();
+    let guardian = input.guardian_id.clone();
+    let mode_s = input.mode.clone();
+    let lines2 = lines.clone();
+
+    let receipt_no = with_write(conn, &ctx, move |tx| {
+        let receipt_no = crate::numbering::next_no(tx, vidya_core::numbering::NumberKind::StoreSale, &series)?;
+        let vid: Option<String> = if confirmed {
+            let vno = crate::numbering::next_no(tx, vidya_core::numbering::NumberKind::Voucher, &series)?;
+            Some(crate::ledger::post_store_sale_voucher(tx, &vno, &sale_id2, mode, total, &date, Some(actor_s.id.as_str()), dev.as_deref(), school_id.as_deref(), &now, "confirmed")?)
+        } else {
+            None
+        };
+        tx.execute(
+            "INSERT INTO store_sale(id,receipt_no,student_id,guardian_id,items_json,total_paise,mode,voucher_id,sold_by,sold_at,device_id,school_id,created_at,updated_at,sync_state) \
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?10,?10,?13)",
+            params![sale_id2, receipt_no, student, guardian, items_json, total, mode_s, vid, actor_s.id, now, dev, school_id, sync_state],
+        )?;
+        // Decrement stock + record a stock_move per item.
+        for l in &lines2 {
+            tx.execute(
+                "INSERT INTO stock_move(id,item_id,qty,reason,ref_id,by,at,school_id,created_at,updated_at,sync_state) \
+                 VALUES (?1,?2,?3,'sale',?4,?5,?6,?7,?6,?6,'confirmed')",
+                params![new_id("mv"), l.item_id, -l.qty, sale_id2, actor_s.id, now, school_id],
+            )?;
+            tx.execute("UPDATE store_item SET stock=stock-?1, updated_at=?2 WHERE id=?3", params![l.qty, now, l.item_id])?;
+        }
+        let audit = AuditEntry {
+            at: now.clone(), staff_id: Some(actor_s.id.clone()), action: "record_store_sale".into(),
+            table: Some("store_sale".into()), record_id: Some(sale_id2.clone()),
+            after_json: Some(serde_json::json!({ "receipt_no": receipt_no, "total_paise": total }).to_string()),
+            ..Default::default()
+        };
+        let op = Op {
+            op_id: new_id("op"), hlc: now.clone(), device_id: dev.clone().unwrap_or_default(), staff_id: actor_s.id.clone(),
+            audience: "finance".into(), table: "store_sale".into(), record_id: sale_id2.clone(), kind: "insert".into(),
+            payload: "{}".into(), base_version: None, server_epoch: 1,
+        };
+        Ok(Effect { value: receipt_no, audit, op })
+    })?;
+    Ok(StoreSaleDto { id: sale_id, receipt_no, total_paise: total, confirmed })
+}
+
+#[derive(Debug, Deserialize)]
+pub struct StockAdjustInput {
+    pub item_id: String,
+    pub delta_qty: i64,     // signed: +purchase, ±adjust
+    pub reason: String,     // purchase | adjust
+}
+
+/// Purchase or adjust stock (Principal): records a stock_move and updates the
+/// item's running stock (which must stay ≥ 0).
+pub fn stock_adjust_logic(conn: &mut Connection, actor_s: &SessionStaff, today: &str, input: &StockAdjustInput) -> CmdResult<StoreItemDto> {
+    let actor = actor_from(conn, actor_s)?;
+    require_allow(&actor, Action::ManageStore, &Target::of(TargetKind::Fee))?;
+    require_module_enabled(conn, vidya_core::modules::Module::Store)?;
+    if !matches!(input.reason.as_str(), "purchase" | "adjust") {
+        return Err(CmdError::validation("reason", "invalid"));
+    }
+    let current: i64 = conn
+        .query_row("SELECT stock FROM store_item WHERE id=?1", params![input.item_id], |r| r.get(0))
+        .optional()?
+        .ok_or_else(CmdError::not_found)?;
+    let new_stock = current + input.delta_qty;
+    vidya_core::store::validate_new_stock(new_stock)?;
+    let now = now_iso();
+    let date = today[..today.len().min(10)].to_string();
+    let school_id = single_school_id(conn)?;
+    conn.execute(
+        "INSERT INTO stock_move(id,item_id,qty,reason,by,at,school_id,created_at,updated_at,sync_state) \
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?6,?6,'confirmed')",
+        params![new_id("mv"), input.item_id, input.delta_qty, input.reason, actor_s.id, date, school_id],
+    )?;
+    conn.execute("UPDATE store_item SET stock=?1, updated_at=?2 WHERE id=?3", params![new_stock, now, input.item_id])?;
+    audit_action(conn, AuditEntry {
+        at: now, staff_id: Some(actor_s.id.clone()), action: "stock_adjust".into(),
+        table: Some("store_item".into()), record_id: Some(input.item_id.clone()),
+        after_json: Some(serde_json::json!({ "delta": input.delta_qty, "reason": input.reason, "new_stock": new_stock }).to_string()),
+        ..Default::default()
+    })?;
+    list_store_items_logic(conn, actor_s, true)?.into_iter().find(|i| i.id == input.item_id).ok_or_else(CmdError::not_found)
+}
+
 // ============================================================= receipts =======
 //
 // Receipt search / open (full receipt data incl. amount in words en+hi, heads
@@ -7906,6 +8149,49 @@ mod tests {
         assert_eq!(pay_salaries_logic(&mut c, &principal(), Some("dev-a1"), DeviceMode::Server, "2026-09", "bank", &days).unwrap().paid, 0);
         // Accountant cannot manage salary.
         assert!(salary_register_logic(&mut c, &accountant(), "2026-09", &[]).is_err());
+    }
+
+    #[test]
+    fn store_sale_decrements_stock_posts_voucher_and_blocks_negative() {
+        let mut c = seeded();
+        // Store module off by default → commands rejected (MODULE_OFF).
+        assert!(list_store_items_logic(&mut c, &accountant(), false).is_err());
+        c.execute("UPDATE module_setting SET enabled=1 WHERE key='store'", []).unwrap();
+
+        let items = list_store_items_logic(&mut c, &accountant(), false).unwrap();
+        assert!(!items.is_empty(), "seeded store items");
+        assert!(items.iter().find(|i| i.id == "itm-notebook").unwrap().low_stock, "4 ≤ 5 → low stock");
+
+        // Sell 1 book (₹2,450) + 2 shirts (₹350) → stock down, voucher balanced, S- receipt.
+        let sale = record_store_sale_logic(
+            &mut c, &accountant(), Some("dev-a2"), DeviceMode::Server, "2026-09-23",
+            &StoreSaleInput { student_id: None, guardian_id: None, mode: "upi".into(), items: vec![
+                SaleItemInput { item_id: "itm-book".into(), qty: 1 },
+                SaleItemInput { item_id: "itm-shirt".into(), qty: 2 },
+            ] },
+        ).unwrap();
+        assert!(sale.receipt_no.starts_with("S-"), "S- receipt number");
+        assert_eq!(sale.total_paise, 245_000 + 70_000);
+        assert_eq!(c.query_row("SELECT stock FROM store_item WHERE id='itm-book'", [], |r| r.get::<_, i64>(0)).unwrap(), 17);
+        assert_eq!(crate::ledger::ledger_imbalance(&c).unwrap(), 0, "store voucher keeps the book balanced");
+        let store_income: i64 = c.query_row("SELECT COALESCE(SUM(credit_paise-debit_paise),0) FROM ledger_entry WHERE account_id='store_income'", [], |r| r.get(0)).unwrap();
+        assert_eq!(store_income, 315_000, "Store income credited");
+
+        // Selling beyond stock is blocked (stock never goes negative).
+        assert!(record_store_sale_logic(
+            &mut c, &accountant(), Some("dev-a2"), DeviceMode::Server, "2026-09-23",
+            &StoreSaleInput { student_id: None, guardian_id: None, mode: "cash".into(), items: vec![SaleItemInput { item_id: "itm-notebook".into(), qty: 99 }] },
+        ).is_err());
+
+        // Only the Principal manages stock.
+        assert!(stock_adjust_logic(&mut c, &accountant(), "2026-09-23", &StockAdjustInput { item_id: "itm-book".into(), delta_qty: 10, reason: "purchase".into() }).is_err());
+        stock_adjust_logic(&mut c, &principal(), "2026-09-23", &StockAdjustInput { item_id: "itm-book".into(), delta_qty: 10, reason: "purchase".into() }).unwrap();
+        assert_eq!(c.query_row("SELECT stock FROM store_item WHERE id='itm-book'", [], |r| r.get::<_, i64>(0)).unwrap(), 27);
+
+        // A teacher can never touch the store.
+        let teacher = SessionStaff { id: "stf-meena".into(), name: "M".into(), role: "teacher".into() };
+        assert!(record_store_sale_logic(&mut c, &teacher, Some("dev-a1"), DeviceMode::Server, "2026-09-23",
+            &StoreSaleInput { student_id: None, guardian_id: None, mode: "cash".into(), items: vec![SaleItemInput { item_id: "itm-book".into(), qty: 1 }] }).is_err());
     }
 
     #[test]

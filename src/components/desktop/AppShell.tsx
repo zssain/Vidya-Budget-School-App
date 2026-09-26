@@ -101,6 +101,9 @@ export default function AppShell({ role, active, children }: AppShellProps) {
   const store = useStore()
   const [school, setSchool] = useState<SchoolDto | null>(null)
   const [badge, setBadge] = useState(0)
+  // Optional-module keys that are ON (§14). An item with a `module` that is OFF is
+  // hidden entirely (e.g. School store). Modules default on until we know.
+  const [offModules, setOffModules] = useState<Set<string>>(new Set())
 
   useEffect(() => {
     api.get_school().then(setSchool).catch(() => setSchool(null))
@@ -109,6 +112,10 @@ export default function AppShell({ role, active, children }: AppShellProps) {
       .list_requests('pending')
       .then((rows) => setBadge(rows.length))
       .catch(() => setBadge(0))
+    api
+      .list_modules()
+      .then((rows) => setOffModules(new Set(rows.filter((m) => !m.enabled).map((m) => m.key))))
+      .catch(() => setOffModules(new Set()))
   }, [role])
 
   // Global search palette on Ctrl/Cmd+K.
@@ -123,7 +130,10 @@ export default function AppShell({ role, active, children }: AppShellProps) {
     return () => window.removeEventListener('keydown', onKey)
   }, [])
 
+  // Hide items whose optional module is OFF (§14), then drop any now-empty section.
   const sections: NavSection[] = navForRole(role)
+    .map((s) => ({ ...s, items: s.items.filter((it) => !it.module || !offModules.has(it.module)) }))
+    .filter((s) => s.items.length > 0)
   const user = store.app?.state.kind === 'unlocked' ? store.app.state.staff : null
   const schoolName = school?.name ?? t('app.name')
   const sessionLabel = school?.session_label ?? ''

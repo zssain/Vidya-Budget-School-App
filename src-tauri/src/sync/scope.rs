@@ -310,6 +310,7 @@ pub fn snapshot(conn: &Connection, actor: &Actor) -> rusqlite::Result<Vec<Change
                       "fee_head", "fee_due", "payment", "payment_allocation", "reversal", "request",
                       "ledger_account", "voucher", "ledger_entry", "expense", "expense_reversal",
                       "salary_structure", "staff_advance", "salary_run", "salary_line",
+                      "store_item", "store_sale", "stock_move",
                       "marks_sheet", "mark_entry", "exam", "exam_subject"] {
                 for id in ids_of(conn, &format!("SELECT id FROM {t}"), &[])? {
                     push(conn, t, &id, None)?;
@@ -317,7 +318,7 @@ pub fn snapshot(conn: &Connection, actor: &Actor) -> rusqlite::Result<Vec<Change
             }
         }
         Role::Accountant => {
-            for t in ["class", "class_subject", "student", "enrollment", "guardian", "student_guardian", "consent", "fee_head", "fee_due", "payment", "payment_allocation", "reversal", "ledger_account", "voucher", "ledger_entry", "expense", "expense_reversal"] {
+            for t in ["class", "class_subject", "student", "enrollment", "guardian", "student_guardian", "consent", "fee_head", "fee_due", "payment", "payment_allocation", "reversal", "ledger_account", "voucher", "ledger_entry", "expense", "expense_reversal", "store_item", "store_sale", "stock_move"] {
                 for id in ids_of(conn, &format!("SELECT id FROM {t}"), &[])? {
                     push(conn, t, &id, None)?;
                 }
@@ -466,6 +467,24 @@ mod tests {
         }
         // All 670 students visible.
         assert_eq!(snap.iter().filter(|c| c.table == "student").count(), 670);
+    }
+
+    #[test]
+    fn store_rows_sync_only_when_the_module_is_on() {
+        let c = seeded();
+        let p = actor(Role::Principal, "stf-priya", &[], &[]);
+        // Store module OFF by default (§14) → no store rows in the snapshot, even
+        // though the seed inserts store items.
+        let ts_off = tables(&snapshot(&c, &p).unwrap());
+        for t in ["store_item", "store_sale", "stock_move"] {
+            assert!(!ts_off.contains(t), "store module off → {t} must not sync");
+        }
+        // Accounts module ON by default → expenses/salary tables do sync.
+        assert!(ts_off.contains("expense"), "accounts on → expenses sync");
+        // Turn the store module on → its rows now sync.
+        c.execute("UPDATE module_setting SET enabled=1 WHERE key='store'", []).unwrap();
+        let ts_on = tables(&snapshot(&c, &p).unwrap());
+        assert!(ts_on.contains("store_item"), "store on → store_item syncs");
     }
 
     #[test]

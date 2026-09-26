@@ -72,6 +72,10 @@ pub const COMMANDS: &[&str] = &[
     "set_salary_structure",
     "give_advance",
     "pay_salaries",
+    "list_store_items",
+    "save_store_item",
+    "record_store_sale",
+    "stock_adjust",
     "get_receipt",
     "search_receipts",
     "reverse_payment",
@@ -491,6 +495,36 @@ pub fn pay_salaries(state: State<RtCtx>, month: String, mode: String, days: Vec<
     let device_id = state.device_id.lock().map_err(|_| crate::error::CmdError::internal("lock"))?.clone();
     let dmode = state.device_mode;
     state.with_db(|conn| pay_salaries_logic(conn, &actor, device_id.as_deref(), dmode, &month, &mode, &days))
+}
+
+// ---------------------------------------------------------- school store ------
+
+#[tauri::command]
+pub fn list_store_items(state: State<RtCtx>, include_inactive: Option<bool>) -> CmdResult<Vec<StoreItemDto>> {
+    let actor = state.require_session()?;
+    state.with_db(|conn| list_store_items_logic(conn, &actor, include_inactive.unwrap_or(false)))
+}
+
+#[tauri::command]
+pub fn save_store_item(state: State<RtCtx>, input: StoreItemInput) -> CmdResult<StoreItemDto> {
+    let actor = state.require_session()?;
+    state.with_db(|conn| save_store_item_logic(conn, &actor, &input))
+}
+
+#[tauri::command]
+pub fn record_store_sale(state: State<RtCtx>, input: StoreSaleInput) -> CmdResult<StoreSaleDto> {
+    let actor = state.require_session()?;
+    let device_id = state.device_id.lock().map_err(|_| crate::error::CmdError::internal("lock"))?.clone();
+    let mode = state.device_mode;
+    let today = crate::db::now_iso();
+    state.with_db(|conn| record_store_sale_logic(conn, &actor, device_id.as_deref(), mode, &today, &input))
+}
+
+#[tauri::command]
+pub fn stock_adjust(state: State<RtCtx>, input: StockAdjustInput) -> CmdResult<StoreItemDto> {
+    let actor = state.require_session()?;
+    let today = crate::db::now_iso();
+    state.with_db(|conn| stock_adjust_logic(conn, &actor, &today, &input))
 }
 
 // -------------------------------------------------------------- receipts ------

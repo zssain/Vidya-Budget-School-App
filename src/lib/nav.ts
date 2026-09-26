@@ -16,6 +16,10 @@ export interface NavItem {
   path: string
   /** A live count badge, resolved by AppShell. */
   badge?: 'approvals' | 'requests'
+  /** A `module_setting` key: when set and that module is OFF, the item is HIDDEN
+   *  entirely (§14 — e.g. the optional School store). Items whose module defaults
+   *  on (accounts, circulars) omit this and show a MODULE_OFF state on-screen. */
+  module?: string
 }
 
 export interface NavSection {
@@ -64,6 +68,10 @@ export const PRINCIPAL_NAV: NavSection[] = [
       // itself shows a MODULE_OFF state if it is turned off. No `circulars` icon in
       // the mock set (rule 6) → reuse `inbox`.
       { key: 'circulars', labelKey: 'nav.circulars', icon: 'inbox', path: '/principal/circulars' },
+      // School store (P15) — OPTIONAL module `store`, default OFF (§14): the item
+      // is HIDDEN entirely until the module is turned on. No `store` icon in the
+      // mock set (rule 6) → reuse `receipts`.
+      { key: 'schoolstore', labelKey: 'nav.schoolstore', icon: 'receipts', path: '/principal/schoolstore', module: 'store' },
       { key: 'backups', labelKey: 'nav.backups', icon: 'backups', path: '/principal/backups' },
       { key: 'settings', labelKey: 'nav.settings', icon: 'settings', path: '/principal/settings' },
     ],
@@ -79,6 +87,8 @@ export const ACCOUNTANT_NAV: NavSection[] = [
       { key: 'students', labelKey: 'nav.studentsAdmissions', icon: 'students', path: '/accountant/students' },
       { key: 'receipts', labelKey: 'nav.receipts', icon: 'receipts', path: '/accountant/receipts' },
       { key: 'daybook', labelKey: 'nav.daybook', icon: 'daybook', path: '/accountant/daybook' },
+      { key: 'accounts', labelKey: 'nav.accounts', icon: 'daybook', path: '/accountant/accounts' },
+      { key: 'schoolstore', labelKey: 'nav.schoolstore', icon: 'receipts', path: '/accountant/schoolstore', module: 'store' },
       { key: 'requests', labelKey: 'nav.myRequests', icon: 'requests', path: '/accountant/requests', badge: 'requests' },
     ],
   },
