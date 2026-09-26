@@ -3507,6 +3507,200 @@ pub fn save_periods_logic(conn: &mut Connection, actor_s: &SessionStaff, periods
     load_periods(conn, &session_id).map_err(Into::into)
 }
 
+// ---- Substitutes + attendance duty (P16 Step 2, §10.4) ----------------------
+
+#[derive(Debug, Serialize)]
+pub struct SubCoverDto {
+    pub period_no: i64,
+    pub class_id: String,
+    pub class_display: Option<String>,
+    pub subject_name: String,
+    pub starts_at: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct FreeTeacherDto {
+    pub id: String,
+    pub name: String,
+    /// Which of the cover periods this teacher is free in.
+    pub free_periods: Vec<i64>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AttendanceClassDto {
+    pub id: String,
+    pub display: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SubstitutePlanDto {
+    pub date: String,
+    pub weekday: i64,
+    pub absent_teacher_id: String,
+    pub absent_teacher_name: String,
+    pub covers: Vec<SubCoverDto>,
+    /// Classes the absent teacher is class teacher of — their attendance also
+    /// needs cover (a teacher may class-teach more than one class).
+    pub attendance_classes: Vec<AttendanceClassDto>,
+    pub free_teachers: Vec<FreeTeacherDto>,
+}
+
+/// The ISO weekday (Mon=1 … Sun=7) of a `YYYY-MM-DD` date.
+fn weekday_of(date: &str) -> CmdResult<u8> {
+    let d = vidya_core::calendar::parse_date(date).ok_or_else(|| CmdError::validation("date", "format"))?;
+    Ok(vidya_core::calendar::weekday_iso(d.weekday()))
+}
+
+/// The absent teacher's periods on `date` + free teachers to cover them
+/// (prototype `timetable` state 2). Principal only.
+pub fn substitute_plan_logic(conn: &mut Connection, actor_s: &SessionStaff, date: &str, absent_teacher_id: &str) -> CmdResult<SubstitutePlanDto> {
+    let actor = actor_from(conn, actor_s)?;
+    require_allow(&actor, Action::ManageSubstitutes, &Target::of(TargetKind::School))?;
+    require_module_enabled(conn, vidya_core::modules::Module::Classroom)?;
+    let d = date[..date.len().min(10)].to_string();
+    let weekday = weekday_of(&d)? as i64;
+    let absent_teacher_name: String = conn
+        .query_row("SELECT name FROM staff WHERE id=?1", params![absent_teacher_id], |r| r.get(0))
+        .optional()?
+        .ok_or_else(CmdError::not_found)?;
+
+    // Periods the absent teacher would teach that weekday.
+    let covers: Vec<SubCoverDto> = {
+        let mut stmt = conn.prepare(
+            "SELECT ts.period_no, ts.class_id, c.display, sub.name, p.starts_at \
+             FROM timetable_slot ts JOIN class_subject cs ON cs.id=ts.class_subject_id \
+             JOIN subject sub ON sub.id=cs.subject_id JOIN class c ON c.id=ts.class_id \
+             LEFT JOIN period p ON p.session_id=ts.session_id AND p.no=ts.period_no \
+             WHERE ts.teacher_id=?1 AND ts.weekday=?2 AND ts.effective_to IS NULL ORDER BY ts.period_no",
+        )?;
+        let rows = stmt.query_map(params![absent_teacher_id, weekday], |r| {
+            Ok(SubCoverDto { period_no: r.get(0)?, class_id: r.get(1)?, class_display: r.get(2)?, subject_name: r.get(3)?, starts_at: r.get(4)? })
+        })?
+        .collect::<rusqlite::Result<Vec<SubCoverDto>>>()?;
+        rows
+    };
+
+    // If the absent teacher is a class teacher, each such class's attendance also
+    // needs cover (a teacher may class-teach more than one class).
+    let attendance_classes: Vec<AttendanceClassDto> = {
+        let mut stmt = conn.prepare("SELECT id, display FROM class WHERE class_teacher_id=?1 ORDER BY sort_order")?;
+        let rows = stmt
+            .query_map(params![absent_teacher_id], |r| Ok(AttendanceClassDto { id: r.get(0)?, display: r.get(1)? }))?
+            .collect::<rusqlite::Result<Vec<AttendanceClassDto>>>()?;
+        rows
+    };
+
+    // Teachers busy in each cover period (weekday, period).
+    let cover_periods: Vec<i64> = covers.iter().map(|c| c.period_no).collect();
+    let mut free_teachers = Vec::new();
+    {
+        let mut stmt = conn.prepare("SELECT id, name FROM staff WHERE role='teacher' AND state='active' AND id<>?1 ORDER BY name")?;
+        let teachers: Vec<(String, String)> = stmt
+            .query_map(params![absent_teacher_id], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?
+            .collect::<rusqlite::Result<_>>()?;
+        for (id, name) in teachers {
+            let mut free_periods = Vec::new();
+            for p in &cover_periods {
+                let busy: bool = conn
+                    .query_row(
+                        "SELECT 1 FROM timetable_slot WHERE teacher_id=?1 AND weekday=?2 AND period_no=?3 AND effective_to IS NULL LIMIT 1",
+                        params![id, weekday, p],
+                        |_| Ok(()),
+                    )
+                    .optional()?
+                    .is_some();
+                if !busy {
+                    free_periods.push(*p);
+                }
+            }
+            // A candidate must be free for at least one cover period (or there are
+            // no periods to cover — then anyone can take the attendance duty).
+            if !free_periods.is_empty() || cover_periods.is_empty() {
+                free_teachers.push(FreeTeacherDto { id, name, free_periods });
+            }
+        }
+    }
+
+    Ok(SubstitutePlanDto {
+        date: d,
+        weekday,
+        absent_teacher_id: absent_teacher_id.to_string(),
+        absent_teacher_name,
+        covers,
+        attendance_classes,
+        free_teachers,
+    })
+}
+
+#[derive(Debug, Serialize)]
+pub struct AssignSubstituteResult {
+    pub periods_covered: i64,
+    pub includes_attendance: bool,
+}
+
+/// Assign `substitute_teacher_id` to cover the absent teacher on `date`: a
+/// substitution per cover period the substitute is free in, plus that day's
+/// attendance duty if the absent teacher is a class teacher. Notifies the
+/// substitute. Principal only. Access ends automatically tonight (the grant is
+/// dated `date` and `may_take_attendance` only honours it for that day).
+pub fn assign_substitute_logic(conn: &mut Connection, actor_s: &SessionStaff, date: &str, absent_teacher_id: &str, substitute_teacher_id: &str) -> CmdResult<AssignSubstituteResult> {
+    let plan = substitute_plan_logic(conn, actor_s, date, absent_teacher_id)?;
+    if absent_teacher_id == substitute_teacher_id {
+        return Err(CmdError::validation("substitute", "same_teacher"));
+    }
+    // The chosen substitute's free cover periods.
+    let free: std::collections::BTreeSet<i64> = plan
+        .free_teachers
+        .iter()
+        .find(|t| t.id == substitute_teacher_id)
+        .map(|t| t.free_periods.iter().copied().collect())
+        .ok_or_else(|| CmdError::validation("substitute", "not_free"))?;
+    let now = now_iso();
+    let school_id = single_school_id(conn)?;
+    let includes_attendance = !plan.attendance_classes.is_empty();
+    let mut periods_covered = 0i64;
+
+    let tx = conn.transaction()?;
+    for cover in &plan.covers {
+        if !free.contains(&cover.period_no) {
+            continue;
+        }
+        tx.execute(
+            "INSERT INTO substitution(id,date,absent_teacher_id,substitute_teacher_id,class_id,period_no,includes_attendance,created_by,school_id,created_at,updated_at,sync_state) \
+             VALUES (?1,?2,?3,?4,?5,?6,0,?7,?8,?9,?9,'confirmed')",
+            params![new_id("sub"), plan.date, absent_teacher_id, substitute_teacher_id, cover.class_id, cover.period_no, actor_s.id, school_id, now],
+        )?;
+        periods_covered += 1;
+    }
+    for ac in &plan.attendance_classes {
+        tx.execute(
+            "INSERT INTO substitution(id,date,absent_teacher_id,substitute_teacher_id,class_id,period_no,includes_attendance,created_by,school_id,created_at,updated_at,sync_state) \
+             VALUES (?1,?2,?3,?4,?5,NULL,1,?6,?7,?8,?8,'confirmed')",
+            params![new_id("sub"), plan.date, absent_teacher_id, substitute_teacher_id, ac.id, actor_s.id, school_id, now],
+        )?;
+    }
+    // Notify the substitute (in-app notification; their attendance grant is live).
+    tx.execute(
+        "INSERT INTO notification(id,staff_id,kind,title_key,vars_json,link) VALUES (?1,?2,'substitute','notif.substitute_assigned',?3,'/teacher/timetable')",
+        params![
+            new_id("ntf"),
+            substitute_teacher_id,
+            serde_json::json!({ "date": plan.date, "class": plan.attendance_classes.first().and_then(|c| c.display.clone()).unwrap_or_default() }).to_string()
+        ],
+    )?;
+    crate::security::audit::append(&tx, &AuditEntry {
+        at: now.clone(),
+        staff_id: Some(actor_s.id.clone()),
+        action: "assign_substitute".into(),
+        table: Some("substitution".into()),
+        record_id: Some(substitute_teacher_id.to_string()),
+        after_json: Some(serde_json::json!({ "date": plan.date, "absent": absent_teacher_id, "substitute": substitute_teacher_id, "periods": periods_covered, "attendance": includes_attendance }).to_string()),
+        ..Default::default()
+    })?;
+    tx.commit()?;
+    Ok(AssignSubstituteResult { periods_covered, includes_attendance })
+}
+
 // ============================================================= receipts =======
 //
 // Receipt search / open (full receipt data incl. amount in words en+hi, heads
@@ -4066,15 +4260,27 @@ fn upsert_sheet_and_marks(
     Ok(())
 }
 
-pub fn save_attendance_draft_logic(conn: &mut Connection, actor_s: &SessionStaff, class_id: &str, date: &str, marks: &[MarkInput]) -> CmdResult<()> {
+/// May `actor_s` take attendance for `class_id` on `date`? Class teacher (or
+/// Principal) always; otherwise an active substitution / approved attendance-duty
+/// grant for (class, date) (§10.4). Uses the same grant loader as the server.
+fn require_may_take_attendance(conn: &Connection, actor_s: &SessionStaff, class_id: &str, date: &str) -> CmdResult<()> {
     let actor = actor_from(conn, actor_s)?;
-    require_allow(&actor, Action::TakeAttendance, &Target { kind: TargetKind::Attendance, class_id: Some(class_id.to_string()), ..Default::default() })?;
+    let d = &date[..date.len().min(10)];
+    let grants = crate::sync::apply::attendance_grants_for(conn, &actor_s.id, d)?;
+    if permissions::may_take_attendance(&actor, class_id, d, &grants) {
+        Ok(())
+    } else {
+        Err(CmdError::forbidden("teacher_not_class_teacher"))
+    }
+}
+
+pub fn save_attendance_draft_logic(conn: &mut Connection, actor_s: &SessionStaff, class_id: &str, date: &str, marks: &[MarkInput]) -> CmdResult<()> {
+    require_may_take_attendance(conn, actor_s, class_id, date)?;
     upsert_sheet_and_marks(conn, class_id, date, marks, false, actor_s)
 }
 
 pub fn submit_attendance_logic(conn: &mut Connection, actor_s: &SessionStaff, class_id: &str, date: &str, marks: &[MarkInput]) -> CmdResult<()> {
-    let actor = actor_from(conn, actor_s)?;
-    require_allow(&actor, Action::TakeAttendance, &Target { kind: TargetKind::Attendance, class_id: Some(class_id.to_string()), ..Default::default() })?;
+    require_may_take_attendance(conn, actor_s, class_id, date)?;
     // Every enrolled student must be marked before submit (§ can_submit).
     let enrolled: u32 = conn.query_row(
         "SELECT COUNT(*) FROM enrollment WHERE class_id=?1 AND to_date IS NULL",
@@ -9168,5 +9374,68 @@ mod tests {
             class_subject_id: "cs-5a-eng".into(), teacher_id: "stf-meena".into(),
         };
         assert!(save_timetable_slot_logic(&mut c, &meena(), &input).is_err(), "teacher cannot edit the timetable");
+    }
+
+    // ---- Classroom: substitutes + attendance duty (P16 Step 2) -----------
+
+    #[test]
+    fn substitute_gets_attendance_duty_for_the_covered_day_only() {
+        let mut c = seeded();
+        // Anita is NOT the class teacher of VII-B (Meena is) → normally forbidden.
+        assert!(save_attendance_draft_logic(&mut c, &teacher_anita(), "cls-7b", "2026-09-23", &[]).is_err());
+        // Principal assigns Anita to cover Meena on Wed 23 Sep (Meena class-teaches
+        // V-A + VII-B, so both get attendance duty).
+        let r = assign_substitute_logic(&mut c, &principal(), "2026-09-23", "stf-meena", "stf-anita").unwrap();
+        assert!(r.includes_attendance, "the class teacher's attendance is covered");
+        // Anita can now take VII-B attendance on 23 Sep…
+        assert!(save_attendance_draft_logic(&mut c, &teacher_anita(), "cls-7b", "2026-09-23", &[]).is_ok());
+        // …but not the next day — the grant is date-limited (ends at midnight).
+        assert!(save_attendance_draft_logic(&mut c, &teacher_anita(), "cls-7b", "2026-09-24", &[]).is_err());
+    }
+
+    #[test]
+    fn approved_attendance_duty_request_grants_attendance_over_its_range() {
+        let mut c = seeded();
+        let req = create_request_logic(&mut c, &teacher_anita(), &RequestInput {
+            kind: "attendance_duty".into(),
+            target_table: "class".into(),
+            target_id: "cls-7b".into(),
+            base_version: 0,
+            reason: "Covering for Meena".into(),
+            before_json: Some("{}".into()),
+            after_json: Some(serde_json::json!({ "class_id": "cls-7b", "from_date": "2026-09-24", "to_date": "2026-09-25" }).to_string()),
+        }).unwrap();
+        // Before approval → forbidden.
+        assert!(save_attendance_draft_logic(&mut c, &teacher_anita(), "cls-7b", "2026-09-24", &[]).is_err());
+        decide_request_logic(&mut c, &principal(), DeviceMode::Server, &req.id, "approve", None).unwrap();
+        // Approved → allowed across the inclusive range, not after it.
+        assert!(save_attendance_draft_logic(&mut c, &teacher_anita(), "cls-7b", "2026-09-24", &[]).is_ok());
+        assert!(save_attendance_draft_logic(&mut c, &teacher_anita(), "cls-7b", "2026-09-25", &[]).is_ok());
+        assert!(save_attendance_draft_logic(&mut c, &teacher_anita(), "cls-7b", "2026-09-26", &[]).is_err());
+    }
+
+    #[test]
+    fn a_teacher_cannot_raise_someone_elses_duty_and_needs_a_reason() {
+        let mut c = seeded();
+        // Accountant cannot raise an attendance-duty request (not a teacher).
+        assert!(create_request_logic(&mut c, &accountant(), &RequestInput {
+            kind: "attendance_duty".into(), target_table: "class".into(), target_id: "cls-7b".into(),
+            base_version: 0, reason: "x".into(), before_json: Some("{}".into()),
+            after_json: Some("{}".into()),
+        }).is_err());
+    }
+
+    #[test]
+    fn substitute_plan_lists_covers_free_teachers_and_notifies() {
+        let mut c = seeded();
+        let plan = substitute_plan_logic(&mut c, &principal(), "2026-09-23", "stf-meena").unwrap();
+        assert_eq!(plan.weekday, 3, "23 Sep 2026 is a Wednesday (ISO 3)");
+        assert!(!plan.covers.is_empty(), "Meena has periods to cover on Wed");
+        assert!(plan.attendance_classes.iter().any(|c| c.id == "cls-7b"));
+        assert!(plan.free_teachers.iter().any(|t| t.id == "stf-anita"));
+        // Assigning notifies the substitute.
+        assign_substitute_logic(&mut c, &principal(), "2026-09-23", "stf-meena", "stf-anita").unwrap();
+        let n: i64 = c.query_row("SELECT COUNT(*) FROM notification WHERE staff_id='stf-anita' AND kind='substitute'", [], |r| r.get(0)).unwrap();
+        assert_eq!(n, 1, "substitute is notified");
     }
 }

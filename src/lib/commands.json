@@ -60,6 +60,8 @@
     "delete_timetable_slot",
     "copy_timetable_week",
     "save_periods",
+    "substitute_plan",
+    "assign_substitute",
     "get_receipt",
     "search_receipts",
     "reverse_payment",

@@ -84,6 +84,8 @@ pub const COMMANDS: &[&str] = &[
     "delete_timetable_slot",
     "copy_timetable_week",
     "save_periods",
+    "substitute_plan",
+    "assign_substitute",
     "get_receipt",
     "search_receipts",
     "reverse_payment",
@@ -612,6 +614,18 @@ pub fn copy_timetable_week(state: State<RtCtx>, from_class_id: String, to_class_
 pub fn save_periods(state: State<RtCtx>, periods: Vec<PeriodInput>) -> CmdResult<Vec<PeriodDto>> {
     let actor = state.require_session()?;
     state.with_db(|conn| save_periods_logic(conn, &actor, &periods))
+}
+
+#[tauri::command]
+pub fn substitute_plan(state: State<RtCtx>, date: String, absent_teacher_id: String) -> CmdResult<SubstitutePlanDto> {
+    let actor = state.require_session()?;
+    state.with_db(|conn| substitute_plan_logic(conn, &actor, &date, &absent_teacher_id))
+}
+
+#[tauri::command]
+pub fn assign_substitute(state: State<RtCtx>, date: String, absent_teacher_id: String, substitute_teacher_id: String) -> CmdResult<AssignSubstituteResult> {
+    let actor = state.require_session()?;
+    state.with_db(|conn| assign_substitute_logic(conn, &actor, &date, &absent_teacher_id, &substitute_teacher_id))
 }
 
 // -------------------------------------------------------------- receipts ------

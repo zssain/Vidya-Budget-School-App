@@ -161,6 +161,70 @@ fn current_version(conn: &Connection, table: &str, id: &str) -> rusqlite::Result
     conn.query_row(&sql, params![id], |r| r.get::<_, i64>(0)).optional()
 }
 
+/// The time-limited attendance grants a teacher holds on `date` (§10.4):
+/// substitutions that convey attendance + approved attendance-duty requests. Used
+/// by both the attendance command path and this server re-validation, so the rule
+/// is applied identically on the device and the server.
+pub fn attendance_grants_for(conn: &Connection, staff_id: &str, date: &str) -> rusqlite::Result<Vec<permissions::AttendanceGrant>> {
+    let mut grants = Vec::new();
+    let mut stmt = conn.prepare(
+        "SELECT class_id FROM substitution WHERE substitute_teacher_id=?1 AND date=?2 AND includes_attendance=1",
+    )?;
+    let rows = stmt.query_map(params![staff_id, date], |r| r.get::<_, String>(0))?;
+    for cid in rows {
+        let class_id = cid?;
+        grants.push(permissions::AttendanceGrant { class_id, from_date: date.to_string(), to_date: date.to_string() });
+    }
+    let mut stmt2 = conn.prepare(
+        "SELECT after_json FROM request WHERE type='attendance_duty' AND requested_by=?1 AND status='approved'",
+    )?;
+    let rows2 = stmt2.query_map(params![staff_id], |r| r.get::<_, String>(0))?;
+    for aj in rows2 {
+        let aj = aj?;
+        if let Ok(v) = serde_json::from_str::<serde_json::Value>(&aj) {
+            let cid = v.get("class_id").and_then(|x| x.as_str());
+            let from = v.get("from_date").and_then(|x| x.as_str());
+            let to = v.get("to_date").and_then(|x| x.as_str());
+            if let (Some(c), Some(f), Some(t)) = (cid, from, to) {
+                grants.push(permissions::AttendanceGrant { class_id: c.into(), from_date: f.into(), to_date: t.into() });
+            }
+        }
+    }
+    Ok(grants)
+}
+
+/// The date (`YYYY-MM-DD`) an attendance op is for, from its sheet.
+fn attendance_op_date(conn: &Connection, op: &Op) -> rusqlite::Result<Option<String>> {
+    match op.table.as_str() {
+        "attendance_sheet" => conn
+            .query_row("SELECT date FROM attendance_sheet WHERE id=?1", params![op.record_id], |r| r.get(0))
+            .optional(),
+        "attendance_mark" => conn
+            .query_row(
+                "SELECT s.date FROM attendance_mark m JOIN attendance_sheet s ON s.id=m.sheet_id WHERE m.id=?1",
+                params![op.record_id],
+                |r| r.get(0),
+            )
+            .optional(),
+        _ => Ok(None),
+    }
+}
+
+/// True if `actor` may take attendance for the op's class on the op's date via a
+/// substitution / attendance-duty grant (not as the class teacher).
+fn attendance_op_grant_allows(conn: &Connection, actor: &Actor, target: &Target, op: &Op) -> rusqlite::Result<bool> {
+    let class_id = match &target.class_id {
+        Some(c) => c.clone(),
+        None => return Ok(false),
+    };
+    let date = match attendance_op_date(conn, op)? {
+        Some(d) => d,
+        None => return Ok(false),
+    };
+    let grants = attendance_grants_for(conn, &actor.staff_id, &date)?;
+    Ok(permissions::may_take_attendance(actor, &class_id, &date, &grants))
+}
+
 /// Apply one op. Idempotent by `op_id`. Returns the per-op result.
 pub fn apply_op(conn: &mut Connection, op: &Op) -> rusqlite::Result<OpResult> {
     // 1) Idempotency — same op via LAN and Drive applies once (§8.4).
@@ -214,7 +278,15 @@ pub fn apply_op(conn: &mut Connection, op: &Op) -> rusqlite::Result<OpResult> {
         }
         let decision = permissions::can(&actor, action, &target);
         if !decision.is_allow() {
-            return finalize(conn, op, rejected(&op.op_id, codes::FORBIDDEN));
+            // Substitutes / attendance duty (§10.4): a teacher who is not the class
+            // teacher may still take attendance for a class on a date via an active
+            // substitution or an approved attendance-duty request. Re-check the
+            // attendance actions with the grant-aware rule before rejecting.
+            let by_grant = matches!(action, Action::TakeAttendance)
+                && attendance_op_grant_allows(conn, &actor, &target, op)?;
+            if !by_grant {
+                return finalize(conn, op, rejected(&op.op_id, codes::FORBIDDEN));
+            }
         }
     }
 

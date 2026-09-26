@@ -1116,6 +1116,41 @@ export const copy_timetable_week = (fromClassId: string, toClassId: string) =>
   invoke<CopyWeekResult>('copy_timetable_week', { fromClassId, toClassId })
 export const save_periods = (periods: PeriodInput[]) => invoke<PeriodDto[]>('save_periods', { periods })
 
+// ---- Phase 16: Classroom — substitutes + attendance duty ------------------
+export interface SubCoverDto {
+  period_no: number
+  class_id: string
+  class_display: string | null
+  subject_name: string
+  starts_at: string | null
+}
+export interface FreeTeacherDto {
+  id: string
+  name: string
+  free_periods: number[]
+}
+export interface AttendanceClassDto {
+  id: string
+  display: string | null
+}
+export interface SubstitutePlanDto {
+  date: string
+  weekday: number
+  absent_teacher_id: string
+  absent_teacher_name: string
+  covers: SubCoverDto[]
+  attendance_classes: AttendanceClassDto[]
+  free_teachers: FreeTeacherDto[]
+}
+export interface AssignSubstituteResult {
+  periods_covered: number
+  includes_attendance: boolean
+}
+export const substitute_plan = (date: string, absentTeacherId: string) =>
+  invoke<SubstitutePlanDto>('substitute_plan', { date, absentTeacherId })
+export const assign_substitute = (date: string, absentTeacherId: string, substituteTeacherId: string) =>
+  invoke<AssignSubstituteResult>('assign_substitute', { date, absentTeacherId, substituteTeacherId })
+
 export const update_fee_head = (id: string, input: FeeHeadInput) =>
   invoke<FeeHeadDto>('update_fee_head', { id, input })
 export const deactivate_fee_head = (id: string) => invoke<void>('deactivate_fee_head', { id })

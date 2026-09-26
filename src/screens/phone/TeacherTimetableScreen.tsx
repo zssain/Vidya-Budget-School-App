@@ -5,7 +5,7 @@
 
 import { useEffect, useState } from 'react'
 import * as api from '@/lib/api'
-import type { TeacherTimetableDto, TimetableSlotDto } from '@/lib/api'
+import type { TeacherTimetableDto, TimetableSlotDto, ClassDto } from '@/lib/api'
 import { Icon } from '@/components/Icon'
 import { navigate } from '@/lib/router'
 import { t, useLang } from '@/lib/i18n'
@@ -18,6 +18,8 @@ function todayIso(): number {
 export default function TeacherTimetableScreen() {
   useLang()
   const [data, setData] = useState<TeacherTimetableDto | null>(null)
+  const [dutyOpen, setDutyOpen] = useState(false)
+  const [dutySent, setDutySent] = useState(false)
   const today = todayIso()
 
   useEffect(() => {
@@ -75,6 +77,78 @@ export default function TeacherTimetableScreen() {
           )
         })}
       </div>
+
+      <div style={{ flexShrink: 0, background: '#FDFDFB', borderTop: '1px solid #D5DDE0', padding: '12px 16px 16px' }}>
+        <button type="button" onClick={() => setDutyOpen(true)} style={{ width: '100%', height: 52, borderRadius: 6, border: '1px solid var(--line-strong)', background: 'var(--surface)', color: 'var(--ink)', fontSize: 15, fontWeight: 500 }}>
+          {t('tt.duty.request')}
+        </button>
+      </div>
+
+      {dutyOpen && <DutyForm onClose={() => setDutyOpen(false)} onSent={() => { setDutyOpen(false); setDutySent(true) }} />}
+      {dutySent && (
+        <div role="status" style={{ position: 'absolute', left: 16, right: 16, bottom: 90, background: 'var(--navy)', color: 'var(--white)', borderRadius: 10, padding: '12px 14px', fontSize: 14, display: 'flex', alignItems: 'center', gap: 8 }}>
+          <Icon name="check" size={16} strokeWidth={2.2} color="var(--gold)" />{t('tt.duty.sent')}
+        </div>
+      )}
     </div>
+  )
+}
+
+function DutyForm({ onClose, onSent }: { onClose: () => void; onSent: () => void }) {
+  const [classes, setClasses] = useState<ClassDto[]>([])
+  const [classId, setClassId] = useState('')
+  const today = new Date().toISOString().slice(0, 10)
+  const [from, setFrom] = useState(today)
+  const [to, setTo] = useState(today)
+  const [reason, setReason] = useState('')
+  const [busy, setBusy] = useState(false)
+
+  useEffect(() => { api.list_classes().then(setClasses).catch(() => setClasses([])) }, [])
+
+  const send = () => {
+    if (!classId || reason.trim().length < 5) return
+    setBusy(true)
+    api.create_request({
+      kind: 'attendance_duty',
+      target_table: 'class',
+      target_id: classId,
+      base_version: 0,
+      reason: reason.trim(),
+      before_json: '{}',
+      after_json: JSON.stringify({ class_id: classId, from_date: from, to_date: to }),
+    }).then(onSent).catch(() => setBusy(false))
+  }
+
+  const inputStyle = { height: 46, borderRadius: 8, border: '1px solid var(--line-strong)', background: 'var(--white)', color: 'var(--ink)', fontSize: 15, padding: '0 12px', boxSizing: 'border-box' as const, width: '100%' }
+
+  return (
+    <>
+      <div style={{ position: 'absolute', inset: 0, background: 'rgba(11,26,51,0.45)' }} onClick={onClose} />
+      <div style={{ position: 'absolute', left: 0, right: 0, bottom: 0, background: 'var(--white)', borderRadius: '22px 22px 0 0', padding: '16px 18px 24px', display: 'flex', flexDirection: 'column', gap: 12 }}>
+        <span style={{ alignSelf: 'center', width: 40, height: 4, borderRadius: 2, background: 'var(--line)' }} />
+        <div style={{ fontFamily: 'var(--font-serif)', fontSize: 22 }}>{t('tt.duty.title')}</div>
+        <label style={{ fontSize: 13, fontWeight: 500 }}>{t('tt.duty.class')}</label>
+        <select value={classId} onChange={(e) => setClassId(e.target.value)} style={inputStyle}>
+          <option value="">{t('tt.duty.pickClass')}</option>
+          {classes.map((c) => <option key={c.id} value={c.id}>{c.display}</option>)}
+        </select>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+          <div>
+            <label style={{ fontSize: 13, fontWeight: 500 }}>{t('tt.duty.from')}</label>
+            <input type="date" value={from} onChange={(e) => setFrom(e.target.value)} style={inputStyle} />
+          </div>
+          <div>
+            <label style={{ fontSize: 13, fontWeight: 500 }}>{t('tt.duty.to')}</label>
+            <input type="date" value={to} onChange={(e) => setTo(e.target.value)} style={inputStyle} />
+          </div>
+        </div>
+        <label style={{ fontSize: 13, fontWeight: 500 }}>{t('tt.duty.reason')}</label>
+        <input value={reason} onChange={(e) => setReason(e.target.value)} style={inputStyle} />
+        <div style={{ display: 'flex', gap: 10, marginTop: 4 }}>
+          <button type="button" onClick={onClose} style={{ flex: 1, height: 50, borderRadius: 6, border: '1px solid var(--line-strong)', background: 'var(--surface)', color: 'var(--ink)', fontSize: 15, fontWeight: 500 }}>{t('tt.duty.cancel')}</button>
+          <button type="button" onClick={send} disabled={busy || !classId || reason.trim().length < 5} style={{ flex: 2, height: 50, borderRadius: 6, border: '1px solid var(--accent)', background: 'var(--accent)', color: 'var(--white)', fontSize: 15, fontWeight: 500, opacity: busy || !classId || reason.trim().length < 5 ? 0.5 : 1 }}>{t('tt.duty.send')}</button>
+        </div>
+      </div>
+    </>
   )
 }
