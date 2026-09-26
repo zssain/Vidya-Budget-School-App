@@ -50,6 +50,10 @@ export const PRINCIPAL_NAV: NavSection[] = [
     labelKey: 'nav.section.finance',
     items: [
       { key: 'fees', labelKey: 'nav.fees', icon: 'fees', path: '/principal/fees' },
+      // Accounts (P15) — the `accounts` module is on by default (§14); the screen
+      // shows a MODULE_OFF state if it is turned off. No `accounts` icon in the
+      // mock set (rule 6) → reuse `daybook`.
+      { key: 'accounts', labelKey: 'nav.accounts', icon: 'daybook', path: '/principal/accounts' },
     ],
   },
   {

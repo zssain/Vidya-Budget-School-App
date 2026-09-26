@@ -64,6 +64,10 @@ pub const COMMANDS: &[&str] = &[
     "record_expense",
     "list_expenses",
     "reverse_expense",
+    "get_opening_balance",
+    "set_opening_balance",
+    "cash_book",
+    "profit_summary",
     "get_receipt",
     "search_receipts",
     "reverse_payment",
@@ -422,6 +426,35 @@ pub fn reverse_expense(state: State<RtCtx>, expense_id: String, reason: String) 
     let device_id = state.device_id.lock().map_err(|_| crate::error::CmdError::internal("lock"))?.clone();
     let mode = state.device_mode;
     state.with_db(|conn| reverse_expense_logic(conn, &actor, device_id.as_deref(), mode, &expense_id, &reason))
+}
+
+// -------------------------------------------- accounts: cash book / profit ----
+
+#[tauri::command]
+pub fn get_opening_balance(state: State<RtCtx>) -> CmdResult<OpeningBalanceDto> {
+    let actor = state.require_session()?;
+    state.with_db(|conn| get_opening_balance_logic(conn, &actor))
+}
+
+#[tauri::command]
+pub fn set_opening_balance(state: State<RtCtx>, cash_paise: i64, bank_paise: i64) -> CmdResult<OpeningBalanceDto> {
+    let actor = state.require_session()?;
+    let device_id = state.device_id.lock().map_err(|_| crate::error::CmdError::internal("lock"))?.clone();
+    let mode = state.device_mode;
+    let today = crate::db::now_iso();
+    state.with_db(|conn| set_opening_balance_logic(conn, &actor, device_id.as_deref(), mode, &today, cash_paise, bank_paise))
+}
+
+#[tauri::command]
+pub fn cash_book(state: State<RtCtx>, date: String) -> CmdResult<CashBookDto> {
+    let actor = state.require_session()?;
+    state.with_db(|conn| cash_book_logic(conn, &actor, &date))
+}
+
+#[tauri::command]
+pub fn profit_summary(state: State<RtCtx>) -> CmdResult<ProfitDto> {
+    let actor = state.require_session()?;
+    state.with_db(|conn| profit_summary_logic(conn, &actor))
 }
 
 // -------------------------------------------------------------- receipts ------

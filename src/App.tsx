@@ -22,6 +22,7 @@ import CsvImportScreen from '@/screens/desktop/CsvImportScreen'
 import FeesScreen from '@/screens/desktop/FeesScreen'
 import ReceiptsScreen from '@/screens/desktop/ReceiptsScreen'
 import DayBookScreen from '@/screens/desktop/DayBookScreen'
+import AccountsScreen from '@/screens/desktop/AccountsScreen'
 import AttendanceRegisterScreen from '@/screens/desktop/AttendanceRegisterScreen'
 import MyRequestsScreen from '@/screens/desktop/MyRequestsScreen'
 import InboxScreen from '@/screens/desktop/InboxScreen'
@@ -209,6 +210,8 @@ function desktopRoute(base: string, role: Role): { active: string; node: ReactNo
   // they highlight Fees. Day book becomes an Accounts tab in P15.
   if (base === '/principal/reports') return { active: 'fees', node: <ReportsScreen /> }
   if (base === '/principal/fees') return { active: 'fees', node: <FeesScreen /> }
+  if (base === '/principal/accounts') return { active: 'accounts', node: <AccountsScreen role={role} /> }
+  if (base === '/accountant/accounts') return { active: 'accounts', node: <AccountsScreen role={role} /> }
   if (base === '/principal/receipts' || base === '/accountant/receipts')
     return { active: 'receipts', node: <ReceiptsScreen role={role} /> }
   if (base === '/principal/daybook') return { active: 'fees', node: <DayBookScreen /> }

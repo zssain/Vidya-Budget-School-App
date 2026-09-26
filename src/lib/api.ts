@@ -907,6 +907,47 @@ export const record_expense = (input: ExpenseInput) => invoke<ExpenseDto>('recor
 export const list_expenses = (from: string, to: string) => invoke<ExpenseDto[]>('list_expenses', { from, to })
 export const reverse_expense = (expenseId: string, reason: string) =>
   invoke<void>('reverse_expense', { expenseId, reason })
+
+// School accounts — cash book, opening balance, profit (P15 Step 4, prototype accounts 1/3).
+export interface OpeningBalanceDto {
+  set: boolean
+  cash_paise: number
+  bank_paise: number
+}
+export interface CashBookRow {
+  time: string
+  ref_no: string
+  details: string
+  in_paise: number
+  out_paise: number
+  balance_paise: number
+}
+export interface CashBookDto {
+  date: string
+  opening_paise: number
+  money_in_paise: number
+  money_out_paise: number
+  in_hand_paise: number
+  rows: CashBookRow[]
+}
+export interface ProfitMonth {
+  month: string
+  income_paise: number
+  expense_paise: number
+  surplus_paise: number
+}
+export interface ProfitDto {
+  income_paise: number
+  expense_paise: number
+  surplus_paise: number
+  fees_due_paise: number
+  months: ProfitMonth[]
+}
+export const get_opening_balance = () => invoke<OpeningBalanceDto>('get_opening_balance')
+export const set_opening_balance = (cashPaise: number, bankPaise: number) =>
+  invoke<OpeningBalanceDto>('set_opening_balance', { cashPaise, bankPaise })
+export const cash_book = (date: string) => invoke<CashBookDto>('cash_book', { date })
+export const profit_summary = () => invoke<ProfitDto>('profit_summary')
 export const update_fee_head = (id: string, input: FeeHeadInput) =>
   invoke<FeeHeadDto>('update_fee_head', { id, input })
 export const deactivate_fee_head = (id: string) => invoke<void>('deactivate_fee_head', { id })

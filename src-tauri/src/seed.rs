@@ -53,6 +53,7 @@ pub fn seed_demo_school(conn: &mut Connection, now: OffsetDateTime) -> rusqlite:
     subjects(&tx)?;
     let assigned = students_and_attendance(&tx, &ctx)?;
     fees_and_payments(&tx, &ctx, &assigned)?;
+    expenses(&tx, &ctx)?;
     academics(&tx)?;
     requests(&tx, &ctx)?;
     tx.commit()?;
@@ -417,6 +418,29 @@ fn fees_and_payments(tx: &rusqlite::Transaction, c: &Ctx, a: &Assigned) -> rusql
          VALUES ('pay-wait','R-A3-0001',?1,240000,'cash','stf-suresh',?2,'dev-a3',?2,?2,'on_device')",
         params![a.payers[0], today_ts],
     )?;
+    Ok(())
+}
+
+/// A few demo expenses (§10.3) so the cash book, expenses list and profit have
+/// data. Inserted directly (no voucher); `backfill_vouchers` posts the balanced
+/// expense vouchers, so cash-book "money out" and Σ debits = Σ credits hold.
+fn expenses(tx: &rusqlite::Transaction, c: &Ctx) -> rusqlite::Result<()> {
+    let today = c.today.format(YMD).unwrap_or_default();
+    let today_ts = format!("{today}T12:00:00Z");
+    // (id, category, amount_paise, paid_via, details, spent_on, created_at)
+    let rows: [(&str, &str, i64, &str, &str, String, String); 4] = [
+        ("exp-elec", "electricity", 685_000, "cash", "Electricity bill · September", today.clone(), format!("{today}T10:05:00Z")),
+        ("exp-repairs", "repairs", 120_000, "cash", "Classroom fan, V-B", today.clone(), format!("{today}T12:30:00Z")),
+        ("exp-stationery", "stationery", 430_000, "upi", "Registers and chalk", today.clone(), today_ts.clone()),
+        ("exp-rent", "rent", 1_800_000, "bank", "Building rent · September", today.clone(), format!("{today}T09:00:00Z")),
+    ];
+    for (id, cat, amt, paid, details, spent_on, created) in rows {
+        tx.execute(
+            "INSERT INTO expense(id,category_account_id,amount_paise,paid_via,details,spent_on,created_by,device_id,created_at,updated_at,sync_state) \
+             VALUES (?1,?2,?3,?4,?5,?6,'stf-suresh','dev-a2',?7,?7,'confirmed')",
+            params![id, cat, amt, paid, details, spent_on, created],
+        )?;
+    }
     Ok(())
 }
 

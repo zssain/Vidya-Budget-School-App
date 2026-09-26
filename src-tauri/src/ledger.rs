@@ -154,7 +154,8 @@ pub fn backfill_vouchers(conn: &mut Connection) -> rusqlite::Result<usize> {
     let payments: Vec<PaymentRow> = {
         let mut stmt = conn.prepare(
             "SELECT p.id, p.amount_paise, p.mode, p.receipt_no, p.collected_at, p.collected_by \
-             FROM payment p WHERE NOT EXISTS (SELECT 1 FROM voucher v WHERE v.source_table='payment' AND v.source_id=p.id) \
+             FROM payment p WHERE p.sync_state='confirmed' \
+               AND NOT EXISTS (SELECT 1 FROM voucher v WHERE v.source_table='payment' AND v.source_id=p.id) \
              ORDER BY p.collected_at, p.receipt_no",
         )?;
         let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)))?;
@@ -179,7 +180,8 @@ pub fn backfill_vouchers(conn: &mut Connection) -> rusqlite::Result<usize> {
     let expenses: Vec<ExpenseRow> = {
         let mut stmt = conn.prepare(
             "SELECT e.id, e.category_account_id, e.paid_via, e.amount_paise, e.spent_on, e.created_by \
-             FROM expense e WHERE NOT EXISTS (SELECT 1 FROM voucher v WHERE v.source_table='expense' AND v.source_id=e.id) \
+             FROM expense e WHERE e.sync_state='confirmed' \
+               AND NOT EXISTS (SELECT 1 FROM voucher v WHERE v.source_table='expense' AND v.source_id=e.id) \
              ORDER BY e.spent_on, e.created_at",
         )?;
         let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)))?;
@@ -348,9 +350,12 @@ mod tests {
         let payments: i64 = c.query_row("SELECT COUNT(*) FROM payment", [], |r| r.get(0)).unwrap();
         assert!(payments > 0, "seed has payments");
 
-        // Every payment has exactly one receipt voucher.
+        // Every CONFIRMED payment has exactly one receipt voucher (on_device
+        // payments are not yet real money, so they carry no voucher — P15).
+        let confirmed: i64 = c.query_row("SELECT COUNT(*) FROM payment WHERE sync_state='confirmed'", [], |r| r.get(0)).unwrap();
         let vouchers: i64 = c.query_row("SELECT COUNT(*) FROM voucher WHERE source_table='payment'", [], |r| r.get(0)).unwrap();
-        assert_eq!(vouchers, payments, "one receipt voucher per payment");
+        assert_eq!(vouchers, confirmed, "one receipt voucher per confirmed payment");
+        assert!(confirmed < payments, "the seed has one on_device payment with no voucher");
 
         // The whole book balances (Σ debit = Σ credit).
         assert_eq!(ledger_imbalance(&c).unwrap(), 0, "ledger balances");
@@ -373,6 +378,34 @@ mod tests {
             let (vid, d, cr) = row.unwrap();
             assert_eq!(d, cr, "voucher {vid} debits must equal credits");
             assert!(d > 0, "voucher {vid} must be non-empty");
+        }
+    }
+
+    #[test]
+    fn cash_book_money_in_equals_day_book_total_and_book_balances_every_day() {
+        // DONE-MEANS (§Step 4/8): for every day in the demo seed, cash-book money
+        // in = the day's confirmed receipts (day book total), and Σ debits = Σ
+        // credits across the whole book.
+        let c = seeded();
+        assert_eq!(ledger_imbalance(&c).unwrap(), 0, "the whole book balances");
+
+        // Distinct days that carry a confirmed receipt.
+        let days: Vec<String> = {
+            let mut s = c.prepare("SELECT DISTINCT substr(collected_at,1,10) FROM payment WHERE sync_state='confirmed' ORDER BY 1").unwrap();
+            s.query_map([], |r| r.get::<_, String>(0)).unwrap().collect::<rusqlite::Result<_>>().unwrap()
+        };
+        assert!(!days.is_empty(), "seed has confirmed receipts");
+        for day in days {
+            // Day book total = confirmed receipts collected that day.
+            let day_total: i64 = c.query_row(
+                "SELECT COALESCE(SUM(amount_paise),0) FROM payment WHERE sync_state='confirmed' AND substr(collected_at,1,10)=?1",
+                params![day], |r| r.get(0)).unwrap();
+            // Cash-book money in = Σ debits to cash/bank/cheques for vouchers dated that day.
+            let money_in: i64 = c.query_row(
+                "SELECT COALESCE(SUM(le.debit_paise),0) FROM ledger_entry le JOIN voucher v ON v.id=le.voucher_id \
+                 WHERE le.account_id IN ('cash','bank','cheques') AND v.date=?1",
+                params![day], |r| r.get(0)).unwrap();
+            assert_eq!(money_in, day_total, "cash-book money in = day book total for {day}");
         }
     }
 

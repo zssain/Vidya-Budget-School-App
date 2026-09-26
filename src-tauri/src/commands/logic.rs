@@ -2207,6 +2207,230 @@ pub fn reverse_expense_logic(
     Ok(())
 }
 
+// ================================================= accounts: cash book / profit
+//
+// P15 Step 4 (§10.3). The cash book, profit summary and opening balance are all
+// computed from the ledger (voucher + ledger_entry), so "cash book money in" =
+// day book total and Σ debits = Σ credits for every day in the seed (DONE-MEANS).
+
+/// The Accounts money accounts (cash + bank) — cash-book "money" lives here.
+const MONEY_ACCOUNTS: &[&str] = &[vidya_core::ledger::CASH, vidya_core::ledger::BANK, vidya_core::ledger::CHEQUES];
+
+fn money_placeholders() -> String {
+    MONEY_ACCOUNTS.iter().map(|a| format!("'{a}'")).collect::<Vec<_>>().join(",")
+}
+
+#[derive(Debug, Serialize, Default)]
+pub struct OpeningBalanceDto {
+    pub set: bool,
+    pub cash_paise: i64,
+    pub bank_paise: i64,
+}
+
+/// Whether the once-per-session opening balance is set, and its amounts.
+pub fn get_opening_balance_logic(conn: &mut Connection, actor_s: &SessionStaff) -> CmdResult<OpeningBalanceDto> {
+    let actor = actor_from(conn, actor_s)?;
+    require_allow(&actor, Action::ViewAccounts, &Target::of(TargetKind::Fee))?;
+    require_module_enabled(conn, vidya_core::modules::Module::Accounts)?;
+    let vid: Option<String> = conn
+        .query_row("SELECT id FROM voucher WHERE kind='opening' LIMIT 1", [], |r| r.get(0))
+        .optional()?;
+    match vid {
+        None => Ok(OpeningBalanceDto::default()),
+        Some(vid) => {
+            let cash: i64 = conn.query_row("SELECT COALESCE(SUM(debit_paise),0) FROM ledger_entry WHERE voucher_id=?1 AND account_id=?2", params![vid, vidya_core::ledger::CASH], |r| r.get(0))?;
+            let bank: i64 = conn.query_row("SELECT COALESCE(SUM(debit_paise),0) FROM ledger_entry WHERE voucher_id=?1 AND account_id=?2", params![vid, vidya_core::ledger::BANK], |r| r.get(0))?;
+            Ok(OpeningBalanceDto { set: true, cash_paise: cash, bank_paise: bank })
+        }
+    }
+}
+
+/// Set the once-per-session opening balance (Principal). Posts one balanced
+/// opening voucher: Dr Cash + Dr Bank, Cr Opening equity. Rejected if already set.
+pub fn set_opening_balance_logic(
+    conn: &mut Connection,
+    actor_s: &SessionStaff,
+    device_id: Option<&str>,
+    device_mode: DeviceMode,
+    today: &str,
+    cash_paise: i64,
+    bank_paise: i64,
+) -> CmdResult<OpeningBalanceDto> {
+    let actor = actor_from(conn, actor_s)?;
+    require_allow(&actor, Action::OpeningBalance, &Target::of(TargetKind::Fee))?;
+    require_module_enabled(conn, vidya_core::modules::Module::Accounts)?;
+    vidya_core::accounts::validate_opening_balance(cash_paise, bank_paise)?;
+    let exists: bool = conn.query_row("SELECT 1 FROM voucher WHERE kind='opening' LIMIT 1", [], |_| Ok(())).optional()?.is_some();
+    if exists {
+        return Err(CmdError::validation("opening", "already_set"));
+    }
+    let now = now_iso();
+    let date = today[..today.len().min(10)].to_string();
+    let (series, _) = receipt_series_and_last(conn, device_id)?;
+    let school_id = single_school_id(conn)?;
+    let ctx = WriteCtx { mode: device_mode };
+    let dev = device_id.map(str::to_string);
+    with_write(conn, &ctx, move |tx| {
+        let vno = crate::numbering::next_no(tx, vidya_core::numbering::NumberKind::Voucher, &series)?;
+        let vid = format!("vch-{}", uuid::Uuid::now_v7());
+        tx.execute(
+            "INSERT INTO voucher(id, voucher_no, kind, date, narration, source_table, source_id, created_by, device_id, school_id, created_at, updated_at, sync_state) \
+             VALUES (?1,?2,'opening',?3,'Opening balance',NULL,NULL,?4,?5,?6,?7,?7,'confirmed')",
+            params![vid, vno, date, actor_s.id, dev, school_id, now],
+        )?;
+        let entry = |acc: &str, debit: i64| -> rusqlite::Result<()> {
+            if debit > 0 {
+                tx.execute(
+                    "INSERT INTO ledger_entry(id, voucher_id, account_id, debit_paise, credit_paise) VALUES (?1,?2,?3,?4,0)",
+                    params![format!("le-{}", uuid::Uuid::now_v7()), vid, acc, debit],
+                )?;
+            }
+            Ok(())
+        };
+        entry(vidya_core::ledger::CASH, cash_paise)?;
+        entry(vidya_core::ledger::BANK, bank_paise)?;
+        tx.execute(
+            "INSERT INTO ledger_entry(id, voucher_id, account_id, debit_paise, credit_paise) VALUES (?1,?2,?3,0,?4)",
+            params![format!("le-{}", uuid::Uuid::now_v7()), vid, vidya_core::ledger::OPENING_EQUITY, cash_paise + bank_paise],
+        )?;
+        let audit = AuditEntry {
+            at: now.clone(),
+            staff_id: Some(actor_s.id.clone()),
+            action: "set_opening_balance".into(),
+            table: Some("voucher".into()),
+            record_id: Some(vid.clone()),
+            after_json: Some(serde_json::json!({ "cash_paise": cash_paise, "bank_paise": bank_paise }).to_string()),
+            ..Default::default()
+        };
+        let op = Op {
+            op_id: new_id("op"), hlc: now.clone(), device_id: dev.clone().unwrap_or_default(), staff_id: actor_s.id.clone(),
+            audience: "finance".into(), table: "voucher".into(), record_id: vid.clone(), kind: "insert".into(),
+            payload: "{}".into(), base_version: None, server_epoch: 1,
+        };
+        Ok(Effect { value: (), audit, op })
+    })?;
+    get_opening_balance_logic(conn, actor_s)
+}
+
+#[derive(Debug, Serialize)]
+pub struct CashBookRow {
+    pub time: String,          // HH:MM
+    pub ref_no: String,        // receipt / voucher number
+    pub details: String,
+    pub in_paise: i64,
+    pub out_paise: i64,
+    pub balance_paise: i64,    // running cash + bank in hand
+}
+
+#[derive(Debug, Serialize)]
+pub struct CashBookDto {
+    pub date: String,
+    pub opening_paise: i64,             // cash + bank at the start of the day
+    pub money_in_paise: i64,           // debits to money accounts today
+    pub money_out_paise: i64,          // credits to money accounts today
+    pub in_hand_paise: i64,            // opening + in − out
+    pub rows: Vec<CashBookRow>,
+}
+
+/// The cash book for a day (prototype `accounts` state 1): every voucher that
+/// touched cash/bank, with money in, money out and a running balance.
+pub fn cash_book_logic(conn: &mut Connection, actor_s: &SessionStaff, date: &str) -> CmdResult<CashBookDto> {
+    let actor = actor_from(conn, actor_s)?;
+    require_allow(&actor, Action::ViewAccounts, &Target::of(TargetKind::Fee))?;
+    require_module_enabled(conn, vidya_core::modules::Module::Accounts)?;
+    let money = money_placeholders();
+
+    // Opening = cumulative (debit − credit) on money accounts for vouchers dated
+    // before `date`.
+    let opening: i64 = conn.query_row(
+        &format!(
+            "SELECT COALESCE(SUM(le.debit_paise - le.credit_paise),0) FROM ledger_entry le \
+             JOIN voucher v ON v.id=le.voucher_id WHERE le.account_id IN ({money}) AND v.date < ?1"
+        ),
+        params![date], |r| r.get(0),
+    )?;
+
+    // Per-voucher money in/out for the day.
+    let sql = format!(
+        "SELECT v.id, v.voucher_no, COALESCE(v.narration,''), v.created_at, \
+                COALESCE(SUM(le.debit_paise),0), COALESCE(SUM(le.credit_paise),0) \
+         FROM voucher v JOIN ledger_entry le ON le.voucher_id=v.id \
+         WHERE le.account_id IN ({money}) AND v.date = ?1 \
+         GROUP BY v.id ORDER BY v.created_at, v.voucher_no"
+    );
+    let raw: Vec<(String, String, String, String, i64, i64)> = {
+        let mut stmt = conn.prepare(&sql)?;
+        let out = stmt.query_map(params![date], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)))?.collect::<rusqlite::Result<_>>()?;
+        out
+    };
+    let mut rows = Vec::new();
+    let mut running = opening;
+    let mut in_total = 0i64;
+    let mut out_total = 0i64;
+    for (_vid, vno, narration, created_at, debit, credit) in raw {
+        running += debit - credit;
+        in_total += debit;
+        out_total += credit;
+        let time = created_at.get(11..16).unwrap_or("").to_string();
+        rows.push(CashBookRow { time, ref_no: vno, details: narration, in_paise: debit, out_paise: credit, balance_paise: running });
+    }
+    Ok(CashBookDto { date: date.to_string(), opening_paise: opening, money_in_paise: in_total, money_out_paise: out_total, in_hand_paise: opening + in_total - out_total, rows })
+}
+
+#[derive(Debug, Serialize)]
+pub struct ProfitMonth {
+    pub month: String,        // YYYY-MM
+    pub income_paise: i64,
+    pub expense_paise: i64,
+    pub surplus_paise: i64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ProfitDto {
+    pub income_paise: i64,
+    pub expense_paise: i64,
+    pub surplus_paise: i64,
+    pub fees_due_paise: i64,
+    pub months: Vec<ProfitMonth>,
+}
+
+/// The profit summary (prototype `accounts` state 3): income and expense account
+/// totals per month + year to date, plus fees still due. Income = Σ(credit−debit)
+/// on income accounts; expense = Σ(debit−credit) on expense accounts.
+pub fn profit_summary_logic(conn: &mut Connection, actor_s: &SessionStaff) -> CmdResult<ProfitDto> {
+    let actor = actor_from(conn, actor_s)?;
+    require_allow(&actor, Action::ViewProfit, &Target::of(TargetKind::Fee))?;
+    require_module_enabled(conn, vidya_core::modules::Module::Accounts)?;
+
+    // Per-month income and expense from the ledger.
+    let mut months: std::collections::BTreeMap<String, (i64, i64)> = std::collections::BTreeMap::new();
+    {
+        let mut stmt = conn.prepare(
+            "SELECT substr(v.date,1,7), a.kind, SUM(le.debit_paise), SUM(le.credit_paise) \
+             FROM voucher v JOIN ledger_entry le ON le.voucher_id=v.id JOIN ledger_account a ON a.id=le.account_id \
+             WHERE a.kind IN ('income','expense') GROUP BY 1, 2",
+        )?;
+        let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, i64>(2)?, r.get::<_, i64>(3)?)))?;
+        for row in rows {
+            let (month, kind, debit, credit) = row?;
+            let e = months.entry(month).or_insert((0, 0));
+            if kind == "income" {
+                e.0 += credit - debit;
+            } else {
+                e.1 += debit - credit;
+            }
+        }
+    }
+    let months: Vec<ProfitMonth> = months
+        .into_iter()
+        .map(|(month, (income, expense))| ProfitMonth { month, income_paise: income, expense_paise: expense, surplus_paise: income - expense })
+        .collect();
+    let income: i64 = months.iter().map(|m| m.income_paise).sum();
+    let expense: i64 = months.iter().map(|m| m.expense_paise).sum();
+    let fees_due = crate::dash::outstanding(conn)?;
+    Ok(ProfitDto { income_paise: income, expense_paise: expense, surplus_paise: income - expense, fees_due_paise: fees_due, months })
+}
+
 // ============================================================= receipts =======
 //
 // Receipt search / open (full receipt data incl. amount in words en+hi, heads
