@@ -245,6 +245,17 @@ export interface FeeOverviewRow {
   outstanding_paise: number
 }
 
+export interface Instalment {
+  no: number
+  amount_paise: number
+  due_date: string
+}
+
+// Mirrors vidya_core::fees::InstalmentPlan (serde tag "type").
+export type InstalmentPlan =
+  | { type: 'list'; instalments: Instalment[] }
+  | { type: 'monthly'; monthly_amount_paise: number; day_of_month: number }
+
 export interface FeeHeadDto {
   id: string
   name: string
@@ -254,6 +265,7 @@ export interface FeeHeadDto {
   applies_to: string
   active: boolean
   has_allocations: boolean
+  instalments_json: string | null
 }
 
 export interface FeeHeadInput {
@@ -262,11 +274,15 @@ export interface FeeHeadInput {
   amount_paise: number
   frequency: string
   applies_to: string
+  instalments_json?: string | null
 }
 
 export interface FeeHeadChangePreview {
   affected_dues: number
   delta_paise: number
+  added: number
+  removed: number
+  changed: number
 }
 
 export interface PaymentDto {
@@ -649,6 +665,9 @@ export interface DuesRowDto {
   guardian_language: string | null
   has_messages_consent: boolean
   emailable: boolean
+  instalment_no: number
+  instalment_count: number
+  due_date: string | null
 }
 export interface DuesListDto {
   strip: DuesStripDto
@@ -848,8 +867,8 @@ export const list_fee_dues = (studentId: string) =>
 export const fees_overview = () => invoke<FeeOverviewRow[]>('fees_overview')
 export const list_fee_heads = () => invoke<FeeHeadDto[]>('list_fee_heads')
 export const create_fee_head = (input: FeeHeadInput) => invoke<FeeHeadDto>('create_fee_head', { input })
-export const preview_fee_head_change = (id: string, newAmount: number) =>
-  invoke<FeeHeadChangePreview>('preview_fee_head_change', { id, newAmount })
+export const preview_fee_head_change = (id: string, newAmount: number, instalmentsJson?: string | null) =>
+  invoke<FeeHeadChangePreview>('preview_fee_head_change', { id, newAmount, instalmentsJson: instalmentsJson ?? null })
 export const update_fee_head = (id: string, input: FeeHeadInput) =>
   invoke<FeeHeadDto>('update_fee_head', { id, input })
 export const deactivate_fee_head = (id: string) => invoke<void>('deactivate_fee_head', { id })

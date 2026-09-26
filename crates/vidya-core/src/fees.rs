@@ -33,6 +33,35 @@ pub struct FeeHead {
     pub amount_paise: Paise,
     pub frequency: FeeFrequency,
     pub applies_to: AppliesTo,
+    /// Optional instalment plan (§10.2, P15). When present, dues are generated per
+    /// instalment (each carrying its `no` and `due_date`) instead of once per
+    /// period. `None` keeps the pre-P15 per-period behaviour (one due, instalment
+    /// 1, no due date).
+    #[serde(default)]
+    pub instalments: Option<InstalmentPlan>,
+}
+
+/// One instalment of a fee head's plan (§10.2). `no` is 1-based and contiguous;
+/// `amount_paise` is this instalment's charge; `due_date` is `YYYY-MM-DD`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Instalment {
+    pub no: u32,
+    pub amount_paise: Paise,
+    pub due_date: String,
+}
+
+/// A fee head's instalment plan, stored as `fee_head.instalments_json` (§10.2).
+///
+/// * `List` — an explicit set of instalments (their amounts must sum to the head's
+///   total; used by term / once / custom heads, e.g. Tuition 3× ₹4,000).
+/// * `Monthly` — the same amount due on `day_of_month` of every session month
+///   (used by `month`-frequency heads such as Transport; the prototype shows
+///   "Every month, due on the 10th").
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum InstalmentPlan {
+    List { instalments: Vec<Instalment> },
+    Monthly { monthly_amount_paise: Paise, day_of_month: u8 },
 }
 
 /// A student, reduced to the fields dues generation needs.
@@ -54,6 +83,11 @@ pub struct FeeDue {
     pub fee_head_id: String,
     pub period: String,
     pub amount_paise: Paise,
+    /// 1-based instalment number (§10.2). Plan-less heads use `1`.
+    pub instalment_no: u32,
+    /// Due date `YYYY-MM-DD`, or `None` for plan-less heads (the caller supplies a
+    /// default, e.g. term start, in the migration).
+    pub due_date: Option<String>,
 }
 
 /// Which periods to generate for, in this run.
@@ -92,16 +126,19 @@ pub fn generate_dues(
         .collect();
 
     let mut out = Vec::new();
-    let push = |out: &mut Vec<FeeDue>, head: &FeeHead, student: &Student, period: &str| {
+    // A due that already has an allocation is NEVER regenerated (money applied).
+    let push = |out: &mut Vec<FeeDue>, head: &FeeHead, student: &Student, period: &str, amount: Paise, no: u32, due: Option<String>| {
         let key = (student.id.as_str(), head.id.as_str(), period);
         if allocated.contains(&key) {
-            return; // never regenerate a due that already has an allocation
+            return;
         }
         out.push(FeeDue {
             student_id: student.id.clone(),
             fee_head_id: head.id.clone(),
             period: period.to_string(),
-            amount_paise: head.amount_paise,
+            amount_paise: amount,
+            instalment_no: no,
+            due_date: due,
         });
     };
 
@@ -110,24 +147,100 @@ pub fn generate_dues(
             if !head_matches(head, student) {
                 continue;
             }
-            match head.frequency {
-                FeeFrequency::Term => {
-                    for period in &spec.terms {
-                        push(&mut out, head, student, period);
+            match &head.instalments {
+                // Explicit instalment list: one due per instalment, keyed by its
+                // due date (§10.2). Ignores `spec` — the plan carries its own dates.
+                Some(InstalmentPlan::List { instalments }) => {
+                    for inst in instalments {
+                        push(&mut out, head, student, &inst.due_date, inst.amount_paise, inst.no, Some(inst.due_date.clone()));
                     }
                 }
-                FeeFrequency::Month => {
-                    for period in &spec.months {
-                        push(&mut out, head, student, period);
+                // Monthly rule: one due per session month, due on `day_of_month`.
+                Some(InstalmentPlan::Monthly { monthly_amount_paise, day_of_month }) => {
+                    for (i, month) in spec.months.iter().enumerate() {
+                        let due = format!("{month}-{day_of_month:02}");
+                        push(&mut out, head, student, month, *monthly_amount_paise, (i + 1) as u32, Some(due));
                     }
                 }
-                FeeFrequency::Once => {
-                    push(&mut out, head, student, &student.admitted_period);
-                }
+                // Plan-less heads keep the pre-P15 per-period behaviour.
+                None => match head.frequency {
+                    FeeFrequency::Term => {
+                        for period in &spec.terms {
+                            push(&mut out, head, student, period, head.amount_paise, 1, None);
+                        }
+                    }
+                    FeeFrequency::Month => {
+                        for period in &spec.months {
+                            push(&mut out, head, student, period, head.amount_paise, 1, None);
+                        }
+                    }
+                    FeeFrequency::Once => {
+                        push(&mut out, head, student, &student.admitted_period, head.amount_paise, 1, None);
+                    }
+                },
             }
         }
     }
     out
+}
+
+/// Validate a fee head's instalment plan (§10.2, P15).
+///
+/// * `List` — non-empty; `no` values are exactly `1..=len` (each once); every
+///   amount is positive; the amounts sum to `head_total_paise` (the head's total
+///   amount); every `due_date` parses and falls within `[session_start,
+///   session_end]` inclusive.
+/// * `Monthly` — the monthly amount is positive and `day_of_month` is `1..=28`
+///   (safe in every month, no skipped months).
+///
+/// Errors are `Validation{ field: "instalments", rule }` where `rule` is one of
+/// `empty`, `no`, `amount`, `sum`, `due_date`, `day_of_month`.
+pub fn validate_instalment_plan(
+    plan: &InstalmentPlan,
+    head_total_paise: Paise,
+    session_start: &str,
+    session_end: &str,
+) -> CoreResult<()> {
+    let inst_err = |rule: &str| CoreError::validation("instalments", rule);
+    match plan {
+        InstalmentPlan::List { instalments } => {
+            if instalments.is_empty() {
+                return Err(inst_err("empty"));
+            }
+            let start = crate::calendar::parse_date(session_start).ok_or_else(|| inst_err("due_date"))?;
+            let end = crate::calendar::parse_date(session_end).ok_or_else(|| inst_err("due_date"))?;
+            let mut nos: Vec<u32> = instalments.iter().map(|i| i.no).collect();
+            nos.sort_unstable();
+            let expected: Vec<u32> = (1..=instalments.len() as u32).collect();
+            if nos != expected {
+                return Err(inst_err("no"));
+            }
+            let mut sum = 0i64;
+            for inst in instalments {
+                if !inst.amount_paise.is_positive() {
+                    return Err(inst_err("amount"));
+                }
+                sum += inst.amount_paise.get();
+                let d = crate::calendar::parse_date(&inst.due_date).ok_or_else(|| inst_err("due_date"))?;
+                if d < start || d > end {
+                    return Err(inst_err("due_date"));
+                }
+            }
+            if sum != head_total_paise.get() {
+                return Err(inst_err("sum"));
+            }
+            Ok(())
+        }
+        InstalmentPlan::Monthly { monthly_amount_paise, day_of_month } => {
+            if !monthly_amount_paise.is_positive() {
+                return Err(inst_err("amount"));
+            }
+            if !(1..=28).contains(day_of_month) {
+                return Err(inst_err("day_of_month"));
+            }
+            Ok(())
+        }
+    }
 }
 
 /// Whether `head.applies_to` covers `student`.
@@ -139,7 +252,86 @@ fn head_matches(head: &FeeHead, student: &Student) -> bool {
     }
 }
 
-/// A due to pay against, oldest first (caller supplies the ordering).
+/// An existing `fee_due` as the plan-change preview needs it (§10.2).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExistingDue {
+    pub id: String,
+    pub instalment_no: u32,
+    pub amount_paise: Paise,
+    /// True if any payment has been allocated to this due (paid or partly paid).
+    pub paid: bool,
+}
+
+/// One unpaid instalment due whose amount changes under a new plan.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PlanChangeLine {
+    pub due_id: String,
+    pub instalment_no: u32,
+    pub old_amount: Paise,
+    pub new_amount: Paise,
+}
+
+/// What a plan change would do to the UNPAID dues of a head (§10.2). Paid dues
+/// (those with any allocation) are NEVER changed and never appear here — the
+/// change-preview dialog in `feesadmin` shows only affected unpaid instalments.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PlanChangePreview {
+    /// Unpaid dues whose amount differs under the new plan.
+    pub changed: Vec<PlanChangeLine>,
+    /// New instalment numbers that have no existing unpaid due (will be added).
+    pub added: Vec<u32>,
+    /// Unpaid due ids whose instalment number is not in the new plan (removed).
+    pub removed: Vec<String>,
+    /// Net change in total dues once applied (paise). Paid dues excluded.
+    pub delta_paise: i64,
+}
+
+/// Preview a fee head's instalment-plan change against its existing dues (§10.2).
+///
+/// Compares `new_instalments` (the proposed plan) with the head's `existing` dues,
+/// matched by `instalment_no`, and reports only the UNPAID dues affected. Paid
+/// dues are left untouched (never changed, never removed). At most one due per
+/// instalment number is assumed (as generation guarantees).
+pub fn preview_plan_change(existing: &[ExistingDue], new_instalments: &[Instalment]) -> PlanChangePreview {
+    use std::collections::{HashMap, HashSet};
+    let paid_nos: HashSet<u32> = existing.iter().filter(|d| d.paid).map(|d| d.instalment_no).collect();
+    let unpaid_by_no: HashMap<u32, &ExistingDue> =
+        existing.iter().filter(|d| !d.paid).map(|d| (d.instalment_no, d)).collect();
+    let new_nos: HashSet<u32> = new_instalments.iter().map(|i| i.no).collect();
+
+    let mut preview = PlanChangePreview::default();
+    for inst in new_instalments {
+        if paid_nos.contains(&inst.no) {
+            continue; // a paid instalment is never changed
+        }
+        match unpaid_by_no.get(&inst.no) {
+            Some(due) if due.amount_paise != inst.amount_paise => {
+                preview.delta_paise += inst.amount_paise.get() - due.amount_paise.get();
+                preview.changed.push(PlanChangeLine {
+                    due_id: due.id.clone(),
+                    instalment_no: inst.no,
+                    old_amount: due.amount_paise,
+                    new_amount: inst.amount_paise,
+                });
+            }
+            Some(_) => {} // unchanged amount
+            None => {
+                preview.delta_paise += inst.amount_paise.get();
+                preview.added.push(inst.no);
+            }
+        }
+    }
+    for due in existing.iter().filter(|d| !d.paid) {
+        if !new_nos.contains(&due.instalment_no) {
+            preview.delta_paise -= due.amount_paise.get();
+            preview.removed.push(due.id.clone());
+        }
+    }
+    preview
+}
+
+/// A due to pay against, oldest first (caller supplies the ordering — P15 orders
+/// by `due_date` so allocation still consumes the oldest instalment first).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Due {
     pub id: String,
@@ -335,7 +527,11 @@ mod tests {
     use super::*;
 
     fn head(id: &str, amount: i64, freq: FeeFrequency, applies_to: AppliesTo) -> FeeHead {
-        FeeHead { id: id.into(), amount_paise: Paise(amount), frequency: freq, applies_to }
+        FeeHead { id: id.into(), amount_paise: Paise(amount), frequency: freq, applies_to, instalments: None }
+    }
+
+    fn inst(no: u32, amount: i64, due: &str) -> Instalment {
+        Instalment { no, amount_paise: Paise(amount), due_date: due.into() }
     }
 
     fn student(id: &str, class_id: &str, transport: bool, admitted: &str) -> Student {
@@ -661,5 +857,140 @@ mod tests {
         let dues = generate_dues(&heads, &students, &spec, &existing);
         assert_eq!(dues.len(), 1);
         assert_eq!(dues[0].period, "2026-08");
+    }
+
+    // ---- instalments (P15) ----
+
+    #[test]
+    fn instalment_list_generates_one_due_per_instalment() {
+        let mut h = head("tuition", 1_200_000, FeeFrequency::Term, AppliesTo::All);
+        h.instalments = Some(InstalmentPlan::List {
+            instalments: vec![
+                inst(1, 400_000, "2026-04-15"),
+                inst(2, 400_000, "2026-08-15"),
+                inst(3, 400_000, "2026-12-15"),
+            ],
+        });
+        let students = [student("s1", "c1", false, "2026-04")];
+        let spec = PeriodSpec { terms: vec!["T1".into()], months: vec![] };
+        let dues = generate_dues(&[h], &students, &spec, &[]);
+        assert_eq!(dues.len(), 3);
+        assert_eq!(dues[1].instalment_no, 2);
+        assert_eq!(dues[1].amount_paise, Paise(400_000));
+        assert_eq!(dues[1].due_date.as_deref(), Some("2026-08-15"));
+        // The due date is the dedup period, so a paid instalment is not regenerated.
+        let existing = [("s1".to_string(), "tuition".to_string(), "2026-04-15".to_string())];
+        let dues2 = generate_dues(
+            &[FeeHead {
+                id: "tuition".into(),
+                amount_paise: Paise(1_200_000),
+                frequency: FeeFrequency::Term,
+                applies_to: AppliesTo::All,
+                instalments: Some(InstalmentPlan::List {
+                    instalments: vec![inst(1, 400_000, "2026-04-15"), inst(2, 400_000, "2026-08-15")],
+                }),
+            }],
+            &students,
+            &spec,
+            &existing,
+        );
+        assert_eq!(dues2.len(), 1);
+        assert_eq!(dues2[0].instalment_no, 2);
+    }
+
+    #[test]
+    fn monthly_rule_generates_monthly_dues_with_due_dates() {
+        let mut h = head("transport", 20000, FeeFrequency::Month, AppliesTo::Transport);
+        h.instalments = Some(InstalmentPlan::Monthly { monthly_amount_paise: Paise(20000), day_of_month: 10 });
+        let students = [student("s1", "c1", true, "2026-07"), student("s2", "c1", false, "2026-07")];
+        let spec = PeriodSpec { terms: vec![], months: vec!["2026-07".into(), "2026-08".into()] };
+        let dues = generate_dues(&[h], &students, &spec, &[]);
+        // Only the transport student, one due per month.
+        assert_eq!(dues.len(), 2);
+        assert_eq!(dues[0].due_date.as_deref(), Some("2026-07-10"));
+        assert_eq!(dues[0].instalment_no, 1);
+        assert_eq!(dues[1].due_date.as_deref(), Some("2026-08-10"));
+        assert_eq!(dues[1].instalment_no, 2);
+    }
+
+    #[test]
+    fn validate_instalment_plan_sum_must_match_head_total() {
+        let ok = InstalmentPlan::List {
+            instalments: vec![inst(1, 400_000, "2026-04-15"), inst(2, 400_000, "2026-08-15"), inst(3, 400_000, "2026-12-15")],
+        };
+        assert!(validate_instalment_plan(&ok, Paise(1_200_000), "2026-04-01", "2027-03-31").is_ok());
+        // Sum 1,150,000 ≠ 1,200,000 → VALIDATION{instalments, sum}.
+        let bad = InstalmentPlan::List {
+            instalments: vec![inst(1, 400_000, "2026-04-15"), inst(2, 350_000, "2026-08-15"), inst(3, 400_000, "2026-12-15")],
+        };
+        assert_eq!(
+            validate_instalment_plan(&bad, Paise(1_200_000), "2026-04-01", "2027-03-31"),
+            Err(CoreError::validation("instalments", "sum"))
+        );
+    }
+
+    #[test]
+    fn validate_instalment_plan_dates_within_session_and_contiguous_nos() {
+        // A due date outside the session is rejected.
+        let out_of_range = InstalmentPlan::List { instalments: vec![inst(1, 100_000, "2025-01-01")] };
+        assert_eq!(
+            validate_instalment_plan(&out_of_range, Paise(100_000), "2026-04-01", "2027-03-31"),
+            Err(CoreError::validation("instalments", "due_date"))
+        );
+        // Non-contiguous instalment numbers are rejected.
+        let bad_nos = InstalmentPlan::List {
+            instalments: vec![inst(1, 50_000, "2026-05-01"), inst(3, 50_000, "2026-09-01")],
+        };
+        assert_eq!(
+            validate_instalment_plan(&bad_nos, Paise(100_000), "2026-04-01", "2027-03-31"),
+            Err(CoreError::validation("instalments", "no"))
+        );
+        // Empty list rejected.
+        assert_eq!(
+            validate_instalment_plan(&InstalmentPlan::List { instalments: vec![] }, Paise(0), "2026-04-01", "2027-03-31"),
+            Err(CoreError::validation("instalments", "empty"))
+        );
+    }
+
+    #[test]
+    fn validate_monthly_plan_rules() {
+        let ok = InstalmentPlan::Monthly { monthly_amount_paise: Paise(20000), day_of_month: 10 };
+        assert!(validate_instalment_plan(&ok, Paise(20000), "2026-04-01", "2027-03-31").is_ok());
+        // day_of_month must be 1..=28.
+        let bad_day = InstalmentPlan::Monthly { monthly_amount_paise: Paise(20000), day_of_month: 31 };
+        assert_eq!(
+            validate_instalment_plan(&bad_day, Paise(20000), "2026-04-01", "2027-03-31"),
+            Err(CoreError::validation("instalments", "day_of_month"))
+        );
+        // Non-positive amount rejected.
+        let bad_amt = InstalmentPlan::Monthly { monthly_amount_paise: Paise(0), day_of_month: 10 };
+        assert_eq!(
+            validate_instalment_plan(&bad_amt, Paise(0), "2026-04-01", "2027-03-31"),
+            Err(CoreError::validation("instalments", "amount"))
+        );
+    }
+
+    #[test]
+    fn preview_plan_change_lists_only_unpaid_dues() {
+        let existing = [
+            ExistingDue { id: "d1".into(), instalment_no: 1, amount_paise: Paise(400_000), paid: true },
+            ExistingDue { id: "d2".into(), instalment_no: 2, amount_paise: Paise(400_000), paid: false },
+            ExistingDue { id: "d3".into(), instalment_no: 3, amount_paise: Paise(400_000), paid: false },
+        ];
+        // New plan: inst1 changes (but paid → untouched), inst2 changes to 500k,
+        // inst3 dropped, inst4 added.
+        let new_plan = [inst(1, 500_000, "2026-04-15"), inst(2, 500_000, "2026-08-15"), inst(4, 300_000, "2027-01-15")];
+        let p = preview_plan_change(&existing, &new_plan);
+        // d1 is paid → never listed.
+        assert!(p.changed.iter().all(|l| l.due_id != "d1"));
+        // d2 changed 400k → 500k.
+        assert_eq!(p.changed.len(), 1);
+        assert_eq!(p.changed[0].due_id, "d2");
+        assert_eq!(p.changed[0].new_amount, Paise(500_000));
+        // inst4 added; d3 removed.
+        assert_eq!(p.added, vec![4]);
+        assert_eq!(p.removed, vec!["d3".to_string()]);
+        // delta = (+100k for d2) + (+300k added) - (400k removed d3) = 0.
+        assert_eq!(p.delta_paise, 0);
     }
 }

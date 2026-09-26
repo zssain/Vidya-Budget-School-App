@@ -10,6 +10,7 @@ import * as api from '@/lib/api'
 import type { BulkReminderDto, DuesListDto, DuesRowDto, ReminderPreviewDto } from '@/lib/api'
 import { formatMoney } from '@/lib/format'
 import { shareWhatsApp } from '@/lib/files'
+import { formatDueShort } from './FeesScreen'
 import { t } from '@/lib/i18n'
 
 const CARD: CSSProperties = { background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 16, overflow: 'hidden' }
@@ -95,7 +96,10 @@ export default function FeesDues() {
                 <div style={{ fontSize: 12, color: 'var(--muted)' }}>{r.guardian_name ? `${t('fees.dues.guardian')} · ${r.guardian_name}` : t('fees.dues.noGuardian')}</div>
               </span>
               <span style={{ color: 'var(--muted)' }}>{r.class_display ?? '—'}</span>
-              <span>{r.fee_head}</span>
+              <span>
+                <div>{r.instalment_count > 1 ? `${r.fee_head} · ${t('fees.dues.ofN', { no: String(r.instalment_no), count: String(r.instalment_count) })}` : r.fee_head}</div>
+                {r.due_date ? <div style={{ fontSize: 12, color: 'var(--muted)' }}>{formatDueShort(r.due_date)}</div> : null}
+              </span>
               <span style={{ textAlign: 'right', fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>{formatMoney(r.balance_paise)}</span>
               <span style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
                 <button type="button" style={smallBtn()} onClick={() => setReminder({ row: r, channel: 'email' })}>{t('fees.dues.email')}</button>

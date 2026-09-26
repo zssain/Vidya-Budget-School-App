@@ -641,6 +641,16 @@ fn frequency_from(s: &str) -> vidya_core::types::FeeFrequency {
     }
 }
 
+/// Parse a fee head's stored `instalments_json` into an [`InstalmentPlan`], or
+/// `None` when the column is NULL/empty/invalid (a plan-less head).
+fn parse_instalments_json(s: Option<&str>) -> Option<vidya_core::fees::InstalmentPlan> {
+    let s = s?.trim();
+    if s.is_empty() {
+        return None;
+    }
+    serde_json::from_str::<vidya_core::fees::InstalmentPlan>(s).ok()
+}
+
 /// Dues a single new admission owes: every active head that applies to the
 /// student, for each term of the current session (`term` heads), the current
 /// month (`month` heads) and once (`once` heads). Uses vidya-core.
@@ -654,14 +664,21 @@ fn dues_for_new_student(
     use vidya_core::fees::{FeeHead, PeriodSpec, Student as FeeStudent};
     use vidya_core::money::Paise;
 
-    let mut stmt = conn.prepare("SELECT id, amount_paise, frequency, applies_to FROM fee_head WHERE active=1")?;
+    let mut stmt = conn.prepare("SELECT id, amount_paise, frequency, applies_to, instalments_json FROM fee_head WHERE active=1")?;
     let heads: Vec<FeeHead> = stmt
         .query_map([], |r| {
             let id: String = r.get(0)?;
             let amount: i64 = r.get(1)?;
             let freq: String = r.get(2)?;
             let applies: String = r.get(3)?;
-            Ok(FeeHead { id, amount_paise: Paise(amount), frequency: frequency_from(&freq), applies_to: parse_applies_to(&applies) })
+            let inst_json: Option<String> = r.get(4)?;
+            Ok(FeeHead {
+                id,
+                amount_paise: Paise(amount),
+                frequency: frequency_from(&freq),
+                applies_to: parse_applies_to(&applies),
+                instalments: parse_instalments_json(inst_json.as_deref()),
+            })
         })?
         .collect::<rusqlite::Result<_>>()?;
 
@@ -762,9 +779,9 @@ pub fn create_student_logic(
         }
         for d in &dues {
             tx.execute(
-                "INSERT INTO fee_due(id,student_id,fee_head_id,period,amount_paise,created_at,updated_at,sync_state) \
-                 VALUES (?1,?2,?3,?4,?5,?6,?6,?7)",
-                params![new_id("due"), sid2, d.fee_head_id, d.period, d.amount_paise.get(), now, sync_state],
+                "INSERT INTO fee_due(id,student_id,fee_head_id,period,amount_paise,instalment_no,due_date,created_at,updated_at,sync_state) \
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?8,?9)",
+                params![new_id("due"), sid2, d.fee_head_id, d.period, d.amount_paise.get(), d.instalment_no, d.due_date, now, sync_state],
             )?;
         }
         let audit = AuditEntry {
@@ -1476,9 +1493,9 @@ pub fn import_students_commit_logic(
         }
         for d in dues_for_new_student(&tx, &sid, &p.class_id, p.transport, today)? {
             tx.execute(
-                "INSERT INTO fee_due(id,student_id,fee_head_id,period,amount_paise,created_at,updated_at,sync_state) \
-                 VALUES (?1,?2,?3,?4,?5,?6,?6,?7)",
-                params![new_id("due"), sid, d.fee_head_id, d.period, d.amount_paise.get(), now, sync_state],
+                "INSERT INTO fee_due(id,student_id,fee_head_id,period,amount_paise,instalment_no,due_date,created_at,updated_at,sync_state) \
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?8,?9)",
+                params![new_id("due"), sid, d.fee_head_id, d.period, d.amount_paise.get(), d.instalment_no, d.due_date, now, sync_state],
             )?;
         }
         imported += 1;
@@ -1545,6 +1562,9 @@ pub struct FeeHeadDto {
     pub applies_to: String,
     pub active: bool,
     pub has_allocations: bool,
+    /// Raw `fee_head.instalments_json` (an `InstalmentPlan`, or null for a
+    /// plan-less head). The Fee-structure screen parses it to draw the chips.
+    pub instalments_json: Option<String>,
 }
 
 pub fn list_fee_heads_logic(conn: &mut Connection, actor_s: &SessionStaff) -> CmdResult<Vec<FeeHeadDto>> {
@@ -1552,7 +1572,8 @@ pub fn list_fee_heads_logic(conn: &mut Connection, actor_s: &SessionStaff) -> Cm
     require_allow(&actor, Action::ViewFees, &Target::of(TargetKind::Fee))?;
     let mut stmt = conn.prepare(
         "SELECT h.id, h.name, h.name_hi, h.amount_paise, h.frequency, h.applies_to, h.active, \
-           EXISTS(SELECT 1 FROM fee_due d JOIN payment_allocation pa ON pa.fee_due_id=d.id WHERE d.fee_head_id=h.id) \
+           EXISTS(SELECT 1 FROM fee_due d JOIN payment_allocation pa ON pa.fee_due_id=d.id WHERE d.fee_head_id=h.id), \
+           h.instalments_json \
          FROM fee_head h ORDER BY h.name",
     )?;
     let rows = stmt
@@ -1566,6 +1587,7 @@ pub fn list_fee_heads_logic(conn: &mut Connection, actor_s: &SessionStaff) -> Cm
                 applies_to: r.get(5)?,
                 active: r.get::<_, i64>(6)? != 0,
                 has_allocations: r.get::<_, i64>(7)? != 0,
+                instalments_json: r.get(8)?,
             })
         })?
         .collect::<rusqlite::Result<_>>()?;
@@ -1579,6 +1601,40 @@ pub struct FeeHeadInput {
     pub amount_paise: i64,
     pub frequency: String,   // term | month | once
     pub applies_to: String,  // all | transport | JSON class ids
+    /// Optional instalment plan (`InstalmentPlan` as JSON). Validated against the
+    /// head amount + the current session (§10.2).
+    #[serde(default)]
+    pub instalments_json: Option<String>,
+}
+
+/// The current session's `[starts_on, ends_on]` (YYYY-MM-DD), for instalment
+/// due-date validation. Falls back to a wide range if no session row exists.
+fn current_session_range(conn: &Connection) -> rusqlite::Result<(String, String)> {
+    Ok(conn
+        .query_row(
+            "SELECT starts_on, ends_on FROM academic_session WHERE is_current=1 LIMIT 1",
+            [],
+            |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
+        )
+        .optional()?
+        .unwrap_or_else(|| ("0000-01-01".into(), "9999-12-31".into())))
+}
+
+/// Validate an optional instalment plan JSON against a head amount. Returns the
+/// canonical JSON to store (or `None`). Errors mirror vidya-core codes.
+fn validate_instalments_input(
+    conn: &Connection,
+    amount_paise: i64,
+    instalments_json: Option<&str>,
+) -> CmdResult<Option<String>> {
+    let plan = match parse_instalments_json(instalments_json) {
+        Some(p) => p,
+        None => return Ok(None),
+    };
+    let (start, end) = current_session_range(conn)?;
+    vidya_core::fees::validate_instalment_plan(&plan, vidya_core::money::Paise(amount_paise), &start, &end)?;
+    // Re-serialise so the stored JSON is canonical.
+    Ok(Some(serde_json::to_string(&plan).map_err(|_| CmdError::validation("instalments", "encode"))?))
 }
 
 fn require_principal(actor: &Actor) -> CmdResult<()> {
@@ -1599,10 +1655,11 @@ pub fn create_fee_head_logic(conn: &mut Connection, actor_s: &SessionStaff, inpu
     if !matches!(input.frequency.as_str(), "term" | "month" | "once") {
         return Err(CmdError::validation("frequency", "invalid"));
     }
+    let instalments_json = validate_instalments_input(conn, input.amount_paise, input.instalments_json.as_deref())?;
     let id = new_id("head");
     conn.execute(
-        "INSERT INTO fee_head(id,name,name_hi,amount_paise,frequency,applies_to,active) VALUES (?1,?2,?3,?4,?5,?6,1)",
-        params![id, input.name, input.name_hi, input.amount_paise, input.frequency, input.applies_to],
+        "INSERT INTO fee_head(id,name,name_hi,amount_paise,frequency,applies_to,active,instalments_json) VALUES (?1,?2,?3,?4,?5,?6,1,?7)",
+        params![id, input.name, input.name_hi, input.amount_paise, input.frequency, input.applies_to, instalments_json],
     )?;
     audit_action(conn, AuditEntry {
         at: now_iso(),
@@ -1610,7 +1667,7 @@ pub fn create_fee_head_logic(conn: &mut Connection, actor_s: &SessionStaff, inpu
         action: "create_fee_head".into(),
         table: Some("fee_head".into()),
         record_id: Some(id.clone()),
-        after_json: Some(serde_json::json!({ "name": input.name, "amount_paise": input.amount_paise }).to_string()),
+        after_json: Some(serde_json::json!({ "name": input.name, "amount_paise": input.amount_paise, "instalments": instalments_json }).to_string()),
         ..Default::default()
     })?;
     list_fee_heads_logic(conn, actor_s)?.into_iter().find(|h| h.id == id).ok_or_else(CmdError::not_found)
@@ -1620,13 +1677,61 @@ pub fn create_fee_head_logic(conn: &mut Connection, actor_s: &SessionStaff, inpu
 pub struct FeeHeadChangePreview {
     pub affected_dues: i64,
     pub delta_paise: i64,
+    /// Instalments added / removed / changed under a new plan (0 for amount-only).
+    pub added: i64,
+    pub removed: i64,
+    pub changed: i64,
 }
 
-/// How many UNPAID dues change, and by how much in total, if this head's amount
-/// becomes `new_amount`. Paid/partly-paid dues are excluded (never change).
-pub fn preview_fee_head_change_logic(conn: &mut Connection, actor_s: &SessionStaff, id: &str, new_amount: i64) -> CmdResult<FeeHeadChangePreview> {
+/// Load a head's existing dues as [`ExistingDue`] for the plan-change preview.
+fn head_existing_dues(conn: &Connection, head_id: &str) -> rusqlite::Result<Vec<vidya_core::fees::ExistingDue>> {
+    let mut stmt = conn.prepare(
+        "SELECT d.id, d.instalment_no, d.amount_paise, \
+           EXISTS(SELECT 1 FROM payment_allocation pa WHERE pa.fee_due_id=d.id) \
+         FROM fee_due d WHERE d.fee_head_id=?1 AND d.cancelled_at IS NULL",
+    )?;
+    let rows = stmt
+        .query_map(params![head_id], |r| {
+            Ok(vidya_core::fees::ExistingDue {
+                id: r.get(0)?,
+                instalment_no: r.get::<_, i64>(1)? as u32,
+                amount_paise: vidya_core::money::Paise(r.get(2)?),
+                paid: r.get::<_, i64>(3)? != 0,
+            })
+        })?
+        .collect::<rusqlite::Result<_>>()?;
+    Ok(rows)
+}
+
+/// Preview a head change before saving (§10.2): which UNPAID dues change, are
+/// added or removed, and the net delta. Paid dues never change. Handles an
+/// amount-only change (plan-less) and an instalment plan change.
+pub fn preview_fee_head_change_logic(
+    conn: &mut Connection,
+    actor_s: &SessionStaff,
+    id: &str,
+    new_amount: i64,
+    instalments_json: Option<&str>,
+) -> CmdResult<FeeHeadChangePreview> {
     let actor = actor_from(conn, actor_s)?;
     require_principal(&actor)?;
+    if let Some(vidya_core::fees::InstalmentPlan::List { instalments }) = parse_instalments_json(instalments_json) {
+        let existing = head_existing_dues(conn, id)?;
+        let p = vidya_core::fees::preview_plan_change(&existing, &instalments);
+        return Ok(FeeHeadChangePreview {
+            affected_dues: (p.changed.len() + p.added.len() + p.removed.len()) as i64,
+            delta_paise: p.delta_paise,
+            added: p.added.len() as i64,
+            removed: p.removed.len() as i64,
+            changed: p.changed.len() as i64,
+        });
+    }
+    // Amount-only change (or a Monthly plan whose per-due amount is the monthly
+    // amount): apply `new_amount` to every unpaid due.
+    let per_due = match parse_instalments_json(instalments_json) {
+        Some(vidya_core::fees::InstalmentPlan::Monthly { monthly_amount_paise, .. }) => monthly_amount_paise.get(),
+        _ => new_amount,
+    };
     let (count, total_now): (i64, i64) = conn.query_row(
         "SELECT COUNT(*), COALESCE(SUM(amount_paise),0) FROM fee_due d \
          WHERE d.fee_head_id=?1 AND d.cancelled_at IS NULL \
@@ -1634,7 +1739,100 @@ pub fn preview_fee_head_change_logic(conn: &mut Connection, actor_s: &SessionSta
         params![id],
         |r| Ok((r.get(0)?, r.get(1)?)),
     )?;
-    Ok(FeeHeadChangePreview { affected_dues: count, delta_paise: count * new_amount - total_now })
+    Ok(FeeHeadChangePreview { affected_dues: count, delta_paise: count * per_due - total_now, added: 0, removed: 0, changed: count })
+}
+
+/// Cancel unpaid dues for a head and regenerate them from its instalment plan for
+/// every student that already has a due for it. Paid dues (with an allocation) are
+/// left untouched; instalments already paid are not regenerated (§10.2).
+fn regenerate_head_dues_in_tx(
+    tx: &rusqlite::Transaction,
+    head_id: &str,
+    now: &str,
+    sync_state: &str,
+) -> rusqlite::Result<()> {
+    use vidya_core::fees::{FeeHead, PeriodSpec, Student as FeeStudent};
+    use vidya_core::money::Paise;
+
+    // Load the head with its plan; nothing to do if it has no plan.
+    let head: Option<FeeHead> = tx
+        .query_row(
+            "SELECT id, amount_paise, frequency, applies_to, instalments_json FROM fee_head WHERE id=?1",
+            params![head_id],
+            |r| {
+                let inst_json: Option<String> = r.get(4)?;
+                Ok(FeeHead {
+                    id: r.get(0)?,
+                    amount_paise: Paise(r.get(1)?),
+                    frequency: frequency_from(&r.get::<_, String>(2)?),
+                    applies_to: parse_applies_to(&r.get::<_, String>(3)?),
+                    instalments: parse_instalments_json(inst_json.as_deref()),
+                })
+            },
+        )
+        .optional()?;
+    let head = match head {
+        Some(h) if h.instalments.is_some() => h,
+        _ => return Ok(()),
+    };
+
+    // Students who already have a due for this head, with their current class.
+    let mut stmt = tx.prepare(
+        "SELECT DISTINCT s.id, \
+           COALESCE((SELECT e.class_id FROM enrollment e WHERE e.student_id=s.id AND e.to_date IS NULL ORDER BY e.from_date DESC LIMIT 1), ''), \
+           s.transport \
+         FROM student s JOIN fee_due d ON d.student_id=s.id \
+         WHERE d.fee_head_id=?1 AND s.status='active'",
+    )?;
+    let session_label: String = tx
+        .query_row("SELECT label FROM academic_session WHERE is_current=1 LIMIT 1", [], |r| r.get(0))
+        .optional()?
+        .unwrap_or_default();
+    let students: Vec<FeeStudent> = stmt
+        .query_map(params![head_id], |r| {
+            Ok(FeeStudent {
+                id: r.get(0)?,
+                class_id: r.get(1)?,
+                transport: r.get::<_, i64>(2)? != 0,
+                admitted_period: session_label.clone(),
+            })
+        })?
+        .collect::<rusqlite::Result<_>>()?;
+
+    // Instalments already paid must not be regenerated: their (student, head,
+    // period) key is the due date used at generation.
+    let mut astmt = tx.prepare(
+        "SELECT d.student_id, d.fee_head_id, d.period FROM fee_due d \
+         JOIN payment_allocation pa ON pa.fee_due_id=d.id WHERE d.fee_head_id=?1",
+    )?;
+    let allocated: Vec<(String, String, String)> = astmt
+        .query_map(params![head_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+        .collect::<rusqlite::Result<_>>()?;
+
+    // Soft-cancel the unpaid dues (append-friendly: never hard-delete a due).
+    tx.execute(
+        "UPDATE fee_due SET cancelled_at=?1, updated_at=?1 WHERE fee_head_id=?2 AND cancelled_at IS NULL \
+           AND NOT EXISTS(SELECT 1 FROM payment_allocation pa WHERE pa.fee_due_id=fee_due.id)",
+        params![now, head_id],
+    )?;
+
+    // Regenerate from the plan (skips paid instalments via `allocated`).
+    let terms: Vec<String> = {
+        let mut ts = tx.prepare("SELECT t.name FROM term t JOIN academic_session s ON s.id=t.session_id AND s.is_current=1 ORDER BY t.starts_on")?;
+        let v = ts.query_map([], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<Vec<String>>>()?;
+        v
+    };
+    let month = now.get(0..7).unwrap_or(now).to_string();
+    let spec = PeriodSpec { terms, months: vec![month] };
+    let dues = vidya_core::fees::generate_dues(&[head], &students, &spec, &allocated);
+    for d in &dues {
+        tx.execute(
+            "INSERT INTO fee_due(id,student_id,fee_head_id,period,amount_paise,instalment_no,due_date,created_at,updated_at,sync_state) \
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?8,?9)",
+            params![new_id("due"), d.student_id, d.fee_head_id, d.period, d.amount_paise.get(), d.instalment_no, d.due_date, now, sync_state],
+        )?;
+    }
+    Ok(())
 }
 
 pub fn update_fee_head_logic(conn: &mut Connection, actor_s: &SessionStaff, id: &str, input: &FeeHeadInput) -> CmdResult<FeeHeadDto> {
@@ -1644,25 +1842,34 @@ pub fn update_fee_head_logic(conn: &mut Connection, actor_s: &SessionStaff, id: 
     if input.amount_paise < 0 {
         return Err(CmdError::validation("amount", "negative"));
     }
+    let instalments_json = validate_instalments_input(conn, input.amount_paise, input.instalments_json.as_deref())?;
     let now = now_iso();
+    let has_plan = instalments_json.is_some();
     let tx = conn.transaction()?;
     tx.execute(
-        "UPDATE fee_head SET name=?1, name_hi=?2, amount_paise=?3, frequency=?4, applies_to=?5 WHERE id=?6",
-        params![input.name, input.name_hi, input.amount_paise, input.frequency, input.applies_to, id],
+        "UPDATE fee_head SET name=?1, name_hi=?2, amount_paise=?3, frequency=?4, applies_to=?5, instalments_json=?6 WHERE id=?7",
+        params![input.name, input.name_hi, input.amount_paise, input.frequency, input.applies_to, instalments_json, id],
     )?;
-    // Apply the new amount to UNPAID dues only; paid/partly-paid dues never change.
-    let affected = tx.execute(
-        "UPDATE fee_due SET amount_paise=?1, updated_at=?2 WHERE fee_head_id=?3 AND cancelled_at IS NULL \
-           AND NOT EXISTS(SELECT 1 FROM payment_allocation pa WHERE pa.fee_due_id=fee_due.id)",
-        params![input.amount_paise, now, id],
-    )?;
+    let affected = if has_plan {
+        // Instalment plan: cancel unpaid dues and regenerate from the new plan
+        // (paid dues untouched).
+        regenerate_head_dues_in_tx(&tx, id, &now, "confirmed")?;
+        0
+    } else {
+        // Amount-only: apply the new amount to UNPAID dues; paid dues never change.
+        tx.execute(
+            "UPDATE fee_due SET amount_paise=?1, updated_at=?2 WHERE fee_head_id=?3 AND cancelled_at IS NULL \
+               AND NOT EXISTS(SELECT 1 FROM payment_allocation pa WHERE pa.fee_due_id=fee_due.id)",
+            params![input.amount_paise, now, id],
+        )? as i64
+    };
     crate::security::audit::append(&tx, &AuditEntry {
         at: now.clone(),
         staff_id: Some(actor_s.id.clone()),
         action: "update_fee_head".into(),
         table: Some("fee_head".into()),
         record_id: Some(id.to_string()),
-        after_json: Some(serde_json::json!({ "amount_paise": input.amount_paise, "dues_updated": affected }).to_string()),
+        after_json: Some(serde_json::json!({ "amount_paise": input.amount_paise, "dues_updated": affected, "plan": has_plan }).to_string()),
         ..Default::default()
     })?;
     tx.commit()?;
@@ -2321,7 +2528,8 @@ fn student_dues(conn: &Connection, student_id: &str) -> rusqlite::Result<Vec<Fee
         "SELECT d.id, COALESCE(h.name, d.period), d.amount_paise, \
            COALESCE((SELECT SUM(pa.amount_paise) FROM payment_allocation pa WHERE pa.fee_due_id=d.id AND pa.kind='due'),0) \
          FROM fee_due d LEFT JOIN fee_head h ON h.id=d.fee_head_id \
-         WHERE d.student_id=?1 AND d.cancelled_at IS NULL ORDER BY d.created_at",
+         WHERE d.student_id=?1 AND d.cancelled_at IS NULL \
+         ORDER BY d.due_date IS NULL, d.due_date, d.instalment_no, d.created_at",
     )?;
     let rows = stmt
         .query_map(params![student_id], |r| {
@@ -2379,7 +2587,8 @@ pub struct DuesRowDto {
     pub student_id: String,
     pub student_name: String,
     pub class_display: Option<String>,
-    /// Until per-instalment dues arrive (P15) this is the fee head (§Step 5).
+    /// The fee head name (e.g. "Tuition"). Combine with `instalment_no` /
+    /// `instalment_count` for the "Tuition · 2 of 3" label (§10.2).
     pub fee_head: String,
     pub balance_paise: i64,
     pub guardian_id: Option<String>,
@@ -2390,6 +2599,11 @@ pub struct DuesRowDto {
     pub has_messages_consent: bool,
     /// Guardian can be emailed a reminder: has an email AND `messages` consent.
     pub emailable: bool,
+    /// 1-based instalment number and how many instalments this head has for the
+    /// student (for the "N of M" label); the due date (YYYY-MM-DD), P15.
+    pub instalment_no: i64,
+    pub instalment_count: i64,
+    pub due_date: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -2411,7 +2625,9 @@ pub fn list_dues_logic(conn: &mut Connection, actor_s: &SessionStaff, class_id: 
     let mut sql = String::from(
         "SELECT d.id, d.student_id, s.name, c.display, COALESCE(h.name, d.period, 'Fee'), d.amount_paise, \
            COALESCE((SELECT SUM(pa.amount_paise) FROM payment_allocation pa WHERE pa.fee_due_id=d.id AND pa.kind='due'),0), \
-           g.id, g.name, g.mobile, g.email, g.language \
+           g.id, g.name, g.mobile, g.email, g.language, \
+           d.instalment_no, d.due_date, \
+           (SELECT COUNT(*) FROM fee_due d2 WHERE d2.student_id=d.student_id AND d2.fee_head_id=d.fee_head_id AND d2.cancelled_at IS NULL) \
          FROM fee_due d JOIN student s ON s.id=d.student_id \
            LEFT JOIN enrollment e ON e.student_id=s.id AND e.to_date IS NULL \
            LEFT JOIN class c ON c.id=e.class_id \
@@ -2425,13 +2641,14 @@ pub fn list_dues_logic(conn: &mut Connection, actor_s: &SessionStaff, class_id: 
         sql.push_str(" AND c.id=?");
         args.push(cf.to_string().into());
     }
-    sql.push_str(" ORDER BY s.name, d.created_at");
+    // Oldest instalment first (§10.2 allocation principle), then student.
+    sql.push_str(" ORDER BY s.name, d.due_date, d.instalment_no, d.created_at");
 
     #[allow(clippy::type_complexity)]
-    let raw: Vec<(String, String, String, Option<String>, String, i64, i64, Option<String>, Option<String>, Option<String>, Option<String>, Option<String>)> = {
+    let raw: Vec<(String, String, String, Option<String>, String, i64, i64, Option<String>, Option<String>, Option<String>, Option<String>, Option<String>, i64, Option<String>, i64)> = {
         let mut stmt = conn.prepare(&sql)?;
         let out = stmt.query_map(rusqlite::params_from_iter(args.iter()), |r| {
-            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?, r.get(7)?, r.get(8)?, r.get(9)?, r.get(10)?, r.get(11)?))
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?, r.get(7)?, r.get(8)?, r.get(9)?, r.get(10)?, r.get(11)?, r.get(12)?, r.get(13)?, r.get(14)?))
         })?.collect::<rusqlite::Result<_>>()?;
         out
     };
@@ -2443,7 +2660,7 @@ pub fn list_dues_logic(conn: &mut Connection, actor_s: &SessionStaff, class_id: 
     let mut no_consent: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     let mut consent_cache: std::collections::HashMap<String, bool> = std::collections::HashMap::new();
     let mut total_due: i64 = 0;
-    for (due_id, sid, name, cls, head, amount, allocated, gid, gname, gmobile, gemail, glang) in raw {
+    for (due_id, sid, name, cls, head, amount, allocated, gid, gname, gmobile, gemail, glang, instalment_no, due_date, instalment_count) in raw {
         let bal = amount - allocated;
         if bal <= 0 {
             continue;
@@ -2464,6 +2681,7 @@ pub fn list_dues_logic(conn: &mut Connection, actor_s: &SessionStaff, class_id: 
             due_id, student_id: sid, student_name: name, class_display: cls, fee_head: head, balance_paise: bal,
             guardian_id: gid, guardian_name: gname, guardian_mobile: gmobile, guardian_email: gemail,
             guardian_language: glang, has_messages_consent: consent, emailable: can_email,
+            instalment_no, instalment_count, due_date,
         });
     }
     let today = now_iso()[..10].to_string();
@@ -6396,7 +6614,7 @@ mod tests {
     }
 
     fn head_input(name: &str, amount: i64) -> FeeHeadInput {
-        FeeHeadInput { name: name.into(), name_hi: None, amount_paise: amount, frequency: "once".into(), applies_to: "all".into() }
+        FeeHeadInput { name: name.into(), name_hi: None, amount_paise: amount, frequency: "once".into(), applies_to: "all".into(), instalments_json: None }
     }
 
     #[test]
@@ -6665,7 +6883,7 @@ mod tests {
             .unwrap();
 
         // Preview + apply the new amount → the unpaid due follows it.
-        let preview = preview_fee_head_change_logic(&mut c, &principal(), &head.id, 60_000).unwrap();
+        let preview = preview_fee_head_change_logic(&mut c, &principal(), &head.id, 60_000, None).unwrap();
         assert!(preview.affected_dues >= 1);
         update_fee_head_logic(&mut c, &principal(), &head.id, &head_input("Lab fee", 60_000)).unwrap();
         let amt: i64 = c.query_row("SELECT amount_paise FROM fee_due WHERE id=?1", params![lab_due], |r| r.get(0)).unwrap();
@@ -6685,6 +6903,109 @@ mod tests {
 
         // Accountants cannot edit the fee structure.
         assert!(create_fee_head_logic(&mut c, &accountant(), &head_input("X", 1)).is_err());
+    }
+
+    #[test]
+    fn fee_head_with_instalment_plan_generates_dues_per_instalment() {
+        let mut c = seeded();
+        // Tuition ₹12,000/year in three ₹4,000 instalments (session 2026–27).
+        let plan = serde_json::json!({
+            "type": "list",
+            "instalments": [
+                { "no": 1, "amount_paise": 400_000, "due_date": "2026-04-15" },
+                { "no": 2, "amount_paise": 400_000, "due_date": "2026-08-15" },
+                { "no": 3, "amount_paise": 400_000, "due_date": "2026-12-15" }
+            ]
+        }).to_string();
+        let input = FeeHeadInput {
+            name: "Tuition (instalments)".into(), name_hi: None, amount_paise: 1_200_000,
+            frequency: "term".into(), applies_to: "all".into(), instalments_json: Some(plan),
+        };
+        let head = create_fee_head_logic(&mut c, &principal(), &input).unwrap();
+        assert!(head.instalments_json.is_some());
+
+        // A new admission gets one due per instalment, each with its no + due date.
+        let stu = create_student_logic(
+            &mut c, &accountant(), Some("dev-a2"), DeviceMode::Server, "2026-09-23",
+            &NewStudentInput { name: "Test Instalment".into(), class_id: "cls-6b".into(), roll_no: None, guardian_name: None, guardian_mobile: None, dob: None, gender: None, address: None, transport: None, rte: None, category: None, aadhaar_status: None },
+        ).unwrap();
+        let rows: Vec<(i64, i64, Option<String>)> = {
+            let mut s = c.prepare("SELECT instalment_no, amount_paise, due_date FROM fee_due WHERE student_id=?1 AND fee_head_id=?2 ORDER BY instalment_no").unwrap();
+            s.query_map(params![stu.id, head.id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))).unwrap().collect::<rusqlite::Result<_>>().unwrap()
+        };
+        assert_eq!(rows.len(), 3, "one due per instalment");
+        assert_eq!(rows[1], (2, 400_000, Some("2026-08-15".to_string())));
+    }
+
+    #[test]
+    fn instalment_sum_must_match_head_amount() {
+        let mut c = seeded();
+        // Instalments sum to 1,150,000 ≠ head 1,200,000 → rejected.
+        let plan = serde_json::json!({
+            "type": "list",
+            "instalments": [
+                { "no": 1, "amount_paise": 400_000, "due_date": "2026-04-15" },
+                { "no": 2, "amount_paise": 350_000, "due_date": "2026-08-15" },
+                { "no": 3, "amount_paise": 400_000, "due_date": "2026-12-15" }
+            ]
+        }).to_string();
+        let input = FeeHeadInput {
+            name: "Bad plan".into(), name_hi: None, amount_paise: 1_200_000,
+            frequency: "term".into(), applies_to: "all".into(), instalments_json: Some(plan),
+        };
+        assert!(create_fee_head_logic(&mut c, &principal(), &input).is_err());
+    }
+
+    #[test]
+    fn plan_change_preview_and_apply_leaves_paid_instalments() {
+        let mut c = seeded();
+        let plan = serde_json::json!({
+            "type": "list",
+            "instalments": [
+                { "no": 1, "amount_paise": 400_000, "due_date": "2026-04-15" },
+                { "no": 2, "amount_paise": 400_000, "due_date": "2026-08-15" }
+            ]
+        }).to_string();
+        let head = create_fee_head_logic(&mut c, &principal(), &FeeHeadInput {
+            name: "Plan head".into(), name_hi: None, amount_paise: 800_000,
+            frequency: "term".into(), applies_to: "all".into(), instalments_json: Some(plan),
+        }).unwrap();
+        let stu = create_student_logic(
+            &mut c, &accountant(), Some("dev-a2"), DeviceMode::Server, "2026-09-23",
+            &NewStudentInput { name: "Plan Student".into(), class_id: "cls-6b".into(), roll_no: None, guardian_name: None, guardian_mobile: None, dob: None, gender: None, address: None, transport: None, rte: None, category: None, aadhaar_status: None },
+        ).unwrap();
+        // Pay instalment 1 (₹4,000).
+        record_payment_logic(&mut c, &accountant(), None, DeviceMode::Server,
+            &PaymentInput { student_id: stu.id.clone(), amount_paise: 400_000, mode: "cash".into(), reference: None }).unwrap();
+
+        // Preview a new plan (inst2 → ₹5,000, add inst3 ₹1,000). inst1 is paid.
+        let new_plan = serde_json::json!({
+            "type": "list",
+            "instalments": [
+                { "no": 1, "amount_paise": 400_000, "due_date": "2026-04-15" },
+                { "no": 2, "amount_paise": 500_000, "due_date": "2026-08-15" },
+                { "no": 3, "amount_paise": 100_000, "due_date": "2026-12-15" }
+            ]
+        }).to_string();
+        let preview = preview_fee_head_change_logic(&mut c, &principal(), &head.id, 1_000_000, Some(&new_plan)).unwrap();
+        assert_eq!(preview.changed, 1, "inst2 changes");
+        assert_eq!(preview.added, 1, "inst3 added");
+        assert_eq!(preview.delta_paise, 100_000 + 100_000);
+
+        // Apply: paid inst1 stays; unpaid dues follow the new plan.
+        update_fee_head_logic(&mut c, &principal(), &head.id, &FeeHeadInput {
+            name: "Plan head".into(), name_hi: None, amount_paise: 1_000_000,
+            frequency: "term".into(), applies_to: "all".into(), instalments_json: Some(new_plan),
+        }).unwrap();
+        // inst1 due still 400_000 and paid; inst2 now 500_000; inst3 exists.
+        let paid1: i64 = c.query_row(
+            "SELECT amount_paise FROM fee_due d WHERE d.student_id=?1 AND d.fee_head_id=?2 AND d.instalment_no=1 AND d.cancelled_at IS NULL AND EXISTS(SELECT 1 FROM payment_allocation pa WHERE pa.fee_due_id=d.id)",
+            params![stu.id, head.id], |r| r.get(0)).unwrap();
+        assert_eq!(paid1, 400_000, "paid instalment untouched");
+        let inst2: i64 = c.query_row(
+            "SELECT amount_paise FROM fee_due WHERE student_id=?1 AND fee_head_id=?2 AND instalment_no=2 AND cancelled_at IS NULL",
+            params![stu.id, head.id], |r| r.get(0)).unwrap();
+        assert_eq!(inst2, 500_000, "unpaid instalment follows the new plan");
     }
 
     #[test]

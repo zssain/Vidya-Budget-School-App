@@ -372,9 +372,9 @@ pub fn create_fee_head(state: State<RtCtx>, input: FeeHeadInput) -> CmdResult<Fe
 }
 
 #[tauri::command]
-pub fn preview_fee_head_change(state: State<RtCtx>, id: String, new_amount: i64) -> CmdResult<FeeHeadChangePreview> {
+pub fn preview_fee_head_change(state: State<RtCtx>, id: String, new_amount: i64, instalments_json: Option<String>) -> CmdResult<FeeHeadChangePreview> {
     let actor = state.require_session()?;
-    state.with_db(|conn| preview_fee_head_change_logic(conn, &actor, &id, new_amount))
+    state.with_db(|conn| preview_fee_head_change_logic(conn, &actor, &id, new_amount, instalments_json.as_deref()))
 }
 
 #[tauri::command]
