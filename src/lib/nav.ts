@@ -56,6 +56,10 @@ export const PRINCIPAL_NAV: NavSection[] = [
     labelKey: 'nav.section.school',
     items: [
       { key: 'staff', labelKey: 'nav.staff', icon: 'staff', path: '/principal/staff' },
+      // Circulars (P14) — the `circulars` module is on by default (§14); the screen
+      // itself shows a MODULE_OFF state if it is turned off. No `circulars` icon in
+      // the mock set (rule 6) → reuse `inbox`.
+      { key: 'circulars', labelKey: 'nav.circulars', icon: 'inbox', path: '/principal/circulars' },
       { key: 'backups', labelKey: 'nav.backups', icon: 'backups', path: '/principal/backups' },
       { key: 'settings', labelKey: 'nav.settings', icon: 'settings', path: '/principal/settings' },
     ],

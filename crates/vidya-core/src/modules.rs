@@ -63,6 +63,8 @@ pub const TOGGLEABLE_KEYS: &[&str] =
 pub fn module_for(action: Action) -> Module {
     use Action::*;
     match action {
+        // Circulars & notices (P14 Step 6).
+        ManageCirculars | DraftClassNotice => Module::Circulars,
         // Every action built through Phase 11 is Core (always on). Future phases
         // move their new actions to Accounts / Classroom / Hr / Circulars / Store.
         CreateStudent | EnrollStudent | TransferSection | MarkStudentLeft

@@ -12,6 +12,7 @@ import SetupWizard from '@/screens/shared/SetupWizard'
 import PinUnlockScreen from '@/screens/shared/PinUnlockScreen'
 import ApprovalsScreen from '@/screens/desktop/ApprovalsScreen'
 import StaffAccessScreen from '@/screens/desktop/StaffAccessScreen'
+import CircularsScreen from '@/screens/desktop/CircularsScreen'
 import ConflictReviewScreen from '@/screens/desktop/ConflictReviewScreen'
 import SyncDevicesScreen from '@/screens/desktop/SyncDevicesScreen'
 import StudentsScreen from '@/screens/desktop/StudentsScreen'
@@ -188,6 +189,7 @@ function desktopRoute(base: string, role: Role): { active: string; node: ReactNo
   if (base === '/principal/conflicts') return { active: '', node: <ConflictReviewScreen /> }
   if (matchRoute('/principal/approvals', base)) return { active: 'approvals', node: <ApprovalsScreen /> }
   if (base === '/principal/staff') return { active: 'staff', node: <StaffAccessScreen /> }
+  if (base === '/principal/circulars') return { active: 'circulars', node: <CircularsScreen /> }
   if (base === '/principal/students/new' || base === '/accountant/students/new')
     return { active: 'students', node: (<><StudentsScreen role={role} /><AdmissionSheet role={role} /></>) }
   if (base === '/principal/students/import' || base === '/accountant/students/import')

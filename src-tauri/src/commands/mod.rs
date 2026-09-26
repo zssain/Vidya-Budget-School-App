@@ -107,6 +107,10 @@ pub const COMMANDS: &[&str] = &[
     "preview_fee_reminder",
     "queue_fee_reminders",
     "list_absent",
+    "list_circulars",
+    "save_circular",
+    "send_circular",
+    "mark_circular_read",
     "get_calendar",
     "set_weekly_offs",
     "add_calendar_event",
@@ -529,6 +533,38 @@ pub fn queue_fee_reminders(state: State<RtCtx>, student_ids: Vec<String>, langua
 pub fn list_absent(state: State<RtCtx>, class_id: String, date: String) -> CmdResult<AbsenceListDto> {
     let actor = state.require_session()?;
     state.with_db(|conn| list_absent_logic(conn, &actor, &class_id, &date))
+}
+
+// -------------------------------------------------------------- circulars -----
+
+#[tauri::command]
+pub fn list_circulars(state: State<RtCtx>) -> CmdResult<Vec<CircularDto>> {
+    let actor = state.require_session()?;
+    state.with_db(|conn| list_circulars_logic(conn, &actor))
+}
+
+#[tauri::command]
+pub fn save_circular(state: State<RtCtx>, input: CircularInput) -> CmdResult<CircularDto> {
+    let actor = state.require_session()?;
+    let device_id = state.device_id.lock().map_err(|_| crate::error::CmdError::internal("lock"))?.clone();
+    let mode = state.device_mode;
+    state.with_db(|conn| save_circular_logic(conn, &actor, device_id.as_deref(), mode, &input))
+}
+
+#[tauri::command]
+pub fn send_circular(state: State<RtCtx>, id: String) -> CmdResult<CircularDto> {
+    let actor = state.require_session()?;
+    let device_id = state.device_id.lock().map_err(|_| crate::error::CmdError::internal("lock"))?.clone();
+    let mode = state.device_mode;
+    state.with_db(|conn| send_circular_logic(conn, &actor, device_id.as_deref(), mode, &id))
+}
+
+#[tauri::command]
+pub fn mark_circular_read(state: State<RtCtx>, circular_id: String) -> CmdResult<()> {
+    let actor = state.require_session()?;
+    let device_id = state.device_id.lock().map_err(|_| crate::error::CmdError::internal("lock"))?.clone();
+    let mode = state.device_mode;
+    state.with_db(|conn| mark_circular_read_logic(conn, &actor, device_id.as_deref(), mode, &circular_id))
 }
 
 // --------------------------------------------------------------- calendar -----

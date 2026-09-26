@@ -682,6 +682,34 @@ export interface AbsenceListDto {
   submitted: boolean
   students: AbsentStudentDto[]
 }
+
+// Circulars & notices (P14 Step 6, prototype `circulars`).
+export interface CircularDto {
+  id: string
+  number: string | null
+  title: string
+  body: string
+  languages_json: string | null
+  audience_json: string | null
+  channels_json: string | null
+  attachments_json: string | null
+  status: string
+  created_by: string | null
+  sent_at: string | null
+  created_at: string
+  read_count: number
+  staff_count: number
+  read_by_me: boolean
+}
+export interface CircularInput {
+  id?: string | null
+  title: string
+  body: string
+  languages_json?: string | null
+  audience_json?: string | null
+  channels_json?: string | null
+  attachments_json?: string | null
+}
 export interface SessionInput {
   label: string
   starts_on: string
@@ -846,6 +874,10 @@ export const preview_fee_reminder = (studentId: string, language?: string | null
 export const queue_fee_reminders = (studentIds: string[], language?: string | null) =>
   invoke<BulkReminderDto>('queue_fee_reminders', { studentIds, language: language ?? null })
 export const list_absent = (classId: string, date: string) => invoke<AbsenceListDto>('list_absent', { classId, date })
+export const list_circulars = () => invoke<CircularDto[]>('list_circulars')
+export const save_circular = (input: CircularInput) => invoke<CircularDto>('save_circular', { input })
+export const send_circular = (id: string) => invoke<CircularDto>('send_circular', { id })
+export const mark_circular_read = (circularId: string) => invoke<void>('mark_circular_read', { circularId })
 
 // ---- Phase 13: school calendar (weekly offs + holidays/exams/events) --------
 export interface CalendarEventDto {

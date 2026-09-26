@@ -4369,6 +4369,202 @@ pub fn list_absent_logic(conn: &mut Connection, actor_s: &SessionStaff, class_id
     Ok(AbsenceListDto { class_id: class_id.into(), class_display, date: date.into(), submitted: true, students })
 }
 
+// ---- Circulars & notices (P14 Step 6, prototype `circulars`) ----------------
+
+#[derive(Debug, Serialize)]
+pub struct CircularDto {
+    pub id: String,
+    pub number: Option<String>,
+    pub title: String,
+    pub body: String,
+    pub languages_json: Option<String>,
+    pub audience_json: Option<String>,
+    pub channels_json: Option<String>,
+    pub attachments_json: Option<String>,
+    pub status: String,
+    pub created_by: Option<String>,
+    pub sent_at: Option<String>,
+    pub created_at: String,
+    /// Staff who have marked this circular read (for "Read by N of M").
+    pub read_count: i64,
+    /// Active staff total (the M).
+    pub staff_count: i64,
+    pub read_by_me: bool,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CircularInput {
+    /// Update this draft if present; otherwise create a new draft.
+    pub id: Option<String>,
+    pub title: String,
+    pub body: String,
+    pub languages_json: Option<String>,
+    pub audience_json: Option<String>,
+    pub channels_json: Option<String>,
+    pub attachments_json: Option<String>,
+}
+
+/// The circular numbering series = the current session years with a hyphen
+/// (`2026–27` → `2026-27`, giving `CIR/2026-27/014`).
+fn current_session_series(conn: &Connection) -> String {
+    conn.query_row("SELECT label FROM academic_session WHERE is_current=1 LIMIT 1", [], |r| r.get::<_, String>(0))
+        .optional()
+        .ok()
+        .flatten()
+        .map(|l| l.replace('\u{2013}', "-"))
+        .unwrap_or_else(|| "0000-00".into())
+}
+
+fn circular_dto(conn: &Connection, actor_id: &str, id: &str) -> CmdResult<CircularDto> {
+    let staff_count: i64 = conn.query_row("SELECT COUNT(*) FROM staff WHERE state='active'", [], |r| r.get(0))?;
+    let read_count: i64 = conn.query_row("SELECT COUNT(*) FROM circular_read WHERE circular_id=?1 AND read_at IS NOT NULL", params![id], |r| r.get(0))?;
+    let read_by_me: bool = conn
+        .query_row("SELECT 1 FROM circular_read WHERE circular_id=?1 AND staff_id=?2 AND read_at IS NOT NULL", params![id, actor_id], |_| Ok(()))
+        .optional()?
+        .is_some();
+    conn.query_row(
+        "SELECT id, number, title, body, languages_json, audience_json, channels_json, attachments_json, status, created_by, sent_at, created_at \
+         FROM circular WHERE id=?1",
+        params![id],
+        |r| Ok(CircularDto {
+            id: r.get(0)?, number: r.get(1)?, title: r.get(2)?, body: r.get(3)?, languages_json: r.get(4)?,
+            audience_json: r.get(5)?, channels_json: r.get(6)?, attachments_json: r.get(7)?, status: r.get(8)?,
+            created_by: r.get(9)?, sent_at: r.get(10)?, created_at: r.get(11)?,
+            read_count, staff_count, read_by_me,
+        }),
+    ).optional()?.ok_or_else(CmdError::not_found)
+}
+
+/// Circulars for the UI. Principal sees all (drafts + sent, with read tracking);
+/// other staff see only **sent** ones (their inbox). Under the `circulars` module.
+pub fn list_circulars_logic(conn: &mut Connection, actor_s: &SessionStaff) -> CmdResult<Vec<CircularDto>> {
+    let actor = actor_from(conn, actor_s)?;
+    require_allow(&actor, Action::ViewInbox, &Target::of(TargetKind::Own))?;
+    vidya_core::modules::require_enabled(&crate::modules::enabled_set(conn)?, vidya_core::modules::Module::Circulars)?;
+    let principal = actor.role == vidya_core::types::Role::Principal;
+    let sql = if principal {
+        "SELECT id FROM circular ORDER BY created_at DESC LIMIT 500"
+    } else {
+        "SELECT id FROM circular WHERE status='sent' ORDER BY sent_at DESC LIMIT 500"
+    };
+    let ids: Vec<String> = {
+        let mut stmt = conn.prepare(sql)?;
+        let out = stmt.query_map([], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<_>>()?;
+        out
+    };
+    ids.iter().map(|id| circular_dto(conn, &actor_s.id, id)).collect()
+}
+
+/// Create or update a **draft** circular (Principal, `circulars` module). One
+/// transaction (row + audit + op). Sending (with the number) is `send_circular`.
+pub fn save_circular_logic(conn: &mut Connection, actor_s: &SessionStaff, device_id: Option<&str>, device_mode: DeviceMode, input: &CircularInput) -> CmdResult<CircularDto> {
+    let actor = actor_from(conn, actor_s)?;
+    require_allow(&actor, Action::ManageCirculars, &Target::of(TargetKind::School))?;
+    vidya_core::modules::require_module(&crate::modules::enabled_set(conn)?, Action::ManageCirculars)?;
+    if input.title.trim().is_empty() {
+        return Err(CmdError::validation("title", "required"));
+    }
+    let id = input.id.clone().unwrap_or_else(|| new_id("cir"));
+    let is_new = input.id.is_none();
+    let now = now_iso();
+    let school_id = single_school_id(conn)?;
+    let sync_state = if device_mode == DeviceMode::Server { "confirmed" } else { "on_device" };
+    let ctx = WriteCtx { mode: device_mode };
+    let dev = device_id.map(str::to_string);
+    let (id2, staff, now2) = (id.clone(), actor_s.id.clone(), now.clone());
+    let inp = (input.title.clone(), input.body.clone(), input.languages_json.clone(), input.audience_json.clone(), input.channels_json.clone(), input.attachments_json.clone());
+    with_write(conn, &ctx, move |tx| {
+        if is_new {
+            tx.execute(
+                "INSERT INTO circular(id,title,body,languages_json,audience_json,channels_json,attachments_json,status,created_by,school_id,created_at,updated_at,updated_by_staff,updated_by_device,sync_state) \
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,'draft',?8,?9,?10,?10,?8,?11,?12)",
+                params![id2, inp.0, inp.1, inp.2, inp.3, inp.4, inp.5, staff, school_id, now2, dev, sync_state],
+            )?;
+        } else {
+            let n = tx.execute(
+                "UPDATE circular SET title=?2, body=?3, languages_json=?4, audience_json=?5, channels_json=?6, attachments_json=?7, updated_at=?8, updated_by_staff=?9 \
+                 WHERE id=?1 AND status='draft'",
+                params![id2, inp.0, inp.1, inp.2, inp.3, inp.4, inp.5, now2, staff],
+            )?;
+            if n == 0 {
+                return Err(rusqlite::Error::QueryReturnedNoRows); // not a draft / not found
+            }
+        }
+        let audit = AuditEntry { at: now2.clone(), staff_id: Some(staff.clone()), action: "save_circular".into(), table: Some("circular".into()), record_id: Some(id2.clone()), after_json: Some(serde_json::json!({"title": inp.0}).to_string()), ..Default::default() };
+        let op = Op { op_id: new_id("op"), hlc: now2.clone(), device_id: dev.clone().unwrap_or_default(), staff_id: staff.clone(), audience: "admin".into(), table: "circular".into(), record_id: id2.clone(), kind: if is_new { "insert" } else { "update" }.into(), payload: "{}".into(), base_version: None, server_epoch: 1 };
+        Ok(Effect { value: (), audit, op })
+    }).map_err(|e| match e {
+        rusqlite::Error::QueryReturnedNoRows => CmdError::validation("circular", "not_a_draft"),
+        other => other.into(),
+    })?;
+    circular_dto(conn, &actor_s.id, &id)
+}
+
+/// Send a draft circular: assign the server number (`CIR/<session>/NNN`), set
+/// `status='sent'` + `sent_at`. Principal + `circulars` module. The number is
+/// assigned atomically inside the write transaction (like a receipt number).
+pub fn send_circular_logic(conn: &mut Connection, actor_s: &SessionStaff, device_id: Option<&str>, device_mode: DeviceMode, id: &str) -> CmdResult<CircularDto> {
+    let actor = actor_from(conn, actor_s)?;
+    require_allow(&actor, Action::ManageCirculars, &Target::of(TargetKind::School))?;
+    vidya_core::modules::require_module(&crate::modules::enabled_set(conn)?, Action::ManageCirculars)?;
+    let status: Option<String> = conn.query_row("SELECT status FROM circular WHERE id=?1", params![id], |r| r.get(0)).optional()?;
+    match status.as_deref() {
+        None => return Err(CmdError::not_found()),
+        Some("sent") => return Err(CmdError::validation("circular", "already_sent")),
+        _ => {}
+    }
+    let series = current_session_series(conn);
+    let now = now_iso();
+    let ctx = WriteCtx { mode: device_mode };
+    let dev = device_id.map(str::to_string);
+    let (id2, staff, now2) = (id.to_string(), actor_s.id.clone(), now.clone());
+    with_write(conn, &ctx, move |tx| {
+        let number = crate::numbering::next_no(tx, vidya_core::numbering::NumberKind::Circular, &series)?;
+        tx.execute(
+            "UPDATE circular SET number=?2, status='sent', sent_at=?3, approved_by=?4, updated_at=?3, updated_by_staff=?4 WHERE id=?1",
+            params![id2, number, now2, staff],
+        )?;
+        let audit = AuditEntry { at: now2.clone(), staff_id: Some(staff.clone()), action: "send_circular".into(), table: Some("circular".into()), record_id: Some(id2.clone()), after_json: Some(serde_json::json!({"number": number, "status": "sent"}).to_string()), ..Default::default() };
+        let op = Op { op_id: new_id("op"), hlc: now2.clone(), device_id: dev.clone().unwrap_or_default(), staff_id: staff.clone(), audience: "admin".into(), table: "circular".into(), record_id: id2.clone(), kind: "update".into(), payload: "{}".into(), base_version: None, server_epoch: 1 };
+        Ok(Effect { value: (), audit, op })
+    })?;
+    circular_dto(conn, &actor_s.id, id)
+}
+
+/// Mark a circular as read by the acting staff member (their inbox). Idempotent
+/// (UNIQUE(circular_id, staff_id)). Any active staff (`ViewInbox`).
+pub fn mark_circular_read_logic(conn: &mut Connection, actor_s: &SessionStaff, device_id: Option<&str>, device_mode: DeviceMode, circular_id: &str) -> CmdResult<()> {
+    let actor = actor_from(conn, actor_s)?;
+    require_allow(&actor, Action::ViewInbox, &Target::of(TargetKind::Own))?;
+    // Only sent circulars appear in the inbox.
+    let sent: bool = conn.query_row("SELECT 1 FROM circular WHERE id=?1 AND status='sent'", params![circular_id], |_| Ok(())).optional()?.is_some();
+    if !sent {
+        return Err(CmdError::not_found());
+    }
+    if conn.query_row("SELECT 1 FROM circular_read WHERE circular_id=?1 AND staff_id=?2 AND read_at IS NOT NULL", params![circular_id, actor_s.id], |_| Ok(())).optional()?.is_some() {
+        return Ok(()); // already read — idempotent
+    }
+    let id = new_id("crd");
+    let now = now_iso();
+    let school_id = single_school_id(conn)?;
+    let sync_state = if device_mode == DeviceMode::Server { "confirmed" } else { "on_device" };
+    let ctx = WriteCtx { mode: device_mode };
+    let dev = device_id.map(str::to_string);
+    let (id2, staff, cid, now2) = (id.clone(), actor_s.id.clone(), circular_id.to_string(), now.clone());
+    with_write(conn, &ctx, move |tx| {
+        tx.execute(
+            "INSERT INTO circular_read(id,circular_id,staff_id,read_at,school_id,created_at,updated_at,updated_by_staff,updated_by_device,sync_state) \
+             VALUES (?1,?2,?3,?4,?5,?4,?4,?3,?6,?7) \
+             ON CONFLICT(circular_id,staff_id) DO UPDATE SET read_at=excluded.read_at",
+            params![id2, cid, staff, now2, school_id, dev, sync_state],
+        )?;
+        let audit = AuditEntry { at: now2.clone(), staff_id: Some(staff.clone()), action: "mark_circular_read".into(), table: Some("circular_read".into()), record_id: Some(id2.clone()), after_json: Some(serde_json::json!({"circular_id": cid}).to_string()), ..Default::default() };
+        let op = Op { op_id: new_id("op"), hlc: now2.clone(), device_id: dev.clone().unwrap_or_default(), staff_id: staff.clone(), audience: "admin".into(), table: "circular_read".into(), record_id: id2.clone(), kind: "insert".into(), payload: "{}".into(), base_version: None, server_epoch: 1 };
+        Ok(Effect { value: (), audit, op })
+    })?;
+    Ok(())
+}
+
 // ============================================================ calendar =======
 
 /// A calendar event row (holiday / exam / event) for the UI.
@@ -5715,6 +5911,48 @@ mod tests {
         // But NOT a student in a class she does not class-teach (cls-2a).
         let other: String = c.query_row("SELECT student_id FROM enrollment WHERE class_id='cls-2a' AND to_date IS NULL LIMIT 1", [], |r| r.get(0)).unwrap();
         assert_eq!(record_message_logic(&mut c, &meena(), None, DeviceMode::Server, &absence_input(&other)).unwrap_err().code, "FORBIDDEN");
+    }
+
+    // ---- Phase 14 Step 6: circulars ---------------------------------------
+    fn circular_input() -> CircularInput {
+        CircularInput {
+            id: None, title: "Sports Day".into(), body: "On Friday.".into(), languages_json: None,
+            audience_json: Some(r#"{"kind":"whole_school"}"#.into()),
+            channels_json: Some(r#"["staff_app"]"#.into()), attachments_json: None,
+        }
+    }
+
+    #[test]
+    fn circular_draft_send_and_read_tracking() {
+        let mut c = seeded();
+        let draft = save_circular_logic(&mut c, &principal(), None, DeviceMode::Server, &circular_input()).unwrap();
+        assert_eq!(draft.status, "draft");
+        assert!(draft.number.is_none());
+        // Send → server number CIR/<session>/001, status sent.
+        let sent = send_circular_logic(&mut c, &principal(), None, DeviceMode::Server, &draft.id).unwrap();
+        assert_eq!(sent.status, "sent");
+        let num = sent.number.as_deref().unwrap();
+        assert!(num.starts_with("CIR/") && num.ends_with("/001"), "{num}");
+        // A teacher marks it read → read_count increments (idempotently).
+        mark_circular_read_logic(&mut c, &meena(), None, DeviceMode::Server, &draft.id).unwrap();
+        mark_circular_read_logic(&mut c, &meena(), None, DeviceMode::Server, &draft.id).unwrap();
+        let row = list_circulars_logic(&mut c, &principal()).unwrap().into_iter().find(|x| x.id == draft.id).unwrap();
+        assert_eq!(row.read_count, 1);
+        assert!(row.staff_count >= 1);
+        // Re-sending is rejected.
+        assert_eq!(send_circular_logic(&mut c, &principal(), None, DeviceMode::Server, &draft.id).unwrap_err().code, "VALIDATION");
+    }
+
+    #[test]
+    fn circular_permissions_and_module_gate() {
+        let mut c = seeded();
+        // Accountant / teacher cannot manage circulars.
+        assert_eq!(save_circular_logic(&mut c, &accountant(), None, DeviceMode::Server, &circular_input()).unwrap_err().code, "FORBIDDEN");
+        assert_eq!(save_circular_logic(&mut c, &meena(), None, DeviceMode::Server, &circular_input()).unwrap_err().code, "FORBIDDEN");
+        // Turning the circulars module off gates the commands with MODULE_OFF.
+        set_module_logic(&mut c, &principal(), "circulars", false).unwrap();
+        assert_eq!(save_circular_logic(&mut c, &principal(), None, DeviceMode::Server, &circular_input()).unwrap_err().code, "MODULE_OFF");
+        assert_eq!(list_circulars_logic(&mut c, &principal()).unwrap_err().code, "MODULE_OFF");
     }
 
     #[test]

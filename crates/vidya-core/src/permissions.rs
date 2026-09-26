@@ -225,6 +225,14 @@ pub enum Action {
     /// Principal always. (Accountant: never — marks/attendance data.)
     ViewReportCard,
 
+    // ---- Circulars & notices (module `circulars`, P14) ----
+    /// Compose / send circulars, see read tracking, approve class notices.
+    /// Principal only. (Module `circulars`.)
+    ManageCirculars,
+    /// Draft a class notice → a `class_notice` approval request. Teacher (for a
+    /// class they teach). (Module `circulars`.)
+    DraftClassNotice,
+
     // ---- Staff & access (Principal only) ----
     /// Manage staff & access (umbrella). Principal only.
     ManageStaff,
@@ -409,7 +417,10 @@ fn accountant(action: Action, _target: &Target) -> Decision {
         | Action::EnterMarks
         | Action::EditSubmittedMarks
         | Action::ViewMarks
-        | Action::ViewReportCard => Decision::deny("accountant_no_academic"),
+        | Action::ViewReportCard
+        // Circulars are composed by the Principal / drafted by teachers, never the accountant.
+        | Action::ManageCirculars
+        | Action::DraftClassNotice => Decision::deny("accountant_no_academic"),
 
         // No staff management / administration.
         Action::ManageStaff
@@ -506,6 +517,11 @@ fn teacher(actor: &Actor, action: Action, target: &Target) -> Decision {
             }
         }
 
+        // ---- Circulars: a teacher drafts a class notice → an approval request;
+        // sending/managing circulars is Principal-only. ----
+        Action::DraftClassNotice => Decision::NeedsRequest(RequestType::ClassNotice),
+        Action::ManageCirculars => Decision::deny("teacher_circulars_principal_only"),
+
         // ---- No fees at all (§5: "no fee data at all"). ----
         Action::ViewFees
         | Action::RecordPayment
@@ -577,7 +593,7 @@ fn class_subject_owned(actor: &Actor, target: &Target) -> bool {
 
 impl Action {
     /// Every action variant (for the matrix-as-data seed and exhaustive checks).
-    pub const ALL: [Action; 42] = [
+    pub const ALL: [Action; 44] = [
         Action::CreateStudent, Action::EnrollStudent, Action::TransferSection, Action::MarkStudentLeft,
         Action::EditStudentDetails, Action::ViewStudent, Action::ViewGuardianAddress,
         Action::StudentCsvImport, Action::StudentCsvExport,
@@ -585,6 +601,7 @@ impl Action {
         Action::DayBook, Action::FeeReports, Action::SendFeeReminder,
         Action::TakeAttendance, Action::EditSubmittedAttendance, Action::ViewAttendance, Action::SendAbsenceAlert,
         Action::EnterMarks, Action::EditSubmittedMarks, Action::ViewMarks, Action::ViewReportCard,
+        Action::ManageCirculars, Action::DraftClassNotice,
         Action::ManageStaff, Action::InviteStaff, Action::SuspendStaff, Action::RemoveStaff,
         Action::ManageDevices, Action::Settings, Action::Licence, Action::Drive, Action::Backups,
         Action::Restore, Action::SessionRollover, Action::ApproveRequest,
@@ -637,6 +654,8 @@ fn target_kind_for(action: Action) -> TargetKind {
         ViewFees | RecordPayment | PrintShareReceipt | PaymentReversal | DayBook | FeeReports | SendFeeReminder => TargetKind::Fee,
         TakeAttendance | EditSubmittedAttendance | ViewAttendance | SendAbsenceAlert => TargetKind::Attendance,
         EnterMarks | EditSubmittedMarks | ViewMarks | ViewReportCard => TargetKind::Marks,
+        ManageCirculars => TargetKind::School,
+        DraftClassNotice => TargetKind::Own,
         ManageStaff | InviteStaff | SuspendStaff | RemoveStaff | ManageDevices => TargetKind::Staff,
         Settings | Licence | Drive | Backups | Restore | SessionRollover => TargetKind::School,
         ApproveRequest => TargetKind::Request,
@@ -1248,7 +1267,7 @@ mod tests {
 
     #[test]
     fn action_all_covers_every_variant_and_keys_round_trip() {
-        assert_eq!(Action::ALL.len(), 42); // P14 added SendFeeReminder, SendAbsenceAlert
+        assert_eq!(Action::ALL.len(), 44); // P14 added SendFeeReminder, SendAbsenceAlert, ManageCirculars, DraftClassNotice
 
         for a in Action::ALL {
             assert_eq!(Action::from_key(&a.as_key()), Some(a), "{a:?}");

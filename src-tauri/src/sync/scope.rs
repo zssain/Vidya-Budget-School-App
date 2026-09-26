@@ -76,8 +76,12 @@ pub fn can_see_table(role: Role, table: &str) -> bool {
 /// disabled module's tables are excluded from a device's scope (§14). Every
 /// synced table built through Phase 11 is Core; P14–P17 add their module tables
 /// here (e.g. `"voucher" | "ledger_entry" => Some("accounts")`).
-pub fn module_of_table(_table: &str) -> Option<&'static str> {
-    None
+pub fn module_of_table(table: &str) -> Option<&'static str> {
+    match table {
+        // Circulars & notices (P14 Step 6) — off → never synced to a device.
+        "circular" | "circular_read" => Some("circulars"),
+        _ => None,
+    }
 }
 
 /// Is `table` synced given the modules that are ON? Core tables always are; a
@@ -127,6 +131,21 @@ pub fn visible_row(conn: &Connection, actor: &Actor, table: &str, id: &str) -> r
             .query_row("SELECT created_by FROM message WHERE id=?1", [id], |r| r.get(0))
             .optional()?;
         return Ok(if by.as_deref() == Some(actor.staff_id.as_str()) { mk(row, None) } else { None });
+    }
+    // Circulars (P14): the Principal sees all; other staff see only SENT ones (their
+    // inbox). A `circular_read` row is each staff member's own read event.
+    if table == "circular" && actor.role != Role::Principal {
+        let sent: bool = conn
+            .query_row("SELECT 1 FROM circular WHERE id=?1 AND status='sent'", [id], |_| Ok(()))
+            .optional()?
+            .is_some();
+        return Ok(if sent { mk(row, None) } else { None });
+    }
+    if table == "circular_read" && actor.role != Role::Principal {
+        let who: Option<String> = conn
+            .query_row("SELECT staff_id FROM circular_read WHERE id=?1", [id], |r| r.get(0))
+            .optional()?;
+        return Ok(if who.as_deref() == Some(actor.staff_id.as_str()) { mk(row, None) } else { None });
     }
     match actor.role {
         Role::Principal => Ok(mk(row, None)),
@@ -262,6 +281,21 @@ pub fn snapshot(conn: &Connection, actor: &Actor) -> rusqlite::Result<Vec<Change
         ids_of(conn, "SELECT id FROM message WHERE created_by=?1", &[&actor.staff_id])?
     };
     for id in msg_ids { push(conn, "message", &id, None)?; }
+
+    // Circulars (P14, `circulars` module): Principal all; others only sent ones +
+    // their own read events. `push` skips them when the module is off.
+    let circ_ids = if actor.role == Role::Principal {
+        ids_of(conn, "SELECT id FROM circular", &[])?
+    } else {
+        ids_of(conn, "SELECT id FROM circular WHERE status='sent'", &[])?
+    };
+    for id in circ_ids { push(conn, "circular", &id, None)?; }
+    let read_ids = if actor.role == Role::Principal {
+        ids_of(conn, "SELECT id FROM circular_read", &[])?
+    } else {
+        ids_of(conn, "SELECT id FROM circular_read WHERE staff_id=?1", &[&actor.staff_id])?
+    };
+    for id in read_ids { push(conn, "circular_read", &id, None)?; }
 
     match actor.role {
         Role::Principal => {
