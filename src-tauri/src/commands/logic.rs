@@ -67,6 +67,13 @@ fn require_allow(actor: &Actor, action: Action, target: &Target) -> CmdResult<()
     }
 }
 
+/// Reject when `module` is switched off (MODULE_OFF{module}); a thin wrapper over
+/// the vidya-core check with the DB-loaded enabled set.
+fn require_module_enabled(conn: &Connection, module: vidya_core::modules::Module) -> CmdResult<()> {
+    vidya_core::modules::require_enabled(&crate::modules::enabled_set(conn)?, module)?;
+    Ok(())
+}
+
 pub(crate) fn new_id(prefix: &str) -> String {
     format!("{prefix}-{}", uuid::Uuid::now_v7())
 }
@@ -1887,6 +1894,315 @@ pub fn deactivate_fee_head_logic(conn: &mut Connection, actor_s: &SessionStaff, 
         table: Some("fee_head".into()),
         record_id: Some(id.to_string()),
         ..Default::default()
+    })?;
+    Ok(())
+}
+
+// ============================================================= expenses =======
+//
+// P15 Step 3 (§10.3). An expense is append-only; a mistake is fixed by an
+// expense_reversal (Principal only). Each confirmed expense posts one balanced
+// voucher (Dr category account, Cr the money account for paid_via). The category
+// must be an active expense account. A cash expense that would drive cash in hand
+// negative returns a WARNING (never a block) [OWNER default].
+
+#[derive(Debug, Serialize)]
+pub struct ExpenseAccountDto {
+    pub id: String,
+    pub code: String,
+    pub name: String,
+    pub name_hi: Option<String>,
+}
+
+/// Active expense ledger accounts, for the Record-expense category chips.
+pub fn list_expense_accounts_logic(conn: &mut Connection, actor_s: &SessionStaff) -> CmdResult<Vec<ExpenseAccountDto>> {
+    let actor = actor_from(conn, actor_s)?;
+    require_allow(&actor, Action::RecordExpense, &Target::of(TargetKind::Fee))?;
+    require_module_enabled(conn, vidya_core::modules::Module::Accounts)?;
+    let mut stmt = conn.prepare(
+        "SELECT id, code, name, name_hi FROM ledger_account WHERE kind='expense' AND active=1 ORDER BY code",
+    )?;
+    let rows = stmt
+        .query_map([], |r| Ok(ExpenseAccountDto { id: r.get(0)?, code: r.get(1)?, name: r.get(2)?, name_hi: r.get(3)? }))?
+        .collect::<rusqlite::Result<_>>()?;
+    Ok(rows)
+}
+
+/// Cash / bank in hand = Σ(debit − credit) on the CASH / BANK ledger accounts.
+fn account_balance(conn: &Connection, account_id: &str) -> rusqlite::Result<i64> {
+    conn.query_row(
+        "SELECT COALESCE(SUM(debit_paise - credit_paise),0) FROM ledger_entry WHERE account_id=?1",
+        params![account_id],
+        |r| r.get(0),
+    )
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ExpenseInput {
+    pub category_account_id: String,
+    pub amount_paise: i64,
+    pub paid_via: String, // cash | upi | bank
+    pub details: Option<String>,
+    pub vendor: Option<String>,
+    pub bill_attachment: Option<String>, // sha256 into the attachment store
+    pub spent_on: Option<String>,        // YYYY-MM-DD, defaults to today
+}
+
+#[derive(Debug, Serialize, Default)]
+pub struct ExpenseDto {
+    pub id: String,
+    pub voucher_no: Option<String>,
+    pub category_account_id: String,
+    pub category_name: String,
+    pub amount_paise: i64,
+    pub paid_via: String,
+    pub details: Option<String>,
+    pub vendor: Option<String>,
+    pub bill_attachment: Option<String>,
+    pub spent_on: String,
+    pub confirmed: bool,
+    pub reversed: bool,
+    /// True when a cash expense would drive cash in hand negative (a warning that
+    /// the save still succeeded — [OWNER default]).
+    pub cash_warning: bool,
+}
+
+pub fn record_expense_logic(
+    conn: &mut Connection,
+    actor_s: &SessionStaff,
+    device_id: Option<&str>,
+    device_mode: DeviceMode,
+    today: &str,
+    input: &ExpenseInput,
+) -> CmdResult<ExpenseDto> {
+    let actor = actor_from(conn, actor_s)?;
+    require_allow(&actor, Action::RecordExpense, &Target::of(TargetKind::Fee))?;
+    require_module_enabled(conn, vidya_core::modules::Module::Accounts)?;
+
+    let paid_via = vidya_core::accounts::PaidVia::parse(&input.paid_via)
+        .ok_or_else(|| CmdError::validation("paid_via", "invalid"))?;
+    // The category must be an active expense account.
+    let category_ok: bool = conn
+        .query_row(
+            "SELECT 1 FROM ledger_account WHERE id=?1 AND kind='expense' AND active=1",
+            params![input.category_account_id],
+            |_| Ok(()),
+        )
+        .optional()?
+        .is_some();
+    vidya_core::accounts::validate_expense(input.amount_paise, category_ok)?;
+    let category_name: String = conn
+        .query_row("SELECT name FROM ledger_account WHERE id=?1", params![input.category_account_id], |r| r.get(0))
+        .optional()?
+        .unwrap_or_default();
+
+    // Cash-in-hand warning (never a block).
+    let cash_in_hand = account_balance(conn, vidya_core::ledger::CASH)?;
+    let cash_warning = vidya_core::accounts::cash_would_go_negative(cash_in_hand, paid_via, input.amount_paise);
+
+    let spent_on = input.spent_on.clone().unwrap_or_else(|| today[..today.len().min(10)].to_string());
+    let now = now_iso();
+    let exp_id = new_id("exp");
+    let confirmed = device_mode == DeviceMode::Server;
+    let (series, _) = receipt_series_and_last(conn, device_id)?;
+    let school_id = single_school_id(conn)?;
+    let ctx = WriteCtx { mode: device_mode };
+    let dev = device_id.map(str::to_string);
+    let input_amount = input.amount_paise;
+    let category = input.category_account_id.clone();
+    let details = input.details.clone();
+    let vendor = input.vendor.clone();
+    let bill = input.bill_attachment.clone();
+    let exp_id2 = exp_id.clone();
+    let spent = spent_on.clone();
+
+    let voucher_no = with_write(conn, &ctx, move |tx| {
+        // On the server (confirmed) post the balanced voucher inline; on a client
+        // the row stays on_device and the server posts the voucher on confirmation
+        // (idempotent backfill, like payments).
+        let voucher_no: Option<String> = if confirmed {
+            let vno = crate::numbering::next_no(tx, vidya_core::numbering::NumberKind::Voucher, &series)?;
+            let vid = crate::ledger::post_expense_voucher(
+                tx, &vno, &exp_id2, &category, paid_via, input_amount, &spent,
+                Some(actor_s.id.as_str()), dev.as_deref(), school_id.as_deref(), &now, "confirmed",
+            )?;
+            tx.execute(
+                "INSERT INTO expense(id,voucher_id,category_account_id,amount_paise,paid_via,details,vendor,bill_attachment,spent_on,created_by,device_id,school_id,created_at,updated_at,sync_state) \
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?13,?14)",
+                params![exp_id2, vid, category, input_amount, paid_via.as_str(), details, vendor, bill, spent, actor_s.id, dev, school_id, now, "confirmed"],
+            )?;
+            Some(vno)
+        } else {
+            tx.execute(
+                "INSERT INTO expense(id,category_account_id,amount_paise,paid_via,details,vendor,bill_attachment,spent_on,created_by,device_id,school_id,created_at,updated_at,sync_state) \
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?12,?13)",
+                params![exp_id2, category, input_amount, paid_via.as_str(), details, vendor, bill, spent, actor_s.id, dev, school_id, now, "on_device"],
+            )?;
+            None
+        };
+        let audit = AuditEntry {
+            at: now.clone(),
+            staff_id: Some(actor_s.id.clone()),
+            action: "record_expense".into(),
+            table: Some("expense".into()),
+            record_id: Some(exp_id2.clone()),
+            after_json: Some(serde_json::json!({ "amount_paise": input_amount, "category": category, "paid_via": paid_via.as_str(), "voucher_no": voucher_no }).to_string()),
+            ..Default::default()
+        };
+        let op = Op {
+            op_id: new_id("op"),
+            hlc: now.clone(),
+            device_id: dev.clone().unwrap_or_default(),
+            staff_id: actor_s.id.clone(),
+            audience: "finance".into(),
+            table: "expense".into(),
+            record_id: exp_id2.clone(),
+            kind: "insert".into(),
+            payload: "{}".into(),
+            base_version: None,
+            server_epoch: 1,
+        };
+        Ok(Effect { value: voucher_no, audit, op })
+    })?;
+
+    Ok(ExpenseDto {
+        id: exp_id,
+        voucher_no,
+        category_account_id: input.category_account_id.clone(),
+        category_name,
+        amount_paise: input.amount_paise,
+        paid_via: input.paid_via.clone(),
+        details: input.details.clone(),
+        vendor: input.vendor.clone(),
+        bill_attachment: input.bill_attachment.clone(),
+        spent_on,
+        confirmed,
+        reversed: false,
+        cash_warning,
+    })
+}
+
+/// Expenses for a date range (inclusive `from`..`to`, YYYY-MM-DD), newest first,
+/// with the category name, voucher number and reversal state.
+pub fn list_expenses_logic(conn: &mut Connection, actor_s: &SessionStaff, from: &str, to: &str) -> CmdResult<Vec<ExpenseDto>> {
+    let actor = actor_from(conn, actor_s)?;
+    require_allow(&actor, Action::ViewAccounts, &Target::of(TargetKind::Fee))?;
+    require_module_enabled(conn, vidya_core::modules::Module::Accounts)?;
+    let mut stmt = conn.prepare(
+        "SELECT e.id, v.voucher_no, e.category_account_id, COALESCE(a.name,''), e.amount_paise, e.paid_via, \
+                e.details, e.vendor, e.bill_attachment, e.spent_on, e.sync_state, \
+                EXISTS(SELECT 1 FROM expense_reversal r WHERE r.expense_id=e.id) \
+         FROM expense e LEFT JOIN voucher v ON v.source_table='expense' AND v.source_id=e.id \
+           LEFT JOIN ledger_account a ON a.id=e.category_account_id \
+         WHERE e.spent_on >= ?1 AND e.spent_on <= ?2 ORDER BY e.spent_on DESC, e.created_at DESC",
+    )?;
+    let rows = stmt
+        .query_map(params![from, to], |r| {
+            Ok(ExpenseDto {
+                id: r.get(0)?,
+                voucher_no: r.get(1)?,
+                category_account_id: r.get(2)?,
+                category_name: r.get(3)?,
+                amount_paise: r.get(4)?,
+                paid_via: r.get(5)?,
+                details: r.get(6)?,
+                vendor: r.get(7)?,
+                bill_attachment: r.get(8)?,
+                spent_on: r.get(9)?,
+                confirmed: r.get::<_, String>(10)? == "confirmed",
+                reversed: r.get::<_, i64>(11)? != 0,
+                cash_warning: false,
+            })
+        })?
+        .collect::<rusqlite::Result<_>>()?;
+    Ok(rows)
+}
+
+/// Reverse an expense (Principal only): posts the opposite voucher and records an
+/// expense_reversal. The original expense is never edited (append-only).
+pub fn reverse_expense_logic(
+    conn: &mut Connection,
+    actor_s: &SessionStaff,
+    device_id: Option<&str>,
+    device_mode: DeviceMode,
+    expense_id: &str,
+    reason: &str,
+) -> CmdResult<()> {
+    let actor = actor_from(conn, actor_s)?;
+    require_allow(&actor, Action::ReverseExpense, &Target::of(TargetKind::Fee))?;
+    require_module_enabled(conn, vidya_core::modules::Module::Accounts)?;
+    if reason.trim().is_empty() {
+        return Err(CmdError::validation("reason", "required"));
+    }
+    // Load the expense (must exist and not already be reversed).
+    let (category, paid_via_s, amount, spent_on): (String, String, i64, String) = conn
+        .query_row(
+            "SELECT category_account_id, paid_via, amount_paise, spent_on FROM expense WHERE id=?1",
+            params![expense_id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+        )
+        .optional()?
+        .ok_or_else(CmdError::not_found)?;
+    let already: bool = conn
+        .query_row("SELECT 1 FROM expense_reversal WHERE expense_id=?1", params![expense_id], |_| Ok(()))
+        .optional()?
+        .is_some();
+    if already {
+        return Err(CmdError::validation("expense", "already_reversed"));
+    }
+    let paid_via = vidya_core::accounts::PaidVia::parse(&paid_via_s).ok_or_else(|| CmdError::validation("paid_via", "invalid"))?;
+
+    let now = now_iso();
+    let rev_id = new_id("exprev");
+    let confirmed = device_mode == DeviceMode::Server;
+    let sync_state = if confirmed { "confirmed" } else { "on_device" };
+    let (series, _) = receipt_series_and_last(conn, device_id)?;
+    let school_id = single_school_id(conn)?;
+    let ctx = WriteCtx { mode: device_mode };
+    let dev = device_id.map(str::to_string);
+    let rev_id2 = rev_id.clone();
+    let eid = expense_id.to_string();
+    let reason_s = reason.to_string();
+
+    with_write(conn, &ctx, move |tx| {
+        let vid: Option<String> = if confirmed {
+            let vno = crate::numbering::next_no(tx, vidya_core::numbering::NumberKind::Voucher, &series)?;
+            Some(crate::ledger::post_expense_reversal_voucher(
+                tx, &vno, &rev_id2, &category, paid_via, amount, &spent_on,
+                Some(actor_s.id.as_str()), school_id.as_deref(), &now, "confirmed",
+            )?)
+        } else {
+            None
+        };
+        tx.execute(
+            "INSERT INTO expense_reversal(id,expense_id,voucher_id,reason,approved_by,applied_at,school_id,created_at,updated_at,sync_state) \
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?6,?6,?8)",
+            params![rev_id2, eid, vid, reason_s, actor_s.id, now, school_id, sync_state],
+        )?;
+        let audit = AuditEntry {
+            at: now.clone(),
+            staff_id: Some(actor_s.id.clone()),
+            action: "reverse_expense".into(),
+            table: Some("expense_reversal".into()),
+            record_id: Some(rev_id2.clone()),
+            reason: Some(reason_s.clone()),
+            after_json: Some(serde_json::json!({ "expense_id": eid, "amount_paise": amount }).to_string()),
+            ..Default::default()
+        };
+        let op = Op {
+            op_id: new_id("op"),
+            hlc: now.clone(),
+            device_id: dev.clone().unwrap_or_default(),
+            staff_id: actor_s.id.clone(),
+            audience: "finance".into(),
+            table: "expense_reversal".into(),
+            record_id: rev_id2.clone(),
+            kind: "insert".into(),
+            payload: "{}".into(),
+            base_version: None,
+            server_epoch: 1,
+        };
+        Ok(Effect { value: (), audit, op })
     })?;
     Ok(())
 }
@@ -6935,6 +7251,41 @@ mod tests {
         };
         assert_eq!(rows.len(), 3, "one due per instalment");
         assert_eq!(rows[1], (2, 400_000, Some("2026-08-15".to_string())));
+    }
+
+    #[test]
+    fn record_expense_posts_balanced_voucher_and_reverses() {
+        let mut c = seeded();
+        // Accountant records an electricity expense → voucher, appears in ledger.
+        let exp = record_expense_logic(
+            &mut c, &accountant(), Some("dev-a2"), DeviceMode::Server, "2026-09-23",
+            &ExpenseInput { category_account_id: "electricity".into(), amount_paise: 685_000, paid_via: "cash".into(), details: Some("September bill".into()), vendor: None, bill_attachment: None, spent_on: Some("2026-09-23".into()) },
+        ).unwrap();
+        assert!(exp.confirmed);
+        assert!(exp.voucher_no.is_some());
+        // The voucher is balanced: Dr electricity 6,850, Cr cash 6,850.
+        let (d, cr): (i64, i64) = c.query_row(
+            "SELECT COALESCE(SUM(le.debit_paise),0), COALESCE(SUM(le.credit_paise),0) \
+             FROM voucher v JOIN ledger_entry le ON le.voucher_id=v.id WHERE v.source_table='expense' AND v.source_id=?1",
+            params![exp.id], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
+        assert_eq!(d, 685_000);
+        assert_eq!(cr, 685_000);
+        assert_eq!(crate::ledger::ledger_imbalance(&c).unwrap(), 0);
+
+        // A non-expense category is rejected.
+        assert!(record_expense_logic(&mut c, &accountant(), Some("dev-a2"), DeviceMode::Server, "2026-09-23",
+            &ExpenseInput { category_account_id: "fee_income".into(), amount_paise: 100, paid_via: "cash".into(), details: None, vendor: None, bill_attachment: None, spent_on: None }).is_err());
+
+        // Only the Principal reverses; the accountant cannot.
+        assert!(reverse_expense_logic(&mut c, &accountant(), None, DeviceMode::Server, &exp.id, "oops").is_err());
+        reverse_expense_logic(&mut c, &principal(), None, DeviceMode::Server, &exp.id, "Entered twice").unwrap();
+        assert_eq!(crate::ledger::ledger_imbalance(&c).unwrap(), 0, "reversal keeps the book balanced");
+        assert!(list_expenses_logic(&mut c, &principal(), "2026-09-01", "2026-09-30").unwrap().iter().any(|e| e.id == exp.id && e.reversed));
+
+        // A teacher cannot record expenses at all.
+        let teacher = SessionStaff { id: "stf-meena".into(), name: "Meena".into(), role: "teacher".into() };
+        assert!(record_expense_logic(&mut c, &teacher, Some("dev-a1"), DeviceMode::Server, "2026-09-23",
+            &ExpenseInput { category_account_id: "electricity".into(), amount_paise: 100, paid_via: "cash".into(), details: None, vendor: None, bill_attachment: None, spent_on: None }).is_err());
     }
 
     #[test]

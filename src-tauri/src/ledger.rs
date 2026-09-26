@@ -172,6 +172,32 @@ pub fn backfill_vouchers(conn: &mut Connection) -> rusqlite::Result<usize> {
         rows.collect::<rusqlite::Result<_>>()?
     };
 
+    // Expenses (P15) → expense vouchers; expense_reversals → reversal vouchers.
+    // Voucher series continues from the school's own series ("A1" on the server).
+    // (id, category, paid_via, amount, spent_on, created_by)
+    type ExpenseRow = (String, String, String, i64, String, Option<String>);
+    let expenses: Vec<ExpenseRow> = {
+        let mut stmt = conn.prepare(
+            "SELECT e.id, e.category_account_id, e.paid_via, e.amount_paise, e.spent_on, e.created_by \
+             FROM expense e WHERE NOT EXISTS (SELECT 1 FROM voucher v WHERE v.source_table='expense' AND v.source_id=e.id) \
+             ORDER BY e.spent_on, e.created_at",
+        )?;
+        let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)))?;
+        rows.collect::<rusqlite::Result<_>>()?
+    };
+    // (reversal_id, expense category, paid_via, amount, applied_at)
+    type ExpRevRow = (String, String, String, i64, String);
+    let exp_reversals: Vec<ExpRevRow> = {
+        let mut stmt = conn.prepare(
+            "SELECT r.id, e.category_account_id, e.paid_via, e.amount_paise, r.applied_at \
+             FROM expense_reversal r JOIN expense e ON e.id=r.expense_id \
+             WHERE NOT EXISTS (SELECT 1 FROM voucher v WHERE v.source_table='expense_reversal' AND v.source_id=r.id) \
+             ORDER BY r.applied_at",
+        )?;
+        let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)))?;
+        rows.collect::<rusqlite::Result<_>>()?
+    };
+
     let tx = conn.transaction()?;
     for (pid, amount, mode, receipt_no, collected_at, collected_by) in payments {
         let date = collected_at.unwrap_or_else(|| now.clone());
@@ -182,8 +208,106 @@ pub fn backfill_vouchers(conn: &mut Connection) -> rusqlite::Result<usize> {
         post_reversal_voucher(&tx, &rid, &receipt_no, parse_mode(&mode), amount, &applied_at, None, school_id.as_deref(), &now, "confirmed")?;
         created += 1;
     }
+    for (eid, category, paid_via, amount, spent_on, created_by) in expenses {
+        let pv = vidya_core::accounts::PaidVia::parse(&paid_via).unwrap_or(vidya_core::accounts::PaidVia::Cash);
+        let vno = crate::numbering::next_no(&tx, vidya_core::numbering::NumberKind::Voucher, "A1")?;
+        post_expense_voucher(&tx, &vno, &eid, &category, pv, amount, &spent_on, created_by.as_deref(), None, school_id.as_deref(), &now, "confirmed")?;
+        created += 1;
+    }
+    for (rid, category, paid_via, amount, applied_at) in exp_reversals {
+        let pv = vidya_core::accounts::PaidVia::parse(&paid_via).unwrap_or(vidya_core::accounts::PaidVia::Cash);
+        let vno = crate::numbering::next_no(&tx, vidya_core::numbering::NumberKind::Voucher, "A1")?;
+        post_expense_reversal_voucher(&tx, &vno, &rid, &category, pv, amount, &applied_at, None, school_id.as_deref(), &now, "confirmed")?;
+        created += 1;
+    }
     tx.commit()?;
     Ok(created)
+}
+
+/// Post a voucher with two DYNAMIC ledger accounts (ids from the DB, not the
+/// 'static system consts). Used by expenses/salary/store whose category account
+/// id comes from a row. `debit_account`/`credit_account` each take `amount_paise`
+/// (so the voucher is balanced by construction).
+#[allow(clippy::too_many_arguments)]
+pub fn post_voucher_dyn(
+    tx: &Transaction,
+    voucher_no: &str,
+    kind: &str,
+    date: &str,
+    narration: Option<&str>,
+    source_table: &str,
+    source_id: &str,
+    debit_account: &str,
+    credit_account: &str,
+    amount_paise: i64,
+    created_by: Option<&str>,
+    device_id: Option<&str>,
+    school_id: Option<&str>,
+    now: &str,
+    sync_state: &str,
+) -> rusqlite::Result<String> {
+    let vid = format!("vch-{}", uuid::Uuid::now_v7());
+    tx.execute(
+        "INSERT INTO voucher(id, voucher_no, kind, date, narration, source_table, source_id, created_by, device_id, school_id, created_at, updated_at, sync_state) \
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?11,?12)",
+        params![vid, voucher_no, kind, date, narration, source_table, source_id, created_by, device_id, school_id, now, sync_state],
+    )?;
+    tx.execute(
+        "INSERT INTO ledger_entry(id, voucher_id, account_id, debit_paise, credit_paise) VALUES (?1,?2,?3,?4,0)",
+        params![format!("le-{}", uuid::Uuid::now_v7()), vid, debit_account, amount_paise],
+    )?;
+    tx.execute(
+        "INSERT INTO ledger_entry(id, voucher_id, account_id, debit_paise, credit_paise) VALUES (?1,?2,?3,0,?4)",
+        params![format!("le-{}", uuid::Uuid::now_v7()), vid, credit_account, amount_paise],
+    )?;
+    Ok(vid)
+}
+
+/// Post the expense voucher (Dr category account, Cr money account for paid_via).
+/// Returns the new voucher id. Called by record_expense in the same transaction.
+#[allow(clippy::too_many_arguments)]
+pub fn post_expense_voucher(
+    tx: &Transaction,
+    voucher_no: &str,
+    expense_id: &str,
+    category_account_id: &str,
+    paid_via: vidya_core::accounts::PaidVia,
+    amount_paise: i64,
+    date_iso: &str,
+    created_by: Option<&str>,
+    device_id: Option<&str>,
+    school_id: Option<&str>,
+    now: &str,
+    sync_state: &str,
+) -> rusqlite::Result<String> {
+    post_voucher_dyn(
+        tx, voucher_no, "expense", &date_of(date_iso), Some("Expense"), "expense", expense_id,
+        category_account_id, paid_via.money_account(), amount_paise,
+        created_by, device_id, school_id, now, sync_state,
+    )
+}
+
+/// Post the expense-reversal voucher (Dr money account, Cr category — the exact
+/// opposite of the original expense). Principal only.
+#[allow(clippy::too_many_arguments)]
+pub fn post_expense_reversal_voucher(
+    tx: &Transaction,
+    voucher_no: &str,
+    reversal_id: &str,
+    category_account_id: &str,
+    paid_via: vidya_core::accounts::PaidVia,
+    amount_paise: i64,
+    date_iso: &str,
+    created_by: Option<&str>,
+    school_id: Option<&str>,
+    now: &str,
+    sync_state: &str,
+) -> rusqlite::Result<String> {
+    post_voucher_dyn(
+        tx, voucher_no, "reversal", &date_of(date_iso), Some("Expense reversal"), "expense_reversal", reversal_id,
+        paid_via.money_account(), category_account_id, amount_paise,
+        created_by, None, school_id, now, sync_state,
+    )
 }
 
 /// Total debits minus credits across all ledger entries — must be exactly 0 if

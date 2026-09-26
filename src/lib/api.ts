@@ -285,6 +285,38 @@ export interface FeeHeadChangePreview {
   changed: number
 }
 
+// School accounts — expenses (P15 Step 3, prototype accounts state 2).
+export interface ExpenseAccountDto {
+  id: string
+  code: string
+  name: string
+  name_hi: string | null
+}
+export interface ExpenseInput {
+  category_account_id: string
+  amount_paise: number
+  paid_via: string // cash | upi | bank
+  details?: string | null
+  vendor?: string | null
+  bill_attachment?: string | null
+  spent_on?: string | null
+}
+export interface ExpenseDto {
+  id: string
+  voucher_no: string | null
+  category_account_id: string
+  category_name: string
+  amount_paise: number
+  paid_via: string
+  details: string | null
+  vendor: string | null
+  bill_attachment: string | null
+  spent_on: string
+  confirmed: boolean
+  reversed: boolean
+  cash_warning: boolean
+}
+
 export interface PaymentDto {
   id: string
   receipt_no: string
@@ -869,6 +901,12 @@ export const list_fee_heads = () => invoke<FeeHeadDto[]>('list_fee_heads')
 export const create_fee_head = (input: FeeHeadInput) => invoke<FeeHeadDto>('create_fee_head', { input })
 export const preview_fee_head_change = (id: string, newAmount: number, instalmentsJson?: string | null) =>
   invoke<FeeHeadChangePreview>('preview_fee_head_change', { id, newAmount, instalmentsJson: instalmentsJson ?? null })
+
+export const list_expense_accounts = () => invoke<ExpenseAccountDto[]>('list_expense_accounts')
+export const record_expense = (input: ExpenseInput) => invoke<ExpenseDto>('record_expense', { input })
+export const list_expenses = (from: string, to: string) => invoke<ExpenseDto[]>('list_expenses', { from, to })
+export const reverse_expense = (expenseId: string, reason: string) =>
+  invoke<void>('reverse_expense', { expenseId, reason })
 export const update_fee_head = (id: string, input: FeeHeadInput) =>
   invoke<FeeHeadDto>('update_fee_head', { id, input })
 export const deactivate_fee_head = (id: string) => invoke<void>('deactivate_fee_head', { id })

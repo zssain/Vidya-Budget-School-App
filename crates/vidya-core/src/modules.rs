@@ -65,6 +65,10 @@ pub fn module_for(action: Action) -> Module {
     match action {
         // Circulars & notices (P14 Step 6).
         ManageCirculars | DraftClassNotice => Module::Circulars,
+        // School accounts (P15): expenses, cash book, profit, opening balance, salary.
+        RecordExpense | ReverseExpense | ViewAccounts | ViewProfit | OpeningBalance | ManageSalary => Module::Accounts,
+        // School store (P15, optional module).
+        ManageStore | RecordStoreSale => Module::Store,
         // Every action built through Phase 11 is Core (always on). Future phases
         // move their new actions to Accounts / Classroom / Hr / Circulars / Store.
         CreateStudent | EnrollStudent | TransferSection | MarkStudentLeft

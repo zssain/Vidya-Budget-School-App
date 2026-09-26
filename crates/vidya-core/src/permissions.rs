@@ -233,6 +233,29 @@ pub enum Action {
     /// class they teach). (Module `circulars`.)
     DraftClassNotice,
 
+    // ---- School accounts (module `accounts`, P15) ----
+    /// Record an expense → voucher (module `accounts`). Principal + Accountant.
+    RecordExpense,
+    /// Reverse an expense (reversal voucher). Principal only. (Accountant: never.)
+    ReverseExpense,
+    /// View the Accounts screen: cash book, day book, expenses list (module
+    /// `accounts`). Principal + Accountant.
+    ViewAccounts,
+    /// View the profit summary (module `accounts`). Principal only.
+    ViewProfit,
+    /// Set the once-per-session opening cash/bank balance (opening voucher).
+    /// Principal only. (module `accounts`.)
+    OpeningBalance,
+    /// Salary register: structures, advances, pay runs, slips (module `accounts`).
+    /// Principal only (Accountant view is an optional Principal-granted setting).
+    ManageSalary,
+
+    // ---- School store (module `store`, P15) ----
+    /// Manage store items and stock (purchase / adjust). Principal only.
+    ManageStore,
+    /// Record a store sale → receipt + voucher. Principal + Accountant.
+    RecordStoreSale,
+
     // ---- Staff & access (Principal only) ----
     /// Manage staff & access (umbrella). Principal only.
     ManageStaff,
@@ -408,6 +431,16 @@ fn accountant(action: Action, _target: &Target) -> Decision {
         // A reversal goes through a request.
         Action::PaymentReversal => Decision::NeedsRequest(RequestType::PaymentReversal),
 
+        // School accounts (P15): record expenses, view the cash book / day book /
+        // expenses, record store sales. NOT profit, reversals, opening balance,
+        // salary or store management (Principal only).
+        Action::RecordExpense | Action::ViewAccounts | Action::RecordStoreSale => Decision::allow(),
+        Action::ReverseExpense
+        | Action::ViewProfit
+        | Action::OpeningBalance
+        | Action::ManageSalary
+        | Action::ManageStore => Decision::deny("accountant_no_admin"),
+
         // No marks, no attendance (including report cards, which are
         // marks/attendance data).
         Action::TakeAttendance
@@ -531,6 +564,16 @@ fn teacher(actor: &Actor, action: Action, target: &Target) -> Decision {
         | Action::FeeReports
         | Action::SendFeeReminder => Decision::deny("teacher_no_fees"),
 
+        // ---- No school accounts / store (finance) at all (P15). ----
+        Action::RecordExpense
+        | Action::ReverseExpense
+        | Action::ViewAccounts
+        | Action::ViewProfit
+        | Action::OpeningBalance
+        | Action::ManageSalary
+        | Action::ManageStore
+        | Action::RecordStoreSale => Decision::deny("teacher_no_fees"),
+
         // ---- No admissions / student management. ----
         Action::CreateStudent
         | Action::EnrollStudent
@@ -593,12 +636,14 @@ fn class_subject_owned(actor: &Actor, target: &Target) -> bool {
 
 impl Action {
     /// Every action variant (for the matrix-as-data seed and exhaustive checks).
-    pub const ALL: [Action; 44] = [
+    pub const ALL: [Action; 52] = [
         Action::CreateStudent, Action::EnrollStudent, Action::TransferSection, Action::MarkStudentLeft,
         Action::EditStudentDetails, Action::ViewStudent, Action::ViewGuardianAddress,
         Action::StudentCsvImport, Action::StudentCsvExport,
         Action::ViewFees, Action::RecordPayment, Action::PrintShareReceipt, Action::PaymentReversal,
         Action::DayBook, Action::FeeReports, Action::SendFeeReminder,
+        Action::RecordExpense, Action::ReverseExpense, Action::ViewAccounts, Action::ViewProfit,
+        Action::OpeningBalance, Action::ManageSalary, Action::ManageStore, Action::RecordStoreSale,
         Action::TakeAttendance, Action::EditSubmittedAttendance, Action::ViewAttendance, Action::SendAbsenceAlert,
         Action::EnterMarks, Action::EditSubmittedMarks, Action::ViewMarks, Action::ViewReportCard,
         Action::ManageCirculars, Action::DraftClassNotice,
@@ -652,6 +697,7 @@ fn target_kind_for(action: Action) -> TargetKind {
         CreateStudent | EnrollStudent | TransferSection | MarkStudentLeft | EditStudentDetails
         | ViewStudent | ViewGuardianAddress | StudentCsvImport | StudentCsvExport => TargetKind::Student,
         ViewFees | RecordPayment | PrintShareReceipt | PaymentReversal | DayBook | FeeReports | SendFeeReminder => TargetKind::Fee,
+        RecordExpense | ReverseExpense | ViewAccounts | ViewProfit | OpeningBalance | ManageSalary | ManageStore | RecordStoreSale => TargetKind::Fee,
         TakeAttendance | EditSubmittedAttendance | ViewAttendance | SendAbsenceAlert => TargetKind::Attendance,
         EnterMarks | EditSubmittedMarks | ViewMarks | ViewReportCard => TargetKind::Marks,
         ManageCirculars => TargetKind::School,
@@ -1267,7 +1313,7 @@ mod tests {
 
     #[test]
     fn action_all_covers_every_variant_and_keys_round_trip() {
-        assert_eq!(Action::ALL.len(), 44); // P14 added SendFeeReminder, SendAbsenceAlert, ManageCirculars, DraftClassNotice
+        assert_eq!(Action::ALL.len(), 52); // P15 added RecordExpense, ReverseExpense, ViewAccounts, ViewProfit, OpeningBalance, ManageSalary, ManageStore, RecordStoreSale
 
         for a in Action::ALL {
             assert_eq!(Action::from_key(&a.as_key()), Some(a), "{a:?}");

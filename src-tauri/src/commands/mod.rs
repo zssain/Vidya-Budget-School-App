@@ -60,6 +60,10 @@ pub const COMMANDS: &[&str] = &[
     "preview_fee_head_change",
     "update_fee_head",
     "deactivate_fee_head",
+    "list_expense_accounts",
+    "record_expense",
+    "list_expenses",
+    "reverse_expense",
     "get_receipt",
     "search_receipts",
     "reverse_payment",
@@ -387,6 +391,37 @@ pub fn update_fee_head(state: State<RtCtx>, id: String, input: FeeHeadInput) -> 
 pub fn deactivate_fee_head(state: State<RtCtx>, id: String) -> CmdResult<()> {
     let actor = state.require_session()?;
     state.with_db(|conn| deactivate_fee_head_logic(conn, &actor, &id))
+}
+
+// -------------------------------------------------------- accounts: expenses ---
+
+#[tauri::command]
+pub fn list_expense_accounts(state: State<RtCtx>) -> CmdResult<Vec<ExpenseAccountDto>> {
+    let actor = state.require_session()?;
+    state.with_db(|conn| list_expense_accounts_logic(conn, &actor))
+}
+
+#[tauri::command]
+pub fn record_expense(state: State<RtCtx>, input: ExpenseInput) -> CmdResult<ExpenseDto> {
+    let actor = state.require_session()?;
+    let device_id = state.device_id.lock().map_err(|_| crate::error::CmdError::internal("lock"))?.clone();
+    let mode = state.device_mode;
+    let today = crate::db::now_iso();
+    state.with_db(|conn| record_expense_logic(conn, &actor, device_id.as_deref(), mode, &today, &input))
+}
+
+#[tauri::command]
+pub fn list_expenses(state: State<RtCtx>, from: String, to: String) -> CmdResult<Vec<ExpenseDto>> {
+    let actor = state.require_session()?;
+    state.with_db(|conn| list_expenses_logic(conn, &actor, &from, &to))
+}
+
+#[tauri::command]
+pub fn reverse_expense(state: State<RtCtx>, expense_id: String, reason: String) -> CmdResult<()> {
+    let actor = state.require_session()?;
+    let device_id = state.device_id.lock().map_err(|_| crate::error::CmdError::internal("lock"))?.clone();
+    let mode = state.device_mode;
+    state.with_db(|conn| reverse_expense_logic(conn, &actor, device_id.as_deref(), mode, &expense_id, &reason))
 }
 
 // -------------------------------------------------------------- receipts ------

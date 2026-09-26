@@ -18,7 +18,9 @@ use crate::sync::protocol::Change;
 /// Tables a teacher device must NEVER receive (DONE-MEANS #4). Includes the
 /// general ledger (P13) — vouchers/entries/accounts are finance-only.
 pub const FEE_TABLES: &[&str] =
-    &["fee_head", "fee_due", "payment", "payment_allocation", "reversal", "ledger_account", "voucher", "ledger_entry"];
+    &["fee_head", "fee_due", "payment", "payment_allocation", "reversal", "ledger_account", "voucher", "ledger_entry",
+      "expense", "expense_reversal", "salary_structure", "staff_advance", "salary_run", "salary_line",
+      "store_item", "store_sale", "stock_move"];
 /// Tables an accountant device must never receive (attendance/marks).
 pub const MARK_TABLES: &[&str] = &["attendance_sheet", "attendance_mark", "marks_sheet", "mark_entry"];
 
@@ -80,6 +82,10 @@ pub fn module_of_table(table: &str) -> Option<&'static str> {
     match table {
         // Circulars & notices (P14 Step 6) — off → never synced to a device.
         "circular" | "circular_read" => Some("circulars"),
+        // School accounts (P15): expenses + salary register.
+        "expense" | "expense_reversal" | "salary_structure" | "staff_advance" | "salary_run" | "salary_line" => Some("accounts"),
+        // School store (P15, optional module) — off → never synced to a device.
+        "store_item" | "store_sale" | "stock_move" => Some("store"),
         _ => None,
     }
 }
@@ -302,7 +308,7 @@ pub fn snapshot(conn: &Connection, actor: &Actor) -> rusqlite::Result<Vec<Change
             for t in ["class", "class_subject", "student", "enrollment", "guardian", "student_guardian", "consent",
                       "attendance_sheet", "attendance_mark",
                       "fee_head", "fee_due", "payment", "payment_allocation", "reversal", "request",
-                      "ledger_account", "voucher", "ledger_entry",
+                      "ledger_account", "voucher", "ledger_entry", "expense", "expense_reversal",
                       "marks_sheet", "mark_entry", "exam", "exam_subject"] {
                 for id in ids_of(conn, &format!("SELECT id FROM {t}"), &[])? {
                     push(conn, t, &id, None)?;
@@ -310,7 +316,7 @@ pub fn snapshot(conn: &Connection, actor: &Actor) -> rusqlite::Result<Vec<Change
             }
         }
         Role::Accountant => {
-            for t in ["class", "class_subject", "student", "enrollment", "guardian", "student_guardian", "consent", "fee_head", "fee_due", "payment", "payment_allocation", "reversal", "ledger_account", "voucher", "ledger_entry"] {
+            for t in ["class", "class_subject", "student", "enrollment", "guardian", "student_guardian", "consent", "fee_head", "fee_due", "payment", "payment_allocation", "reversal", "ledger_account", "voucher", "ledger_entry", "expense", "expense_reversal"] {
                 for id in ids_of(conn, &format!("SELECT id FROM {t}"), &[])? {
                     push(conn, t, &id, None)?;
                 }

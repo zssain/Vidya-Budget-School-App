@@ -8,6 +8,7 @@ pub mod errors;
 pub mod money;
 pub mod types;
 
+pub mod accounts;
 pub mod admissions;
 pub mod attendance;
 pub mod audience;
