@@ -69,7 +69,9 @@ fn teacher_class_ids(conn: &Connection, actor: &Actor) -> rusqlite::Result<BTree
 pub fn can_see_table(role: Role, table: &str) -> bool {
     match role {
         Role::Principal => true,
-        Role::Accountant => !MARK_TABLES.contains(&table),
+        // The accountant has no academic access (attendance/marks, §5) and no
+        // Classroom access (P16): timetable, notes, remarks, seating.
+        Role::Accountant => !MARK_TABLES.contains(&table) && module_of_table(table) != Some("classroom"),
         Role::Teacher => !FEE_TABLES.contains(&table),
     }
 }
@@ -86,6 +88,10 @@ pub fn module_of_table(table: &str) -> Option<&'static str> {
         "expense" | "expense_reversal" | "salary_structure" | "staff_advance" | "salary_run" | "salary_line" => Some("accounts"),
         // School store (P15, optional module) — off → never synced to a device.
         "store_item" | "store_sale" | "stock_move" => Some("store"),
+        // Classroom (P16): timetable, substitutes, notes, report remarks, exam
+        // seating — off → never synced to a device.
+        "period" | "timetable_slot" | "substitution" | "homework_note" | "report_remark"
+        | "exam_room" | "exam_seat" | "exam_schedule" => Some("classroom"),
         _ => None,
     }
 }
@@ -124,6 +130,10 @@ pub fn visible_row(conn: &Connection, actor: &Actor, table: &str, id: &str) -> r
     };
     // Calendar (P13) is school-wide info every role reads (attendance/dashboards).
     if table == "school_week" || table == "calendar_event" {
+        return Ok(mk(row, None));
+    }
+    // Period bell times (P16) are school-wide config every role reads.
+    if table == "period" {
         return Ok(mk(row, None));
     }
     // Message templates (P14) are Core reference data every role reads to compose.
@@ -216,6 +226,10 @@ pub fn visible_row(conn: &Connection, actor: &Actor, table: &str, id: &str) -> r
                     let by: Option<String> = conn.query_row("SELECT requested_by FROM request WHERE id=?1", [id], |r| r.get(0)).optional()?;
                     Ok(if by.as_deref() == Some(actor.staff_id.as_str()) { mk(row, None) } else { None })
                 }
+                "timetable_slot" => {
+                    let cid: Option<String> = conn.query_row("SELECT class_id FROM timetable_slot WHERE id=?1", [id], |r| r.get(0)).optional()?;
+                    Ok(if cid.map(|c| classes.contains(&c)).unwrap_or(false) { mk(row, None) } else { None })
+                }
                 "guardian" => {
                     // Guardian of one of the teacher's students → name+mobile only.
                     if guardian_visible_to_teacher(conn, &classes, id)? {
@@ -266,6 +280,9 @@ pub fn snapshot(conn: &Connection, actor: &Actor) -> rusqlite::Result<Vec<Change
     for id in ids_of(conn, "SELECT id FROM subject", &[])? { push(conn, "subject", &id, None)?; }
     for id in ids_of(conn, "SELECT id FROM school_week", &[])? { push(conn, "school_week", &id, None)?; }
     for id in ids_of(conn, "SELECT id FROM calendar_event", &[])? { push(conn, "calendar_event", &id, None)?; }
+    // Period bell times (P16, `classroom` module): school-wide, every role reads
+    // them to render the timetable grid. `push` skips them when the module is off.
+    for id in ids_of(conn, "SELECT id FROM period", &[])? { push(conn, "period", &id, None)?; }
 
     // Staff — names only for non-Principal.
     let staff_filter = |row: &mut serde_json::Value| {
@@ -311,6 +328,7 @@ pub fn snapshot(conn: &Connection, actor: &Actor) -> rusqlite::Result<Vec<Change
                       "ledger_account", "voucher", "ledger_entry", "expense", "expense_reversal",
                       "salary_structure", "staff_advance", "salary_run", "salary_line",
                       "store_item", "store_sale", "stock_move",
+                      "timetable_slot",
                       "marks_sheet", "mark_entry", "exam", "exam_subject"] {
                 for id in ids_of(conn, &format!("SELECT id FROM {t}"), &[])? {
                     push(conn, t, &id, None)?;
@@ -390,6 +408,12 @@ pub fn snapshot(conn: &Connection, actor: &Actor) -> rusqlite::Result<Vec<Change
                 }
             }
             for id in ids_of(conn, "SELECT id FROM request WHERE requested_by=?1", &[&actor.staff_id])? { push(conn, "request", &id, None)?; }
+            // Classroom (P16): the timetable slots of the teacher's classes (covers
+            // both their class-teacher class and any subject they teach in it), so
+            // "My timetable" and the class grid render on the phone.
+            for id in ids_of(conn, &format!("SELECT id FROM timetable_slot WHERE class_id IN ({ph}) AND effective_to IS NULL"), cargs.as_slice())? {
+                push(conn, "timetable_slot", &id, None)?;
+            }
         }
     }
     Ok(out)

@@ -256,6 +256,33 @@ pub enum Action {
     /// Record a store sale → receipt + voucher. Principal + Accountant.
     RecordStoreSale,
 
+    // ---- Classroom (module `classroom`, P16) ----
+    /// Edit the weekly timetable: periods, slots, copy a week (core rejects
+    /// clashes). Principal only. (Module `classroom`.)
+    ManageTimetable,
+    /// View the timetable. Principal always; Teacher for their own classes
+    /// ("My timetable"); Accountant never. (Module `classroom`.)
+    ViewTimetable,
+    /// Assign a substitute for an absent teacher (with that day's attendance
+    /// duty). Principal only. (Module `classroom`.)
+    ManageSubstitutes,
+    /// Write / share / delete-own homework & class notes. Principal always;
+    /// Teacher for a class they teach; Accountant never. (Module `classroom`.)
+    ManageNotes,
+    /// View the homework & notes history for a class. Principal always; Teacher
+    /// for a class they teach; Accountant never. (Module `classroom`.)
+    ViewNotes,
+    /// Enter / edit a report-card remark for a student in an exam. Principal
+    /// always; Teacher only if class teacher; locked once report cards are made
+    /// final. (Module `classroom`.)
+    EnterReportRemark,
+    /// Make report cards final for an exam (locks remarks). Principal only.
+    /// (Module `classroom`.)
+    FinalizeReportCards,
+    /// Manage exam rooms, schedule, generate seating and print hall tickets.
+    /// Principal only. (Module `classroom`.)
+    ManageExamSeating,
+
     // ---- Staff & access (Principal only) ----
     /// Manage staff & access (umbrella). Principal only.
     ManageStaff,
@@ -453,7 +480,16 @@ fn accountant(action: Action, _target: &Target) -> Decision {
         | Action::ViewReportCard
         // Circulars are composed by the Principal / drafted by teachers, never the accountant.
         | Action::ManageCirculars
-        | Action::DraftClassNotice => Decision::deny("accountant_no_academic"),
+        | Action::DraftClassNotice
+        // Classroom (P16): timetable, substitutes, notes, remarks, seating — no academic access.
+        | Action::ManageTimetable
+        | Action::ViewTimetable
+        | Action::ManageSubstitutes
+        | Action::ManageNotes
+        | Action::ViewNotes
+        | Action::EnterReportRemark
+        | Action::FinalizeReportCards
+        | Action::ManageExamSeating => Decision::deny("accountant_no_academic"),
 
         // No staff management / administration.
         Action::ManageStaff
@@ -555,6 +591,35 @@ fn teacher(actor: &Actor, action: Action, target: &Target) -> Decision {
         Action::DraftClassNotice => Decision::NeedsRequest(RequestType::ClassNotice),
         Action::ManageCirculars => Decision::deny("teacher_circulars_principal_only"),
 
+        // ---- Classroom (P16). ----
+        // A teacher sees their own timetable (the data scope limits which rows
+        // reach the device); managing it is Principal-only.
+        Action::ViewTimetable => Decision::allow(),
+        // Homework & notes: any teacher of the class (subject teacher or class
+        // teacher) may write and view its notes.
+        Action::ManageNotes | Action::ViewNotes => {
+            if class_subject_owned(actor, target) || class_owned(actor, target) {
+                Decision::allow()
+            } else {
+                Decision::deny("teacher_not_own_class")
+            }
+        }
+        // Report-card remarks: the class teacher enters them (lock is enforced at
+        // the write path once report cards are made final).
+        Action::EnterReportRemark => {
+            if class_owned(actor, target) {
+                Decision::allow()
+            } else {
+                Decision::deny("teacher_not_class_teacher")
+            }
+        }
+        // Editing the timetable, assigning substitutes, finalising report cards
+        // and exam seating are Principal-only.
+        Action::ManageTimetable
+        | Action::ManageSubstitutes
+        | Action::FinalizeReportCards
+        | Action::ManageExamSeating => Decision::deny("teacher_no_admin"),
+
         // ---- No fees at all (§5: "no fee data at all"). ----
         Action::ViewFees
         | Action::RecordPayment
@@ -625,6 +690,54 @@ fn class_subject_owned(actor: &Actor, target: &Target) -> bool {
     }
 }
 
+// ============================================= attendance duty (P16 §10.4) ====
+//
+// A teacher who is NOT the class teacher may still take attendance for a class on
+// a specific date through a *time-limited grant*: an assigned substitution that
+// includes attendance, or an approved `attendance_duty` request. The grant is by
+// **date** (server date in Asia/Kolkata) and ends automatically — a grant for
+// (class, 2026-09-23) does not cover 2026-09-24. `src-tauri` loads the grants
+// (substitutions with `includes_attendance` + approved attendance-duty requests)
+// for the teacher; this stays clockless (the date string is passed in).
+
+/// A time-limited grant letting a teacher take attendance for `class_id` between
+/// `from_date` and `to_date` (inclusive, `YYYY-MM-DD`). The loader only builds
+/// grants that actually convey attendance (substitution `includes_attendance` =
+/// true, or an approved attendance-duty request).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AttendanceGrant {
+    pub class_id: String,
+    pub from_date: String,
+    pub to_date: String,
+}
+
+/// The classes a set of grants covers on `date` (a `YYYY-MM-DD` string). ISO date
+/// strings compare lexicographically, so the range test needs no clock or parser.
+pub fn granted_attendance_classes(grants: &[AttendanceGrant], date: &str) -> std::collections::BTreeSet<String> {
+    grants
+        .iter()
+        .filter(|g| g.from_date.as_str() <= date && date <= g.to_date.as_str())
+        .map(|g| g.class_id.clone())
+        .collect()
+}
+
+/// Whether `actor` may take (or view) attendance for `class_id` on `date`,
+/// considering class-teacher ownership AND time-limited substitution / duty
+/// grants (§10.4). This is the authoritative attendance gate used by the
+/// attendance command and the server's op re-validation.
+pub fn may_take_attendance(actor: &Actor, class_id: &str, date: &str, grants: &[AttendanceGrant]) -> bool {
+    // Class teacher (or Principal) — the plain ownership path.
+    let target = Target { kind: TargetKind::Attendance, class_id: Some(class_id.to_string()), ..Target::default() };
+    if can(actor, Action::TakeAttendance, &target).is_allow() {
+        return true;
+    }
+    // Otherwise an active teacher with a grant covering this class on this date.
+    if actor.role == Role::Teacher && actor.state == StaffState::Active {
+        return granted_attendance_classes(grants, date).contains(class_id);
+    }
+    false
+}
+
 // ======================================================= roles as data =======
 //
 // P13: the role × action matrix is represented as data — `role` +
@@ -636,7 +749,7 @@ fn class_subject_owned(actor: &Actor, target: &Target) -> bool {
 
 impl Action {
     /// Every action variant (for the matrix-as-data seed and exhaustive checks).
-    pub const ALL: [Action; 52] = [
+    pub const ALL: [Action; 60] = [
         Action::CreateStudent, Action::EnrollStudent, Action::TransferSection, Action::MarkStudentLeft,
         Action::EditStudentDetails, Action::ViewStudent, Action::ViewGuardianAddress,
         Action::StudentCsvImport, Action::StudentCsvExport,
@@ -644,6 +757,8 @@ impl Action {
         Action::DayBook, Action::FeeReports, Action::SendFeeReminder,
         Action::RecordExpense, Action::ReverseExpense, Action::ViewAccounts, Action::ViewProfit,
         Action::OpeningBalance, Action::ManageSalary, Action::ManageStore, Action::RecordStoreSale,
+        Action::ManageTimetable, Action::ViewTimetable, Action::ManageSubstitutes, Action::ManageNotes,
+        Action::ViewNotes, Action::EnterReportRemark, Action::FinalizeReportCards, Action::ManageExamSeating,
         Action::TakeAttendance, Action::EditSubmittedAttendance, Action::ViewAttendance, Action::SendAbsenceAlert,
         Action::EnterMarks, Action::EditSubmittedMarks, Action::ViewMarks, Action::ViewReportCard,
         Action::ManageCirculars, Action::DraftClassNotice,
@@ -700,6 +815,11 @@ fn target_kind_for(action: Action) -> TargetKind {
         RecordExpense | ReverseExpense | ViewAccounts | ViewProfit | OpeningBalance | ManageSalary | ManageStore | RecordStoreSale => TargetKind::Fee,
         TakeAttendance | EditSubmittedAttendance | ViewAttendance | SendAbsenceAlert => TargetKind::Attendance,
         EnterMarks | EditSubmittedMarks | ViewMarks | ViewReportCard => TargetKind::Marks,
+        // Classroom (P16): class-scoped academic actions use the Attendance/Marks
+        // kinds; the Principal-only ones are school administration.
+        ViewTimetable | ManageNotes | ViewNotes => TargetKind::Attendance,
+        EnterReportRemark => TargetKind::Marks,
+        ManageTimetable | ManageSubstitutes | FinalizeReportCards | ManageExamSeating => TargetKind::School,
         ManageCirculars => TargetKind::School,
         DraftClassNotice => TargetKind::Own,
         ManageStaff | InviteStaff | SuspendStaff | RemoveStaff | ManageDevices => TargetKind::Staff,
@@ -1156,6 +1276,97 @@ mod tests {
         )));
     }
 
+    // ---- Classroom (P16) -------------------------------------------------
+
+    #[test]
+    fn teacher_timetable_and_notes_and_remarks() {
+        let t = teacher();
+        // My timetable: allowed (scope limits which rows reach the device).
+        assert_eq!(can(&t, Action::ViewTimetable, &own_target(TargetKind::Attendance, false)), allow());
+        // Notes for a class they teach → allow; another class → deny.
+        assert_eq!(can(&t, Action::ManageNotes, &own_target(TargetKind::Attendance, false)), allow());
+        assert!(is_deny(&can(&t, Action::ManageNotes, &other_target(TargetKind::Attendance, false))));
+        assert_eq!(can(&t, Action::ViewNotes, &own_target(TargetKind::Attendance, false)), allow());
+        // Report remark: only the class teacher.
+        assert_eq!(can(&t, Action::EnterReportRemark, &own_target(TargetKind::Marks, false)), allow());
+        assert!(is_deny(&can(&t, Action::EnterReportRemark, &other_target(TargetKind::Marks, false))));
+        // Principal-only classroom actions are denied to teachers.
+        for action in [
+            Action::ManageTimetable,
+            Action::ManageSubstitutes,
+            Action::FinalizeReportCards,
+            Action::ManageExamSeating,
+        ] {
+            assert!(is_deny(&can(&t, action, &own_target(TargetKind::School, false))), "{action:?}");
+        }
+    }
+
+    #[test]
+    fn accountant_has_no_classroom_access() {
+        let a = accountant();
+        for action in [
+            Action::ManageTimetable,
+            Action::ViewTimetable,
+            Action::ManageSubstitutes,
+            Action::ManageNotes,
+            Action::ViewNotes,
+            Action::EnterReportRemark,
+            Action::FinalizeReportCards,
+            Action::ManageExamSeating,
+        ] {
+            assert!(is_deny(&can(&a, action, &Target::of(TargetKind::School))), "{action:?}");
+        }
+    }
+
+    #[test]
+    fn principal_manages_all_classroom() {
+        let p = principal();
+        for action in [
+            Action::ManageTimetable,
+            Action::ViewTimetable,
+            Action::ManageSubstitutes,
+            Action::ManageNotes,
+            Action::ViewNotes,
+            Action::EnterReportRemark,
+            Action::FinalizeReportCards,
+            Action::ManageExamSeating,
+        ] {
+            assert!(can(&p, action, &Target::of(TargetKind::School)).is_allow(), "{action:?}");
+        }
+    }
+
+    #[test]
+    fn attendance_duty_grant_is_date_limited() {
+        // A teacher who is NOT the class teacher of OTHER_CLASS.
+        let sub = teacher();
+        let grants = vec![AttendanceGrant {
+            class_id: OTHER_CLASS.into(),
+            from_date: "2026-09-23".into(),
+            to_date: "2026-09-23".into(),
+        }];
+        // On the granted day the substitute may take attendance…
+        assert!(may_take_attendance(&sub, OTHER_CLASS, "2026-09-23", &grants));
+        // …but not the next day (auto-expiry at midnight).
+        assert!(!may_take_attendance(&sub, OTHER_CLASS, "2026-09-24", &grants));
+        // …and not for a class with no grant.
+        assert!(!may_take_attendance(&sub, "class-none", "2026-09-23", &grants));
+        // The class teacher never needs a grant.
+        assert!(may_take_attendance(&sub, OWNED_CLASS, "2026-09-24", &[]));
+        // The Principal may always take attendance.
+        assert!(may_take_attendance(&principal(), OTHER_CLASS, "2026-09-24", &[]));
+        // A multi-day duty covers its inclusive range.
+        let multi = vec![AttendanceGrant {
+            class_id: OTHER_CLASS.into(),
+            from_date: "2026-09-24".into(),
+            to_date: "2026-09-25".into(),
+        }];
+        assert_eq!(
+            granted_attendance_classes(&multi, "2026-09-25"),
+            [OTHER_CLASS.to_string()].into_iter().collect()
+        );
+        assert!(granted_attendance_classes(&multi, "2026-09-26").is_empty());
+    }
+
     #[test]
     fn everyone_active_can_do_everyone_actions() {
         for actor in [principal(), accountant(), teacher()] {
@@ -1313,7 +1524,7 @@ mod tests {
 
     #[test]
     fn action_all_covers_every_variant_and_keys_round_trip() {
-        assert_eq!(Action::ALL.len(), 52); // P15 added RecordExpense, ReverseExpense, ViewAccounts, ViewProfit, OpeningBalance, ManageSalary, ManageStore, RecordStoreSale
+        assert_eq!(Action::ALL.len(), 60); // P16 added ManageTimetable, ViewTimetable, ManageSubstitutes, ManageNotes, ViewNotes, EnterReportRemark, FinalizeReportCards, ManageExamSeating
 
         for a in Action::ALL {
             assert_eq!(Action::from_key(&a.as_key()), Some(a), "{a:?}");

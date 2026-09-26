@@ -48,6 +48,12 @@ export const PRINCIPAL_NAV: NavSection[] = [
       { key: 'students', labelKey: 'nav.students', icon: 'students', path: '/principal/students' },
       { key: 'attendance', labelKey: 'nav.attendance', icon: 'attendance', path: '/principal/attendance' },
       { key: 'marks', labelKey: 'nav.marks', icon: 'marks', path: '/principal/marks' },
+      // Timetable (P16) — the `classroom` module is on by default (§14); hidden when
+      // it is turned off. No `timetable` icon in the mock set (rule 6) → reuse `myClasses`.
+      { key: 'timetable', labelKey: 'nav.timetable', icon: 'myClasses', path: '/principal/timetable', module: 'classroom' },
+      // Calendar (P16 screen; P13 data) — foundational (attendance %/fees use it), so
+      // always shown. No `calendar` icon in the mock set (rule 6) → reuse `clock`.
+      { key: 'calendar', labelKey: 'nav.calendar', icon: 'clock', path: '/principal/calendar' },
     ],
   },
   {

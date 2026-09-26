@@ -1054,6 +1054,68 @@ export const list_store_items = (includeInactive = false) =>
 export const save_store_item = (input: StoreItemInput) => invoke<StoreItemDto>('save_store_item', { input })
 export const record_store_sale = (input: StoreSaleInput) => invoke<StoreSaleDto>('record_store_sale', { input })
 export const stock_adjust = (input: StockAdjustInput) => invoke<StoreItemDto>('stock_adjust', { input })
+
+// ---- Phase 16: Classroom — timetable -------------------------------------
+export interface PeriodDto {
+  id: string
+  no: number
+  starts_at: string
+  ends_at: string
+}
+export interface TimetableSlotDto {
+  id: string
+  class_id: string
+  class_display: string | null
+  weekday: number
+  period_no: number
+  class_subject_id: string
+  subject_name: string
+  teacher_id: string
+  teacher_name: string
+}
+export interface ClassSubjectOptionDto {
+  id: string
+  subject_name: string
+  teacher_id: string
+  teacher_name: string | null
+}
+export interface TimetableDto {
+  class_id: string
+  class_display: string | null
+  periods: PeriodDto[]
+  slots: TimetableSlotDto[]
+  subjects: ClassSubjectOptionDto[]
+}
+export interface TeacherTimetableDto {
+  periods: PeriodDto[]
+  slots: TimetableSlotDto[]
+}
+export interface TimetableSlotInput {
+  id?: string | null
+  class_id: string
+  weekday: number
+  period_no: number
+  class_subject_id: string
+  teacher_id: string
+}
+export interface CopyWeekResult {
+  copied: number
+  skipped: number
+}
+export interface PeriodInput {
+  no: number
+  starts_at: string
+  ends_at: string
+}
+export const get_timetable = (classId: string) => invoke<TimetableDto>('get_timetable', { classId })
+export const my_timetable = () => invoke<TeacherTimetableDto>('my_timetable')
+export const save_timetable_slot = (input: TimetableSlotInput) =>
+  invoke<TimetableSlotDto>('save_timetable_slot', { input })
+export const delete_timetable_slot = (slotId: string) => invoke<void>('delete_timetable_slot', { slotId })
+export const copy_timetable_week = (fromClassId: string, toClassId: string) =>
+  invoke<CopyWeekResult>('copy_timetable_week', { fromClassId, toClassId })
+export const save_periods = (periods: PeriodInput[]) => invoke<PeriodDto[]>('save_periods', { periods })
+
 export const update_fee_head = (id: string, input: FeeHeadInput) =>
   invoke<FeeHeadDto>('update_fee_head', { id, input })
 export const deactivate_fee_head = (id: string) => invoke<void>('deactivate_fee_head', { id })

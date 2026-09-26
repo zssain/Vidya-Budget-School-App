@@ -24,6 +24,8 @@ import ReceiptsScreen from '@/screens/desktop/ReceiptsScreen'
 import DayBookScreen from '@/screens/desktop/DayBookScreen'
 import AccountsScreen from '@/screens/desktop/AccountsScreen'
 import SchoolStoreScreen from '@/screens/desktop/SchoolStoreScreen'
+import TimetableScreen from '@/screens/desktop/TimetableScreen'
+import TeacherTimetableScreen from '@/screens/phone/TeacherTimetableScreen'
 import AttendanceRegisterScreen from '@/screens/desktop/AttendanceRegisterScreen'
 import MyRequestsScreen from '@/screens/desktop/MyRequestsScreen'
 import InboxScreen from '@/screens/desktop/InboxScreen'
@@ -167,6 +169,7 @@ export default function App() {
         if (m) return <AttendanceContainer classId={m.classId} />
         const ab = matchRoute('/teacher/absence/:classId/:date', base)
         if (ab) return <AbsenceContainer classId={ab.classId} date={ab.date} />
+        if (base === '/teacher/timetable') return <TeacherTimetableScreen />
         return <TeacherHomeScreen data={teacherHomeFixture} />
       }
       // Principal / Accountant: every desktop screen renders inside AppShell
@@ -209,6 +212,7 @@ function desktopRoute(base: string, role: Role): { active: string; node: ReactNo
     return { active: 'students', node: <StudentsScreen role={role} /> }
   if (base === '/principal/attendance') return { active: 'attendance', node: <AttendanceRegisterScreen /> }
   if (base === '/principal/marks') return { active: 'marks', node: <MarksScreen /> }
+  if (base === '/principal/timetable') return { active: 'timetable', node: <TimetableScreen /> }
   if (base === '/principal/grade-scale') return { active: 'settings', node: <GradeScaleScreen /> }
   if (base === '/principal/settings') return { active: 'settings', node: <SettingsScreen /> }
   if (base === '/principal/backups') return { active: 'backups', node: <BackupsScreen /> }

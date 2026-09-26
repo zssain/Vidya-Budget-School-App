@@ -55,6 +55,7 @@ pub fn seed_demo_school(conn: &mut Connection, now: OffsetDateTime) -> rusqlite:
     fees_and_payments(&tx, &ctx, &assigned)?;
     expenses(&tx, &ctx)?;
     academics(&tx)?;
+    classroom(&tx)?;
     requests(&tx, &ctx)?;
     tx.commit()?;
     // v2 (P13): the seed inserts payments/reversals directly, so post the derived
@@ -183,15 +184,62 @@ fn classes(tx: &rusqlite::Transaction) -> rusqlite::Result<()> {
 }
 
 fn subjects(tx: &rusqlite::Transaction) -> rusqlite::Result<()> {
-    tx.execute(
-        "INSERT INTO subject(id,name,name_hi) VALUES ('sub-maths','Maths','गणित')",
-        [],
-    )?;
+    // A small set of subjects so the timetable / exams screens have real data.
+    for (id, name, name_hi) in [
+        ("sub-maths", "Maths", "गणित"),
+        ("sub-eng", "English", "अंग्रेज़ी"),
+        ("sub-sci", "Science", "विज्ञान"),
+        ("sub-soc", "Social", "सामाजिक"),
+    ] {
+        tx.execute("INSERT INTO subject(id,name,name_hi) VALUES (?1,?2,?3)", params![id, name, name_hi])?;
+    }
     // VI-B Maths, taught by Anita Rao — target of the marks-correction request.
     tx.execute(
         "INSERT INTO class_subject(id,class_id,subject_id,teacher_id) VALUES ('cs-6b-maths','cls-6b','sub-maths','stf-anita')",
         [],
     )?;
+    // V-A class-subjects (Meena is the class teacher of V-A; others teach subjects).
+    for (id, subj, teacher) in [
+        ("cs-5a-eng", "sub-eng", "stf-meena"),
+        ("cs-5a-maths", "sub-maths", "stf-anita"),
+        ("cs-5a-sci", "sub-sci", "stf-nair"),
+        ("cs-5a-soc", "sub-soc", "stf-meena"),
+    ] {
+        tx.execute(
+            "INSERT INTO class_subject(id,class_id,subject_id,teacher_id) VALUES (?1,'cls-5a',?2,?3)",
+            params![id, subj, teacher],
+        )?;
+    }
+    Ok(())
+}
+
+/// Classroom (P16): period bell times + a clash-free V-A weekly timetable so the
+/// Timetable / My-timetable screens have data. Additive; touches only P16 tables.
+fn classroom(tx: &rusqlite::Transaction) -> rusqlite::Result<()> {
+    let now = "2026-04-01T09:00:00Z";
+    // Six periods for the current session (prototype `timetable` bell times).
+    let times = [("08:40", "09:25"), ("09:25", "10:10"), ("10:10", "10:55"), ("11:10", "11:55"), ("11:55", "12:40"), ("12:40", "13:25")];
+    for (i, (s, e)) in times.iter().enumerate() {
+        tx.execute(
+            "INSERT INTO period(id,session_id,no,starts_at,ends_at,created_at,updated_at,sync_state) \
+             VALUES (?1,'sess-2627',?2,?3,?4,?5,?5,'confirmed')",
+            params![format!("per-{}", i + 1), (i + 1) as i64, s, e, now],
+        )?;
+    }
+    // A clash-free V-A week: one class only, so class/teacher double-booking is
+    // impossible; each slot uses its class-subject's own teacher (weekday ISO 1–6,
+    // periods 1–4). Subjects rotate Eng · Maths · Science · Social.
+    let cs = [("cs-5a-eng", "stf-meena"), ("cs-5a-maths", "stf-anita"), ("cs-5a-sci", "stf-nair"), ("cs-5a-soc", "stf-meena")];
+    for weekday in 1..=6i64 {
+        for period in 1..=4i64 {
+            let (csid, teacher) = cs[((weekday + period) as usize) % cs.len()];
+            tx.execute(
+                "INSERT INTO timetable_slot(id,session_id,class_id,weekday,period_no,class_subject_id,teacher_id,created_at,updated_at,sync_state) \
+                 VALUES (?1,'sess-2627','cls-5a',?2,?3,?4,?5,?6,?6,'confirmed')",
+                params![format!("ts-5a-{weekday}-{period}"), weekday, period, csid, teacher, now],
+            )?;
+        }
+    }
     Ok(())
 }
 

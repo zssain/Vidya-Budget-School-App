@@ -69,6 +69,10 @@ pub fn module_for(action: Action) -> Module {
         RecordExpense | ReverseExpense | ViewAccounts | ViewProfit | OpeningBalance | ManageSalary => Module::Accounts,
         // School store (P15, optional module).
         ManageStore | RecordStoreSale => Module::Store,
+        // Classroom (P16): timetable, substitutes, homework & notes, report-card
+        // remarks, exam seating & hall tickets.
+        ManageTimetable | ViewTimetable | ManageSubstitutes | ManageNotes | ViewNotes
+        | EnterReportRemark | FinalizeReportCards | ManageExamSeating => Module::Classroom,
         // Every action built through Phase 11 is Core (always on). Future phases
         // move their new actions to Accounts / Classroom / Hr / Circulars / Store.
         CreateStudent | EnrollStudent | TransferSection | MarkStudentLeft

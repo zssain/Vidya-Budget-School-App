@@ -78,6 +78,12 @@ pub const COMMANDS: &[&str] = &[
     "save_store_item",
     "record_store_sale",
     "stock_adjust",
+    "get_timetable",
+    "my_timetable",
+    "save_timetable_slot",
+    "delete_timetable_slot",
+    "copy_timetable_week",
+    "save_periods",
     "get_receipt",
     "search_receipts",
     "reverse_payment",
@@ -568,6 +574,44 @@ pub fn stock_adjust(state: State<RtCtx>, input: StockAdjustInput) -> CmdResult<S
     let actor = state.require_session()?;
     let today = crate::db::now_iso();
     state.with_db(|conn| stock_adjust_logic(conn, &actor, &today, &input))
+}
+
+// -------------------------------------------------------------- classroom -----
+
+#[tauri::command]
+pub fn get_timetable(state: State<RtCtx>, class_id: String) -> CmdResult<TimetableDto> {
+    let actor = state.require_session()?;
+    state.with_db(|conn| get_timetable_logic(conn, &actor, &class_id))
+}
+
+#[tauri::command]
+pub fn my_timetable(state: State<RtCtx>) -> CmdResult<TeacherTimetableDto> {
+    let actor = state.require_session()?;
+    state.with_db(|conn| my_timetable_logic(conn, &actor))
+}
+
+#[tauri::command]
+pub fn save_timetable_slot(state: State<RtCtx>, input: TimetableSlotInput) -> CmdResult<TimetableSlotDto> {
+    let actor = state.require_session()?;
+    state.with_db(|conn| save_timetable_slot_logic(conn, &actor, &input))
+}
+
+#[tauri::command]
+pub fn delete_timetable_slot(state: State<RtCtx>, slot_id: String) -> CmdResult<()> {
+    let actor = state.require_session()?;
+    state.with_db(|conn| delete_timetable_slot_logic(conn, &actor, &slot_id))
+}
+
+#[tauri::command]
+pub fn copy_timetable_week(state: State<RtCtx>, from_class_id: String, to_class_id: String) -> CmdResult<CopyWeekResult> {
+    let actor = state.require_session()?;
+    state.with_db(|conn| copy_timetable_week_logic(conn, &actor, &from_class_id, &to_class_id))
+}
+
+#[tauri::command]
+pub fn save_periods(state: State<RtCtx>, periods: Vec<PeriodInput>) -> CmdResult<Vec<PeriodDto>> {
+    let actor = state.require_session()?;
+    state.with_db(|conn| save_periods_logic(conn, &actor, &periods))
 }
 
 // -------------------------------------------------------------- receipts ------

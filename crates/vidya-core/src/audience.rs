@@ -82,8 +82,10 @@ pub fn audience_for(table: &str, class_id: Option<&str>) -> CoreResult<Audience>
         // General ledger (P13): financial records, Finance audience.
         "ledger_account" | "voucher" | "ledger_entry" => Ok(Audience::Finance),
         // ---- class-scoped academic data ------------------------------------
+        // Classroom (P16): the timetable slot, homework/notes and report remark
+        // belong to a class → its teachers (and the Principal) may decrypt.
         "attendance_sheet" | "attendance_mark" | "marks_sheet" | "mark_entry" | "exam"
-        | "exam_subject" => match class_id {
+        | "exam_subject" | "timetable_slot" | "homework_note" | "report_remark" => match class_id {
             Some(id) if !id.is_empty() => Ok(Audience::Class(id.to_string())),
             _ => Err(CoreError::Validation {
                 field: "class_id".into(),
@@ -115,7 +117,11 @@ pub fn audience_for(table: &str, class_id: Option<&str>) -> CoreResult<Audience>
         | "licence" | "grade_scale" | "grade_band" | "school_week" | "calendar_event"
         | "message" | "message_template"
         // custom fields (P13): Principal-defined config + values.
-        | "custom_field" | "custom_value" => {
+        | "custom_field" | "custom_value"
+        // Classroom (P16): school-wide period bell times, Principal-managed
+        // substitutions and exam rooms/seats/schedule (hall tickets print on the
+        // server PC). Every role reads them via the server snapshot.
+        | "period" | "substitution" | "exam_room" | "exam_seat" | "exam_schedule" => {
             Ok(Audience::Admin)
         }
         // ---- request: audience follows the requester's own domain ----------
@@ -191,6 +197,21 @@ mod tests {
             "school_week",
             "calendar_event",
         ] {
+            assert_eq!(audience_for(t, None).unwrap(), Audience::Admin, "{t}");
+        }
+    }
+
+    #[test]
+    fn classroom_class_scoped_tables_need_a_class() {
+        for t in ["timetable_slot", "homework_note", "report_remark"] {
+            assert_eq!(audience_for(t, Some("cls-5a")).unwrap(), Audience::Class("cls-5a".into()), "{t}");
+            assert!(matches!(audience_for(t, None), Err(CoreError::Validation { .. })), "{t}");
+        }
+    }
+
+    #[test]
+    fn classroom_admin_tables_map_to_admin() {
+        for t in ["period", "substitution", "exam_room", "exam_seat", "exam_schedule"] {
             assert_eq!(audience_for(t, None).unwrap(), Audience::Admin, "{t}");
         }
     }

@@ -29,6 +29,7 @@ import privacy from './strings/privacy'
 import circulars from './strings/circulars'
 import accounts from './strings/accounts'
 import store from './strings/store'
+import timetable from './strings/timetable'
 
 export type Lang = 'en' | 'hi' | 'te'
 export interface Bundle {
@@ -40,7 +41,7 @@ export interface Bundle {
   te?: Record<string, string>
 }
 
-const bundles: Bundle[] = [common, welcome, principalHome, collectFee, teacherHome, attendance, errors, p04, shell, students, fees, receipts, daybook, attendanceReg, shared, academics, reports, settings, calendar, guardians, customFields, privacy, circulars, accounts, store]
+const bundles: Bundle[] = [common, welcome, principalHome, collectFee, teacherHome, attendance, errors, p04, shell, students, fees, receipts, daybook, attendanceReg, shared, academics, reports, settings, calendar, guardians, customFields, privacy, circulars, accounts, store, timetable]
 const en: Record<string, string> = Object.assign({}, ...bundles.map((b) => b.en))
 const hi: Record<string, string> = Object.assign({}, ...bundles.map((b) => b.hi))
 const te: Record<string, string> = Object.assign({}, ...bundles.map((b) => b.te ?? {}))

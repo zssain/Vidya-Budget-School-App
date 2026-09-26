@@ -36,6 +36,7 @@ pub mod restore;
 pub mod salary;
 pub mod session;
 pub mod store;
+pub mod timetable;
 pub mod upi;
 pub mod validation;
 pub mod words;

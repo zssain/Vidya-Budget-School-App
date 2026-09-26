@@ -3086,6 +3086,427 @@ pub fn stock_adjust_logic(conn: &mut Connection, actor_s: &SessionStaff, today: 
     list_store_items_logic(conn, actor_s, true)?.into_iter().find(|i| i.id == input.item_id).ok_or_else(CmdError::not_found)
 }
 
+// ============================================================ classroom =======
+// Phase 16. The timetable is Principal-server config (edited on the school PC):
+// like store items / grade bands, edits are audited and reach devices via the
+// snapshot (sync::scope), not device ops. Teachers receive only the slots of the
+// classes they teach. vidya-core rejects clashes (teacher / class double-booked,
+// teacher not assigned to the class-subject).
+
+#[derive(Debug, Serialize)]
+pub struct PeriodDto {
+    pub id: String,
+    pub no: i64,
+    pub starts_at: String,
+    pub ends_at: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct TimetableSlotDto {
+    pub id: String,
+    pub class_id: String,
+    pub class_display: Option<String>,
+    pub weekday: i64,
+    pub period_no: i64,
+    pub class_subject_id: String,
+    pub subject_name: String,
+    pub teacher_id: String,
+    pub teacher_name: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ClassSubjectOptionDto {
+    pub id: String,
+    pub subject_name: String,
+    pub teacher_id: String,
+    pub teacher_name: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct TimetableDto {
+    pub class_id: String,
+    pub class_display: Option<String>,
+    pub periods: Vec<PeriodDto>,
+    pub slots: Vec<TimetableSlotDto>,
+    /// The class's class-subjects (with their assigned teacher) for the slot editor.
+    pub subjects: Vec<ClassSubjectOptionDto>,
+}
+
+fn load_class_subject_options(conn: &Connection, class_id: &str) -> rusqlite::Result<Vec<ClassSubjectOptionDto>> {
+    let mut stmt = conn.prepare(
+        "SELECT cs.id, sub.name, COALESCE(cs.teacher_id,''), st.name FROM class_subject cs \
+         JOIN subject sub ON sub.id=cs.subject_id LEFT JOIN staff st ON st.id=cs.teacher_id \
+         WHERE cs.class_id=?1 ORDER BY sub.name",
+    )?;
+    let rows = stmt
+        .query_map(params![class_id], |r| {
+            Ok(ClassSubjectOptionDto { id: r.get(0)?, subject_name: r.get(1)?, teacher_id: r.get(2)?, teacher_name: r.get(3)? })
+        })?
+        .collect::<rusqlite::Result<Vec<ClassSubjectOptionDto>>>()?;
+    Ok(rows)
+}
+
+fn load_periods(conn: &Connection, session_id: &str) -> rusqlite::Result<Vec<PeriodDto>> {
+    let mut stmt = conn.prepare("SELECT id, no, starts_at, ends_at FROM period WHERE session_id=?1 ORDER BY no")?;
+    let rows = stmt
+        .query_map(params![session_id], |r| {
+            Ok(PeriodDto { id: r.get(0)?, no: r.get(1)?, starts_at: r.get(2)?, ends_at: r.get(3)? })
+        })?
+        .collect::<rusqlite::Result<Vec<PeriodDto>>>()?;
+    Ok(rows)
+}
+
+fn slot_row_map(r: &rusqlite::Row) -> rusqlite::Result<TimetableSlotDto> {
+    Ok(TimetableSlotDto {
+        id: r.get(0)?,
+        class_id: r.get(1)?,
+        class_display: r.get(2)?,
+        weekday: r.get(3)?,
+        period_no: r.get(4)?,
+        class_subject_id: r.get(5)?,
+        subject_name: r.get(6)?,
+        teacher_id: r.get(7)?,
+        teacher_name: r.get(8)?,
+    })
+}
+
+const SLOT_SELECT: &str = "SELECT ts.id, ts.class_id, c.display, ts.weekday, ts.period_no, ts.class_subject_id, sub.name, ts.teacher_id, st.name \
+     FROM timetable_slot ts JOIN class_subject cs ON cs.id=ts.class_subject_id \
+     JOIN subject sub ON sub.id=cs.subject_id JOIN staff st ON st.id=ts.teacher_id \
+     JOIN class c ON c.id=ts.class_id \
+     WHERE ts.effective_to IS NULL";
+
+fn load_class_slots(conn: &Connection, class_id: &str) -> rusqlite::Result<Vec<TimetableSlotDto>> {
+    let sql = format!("{SLOT_SELECT} AND ts.class_id=?1 ORDER BY ts.weekday, ts.period_no");
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map(params![class_id], slot_row_map)?.collect::<rusqlite::Result<Vec<TimetableSlotDto>>>()?;
+    Ok(rows)
+}
+
+/// True if the teacher class-teaches `class_id` or teaches any subject in it.
+fn teacher_in_class(conn: &Connection, staff_id: &str, class_id: &str) -> rusqlite::Result<bool> {
+    let ct = conn
+        .query_row("SELECT 1 FROM class WHERE id=?1 AND class_teacher_id=?2", params![class_id, staff_id], |_| Ok(()))
+        .optional()?
+        .is_some();
+    if ct {
+        return Ok(true);
+    }
+    Ok(conn
+        .query_row("SELECT 1 FROM class_subject WHERE class_id=?1 AND teacher_id=?2 LIMIT 1", params![class_id, staff_id], |_| Ok(()))
+        .optional()?
+        .is_some())
+}
+
+/// The canonical class_subject → teacher assignment map (from class_subject).
+fn class_subject_assignments(conn: &Connection) -> rusqlite::Result<std::collections::BTreeMap<String, String>> {
+    let mut stmt = conn.prepare("SELECT id, teacher_id FROM class_subject WHERE teacher_id IS NOT NULL")?;
+    let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+    let mut m = std::collections::BTreeMap::new();
+    for row in rows {
+        let (id, t) = row?;
+        m.insert(id, t);
+    }
+    Ok(m)
+}
+
+/// Every current slot in the session as vidya-core `Slot`s (for clash checks).
+fn all_session_slots(conn: &Connection, session_id: &str) -> rusqlite::Result<Vec<vidya_core::timetable::Slot>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, class_id, weekday, period_no, class_subject_id, teacher_id FROM timetable_slot \
+         WHERE session_id=?1 AND effective_to IS NULL",
+    )?;
+    let rows = stmt.query_map(params![session_id], |r| {
+        Ok(vidya_core::timetable::Slot {
+            id: r.get(0)?,
+            class_id: r.get(1)?,
+            weekday: r.get::<_, i64>(2)? as u8,
+            period_no: r.get::<_, i64>(3)? as u8,
+            class_subject_id: r.get(4)?,
+            teacher_id: r.get(5)?,
+        })
+    })?;
+    rows.collect()
+}
+
+/// The Principal week view for one class (prototype `timetable` state 1).
+pub fn get_timetable_logic(conn: &mut Connection, actor_s: &SessionStaff, class_id: &str) -> CmdResult<TimetableDto> {
+    let actor = actor_from(conn, actor_s)?;
+    require_allow(&actor, Action::ViewTimetable, &Target { kind: TargetKind::Attendance, class_id: Some(class_id.to_string()), ..Default::default() })?;
+    require_module_enabled(conn, vidya_core::modules::Module::Classroom)?;
+    // A teacher may only inspect a class they teach; the Principal any class.
+    if actor.role == Role::Teacher && !teacher_in_class(conn, &actor_s.id, class_id)? {
+        return Err(CmdError::forbidden("teacher_not_own_class"));
+    }
+    let session_id = current_session_id(conn)?.ok_or_else(CmdError::not_found)?;
+    let class_display: Option<String> =
+        conn.query_row("SELECT display FROM class WHERE id=?1", params![class_id], |r| r.get(0)).optional()?;
+    Ok(TimetableDto {
+        class_id: class_id.to_string(),
+        class_display,
+        periods: load_periods(conn, &session_id)?,
+        slots: load_class_slots(conn, class_id)?,
+        subjects: load_class_subject_options(conn, class_id)?,
+    })
+}
+
+#[derive(Debug, Serialize)]
+pub struct TeacherTimetableDto {
+    pub periods: Vec<PeriodDto>,
+    pub slots: Vec<TimetableSlotDto>,
+}
+
+/// A teacher's own weekly timetable (prototype teacher "My timetable").
+pub fn my_timetable_logic(conn: &mut Connection, actor_s: &SessionStaff) -> CmdResult<TeacherTimetableDto> {
+    let actor = actor_from(conn, actor_s)?;
+    require_allow(&actor, Action::ViewTimetable, &Target::of(TargetKind::Attendance))?;
+    require_module_enabled(conn, vidya_core::modules::Module::Classroom)?;
+    let session_id = current_session_id(conn)?.ok_or_else(CmdError::not_found)?;
+    let sql = format!("{SLOT_SELECT} AND ts.teacher_id=?1 ORDER BY ts.weekday, ts.period_no");
+    let mut stmt = conn.prepare(&sql)?;
+    let slots: Vec<TimetableSlotDto> = stmt.query_map(params![actor_s.id], slot_row_map)?.collect::<rusqlite::Result<_>>()?;
+    Ok(TeacherTimetableDto { periods: load_periods(conn, &session_id)?, slots })
+}
+
+#[derive(Debug, Deserialize)]
+pub struct TimetableSlotInput {
+    pub id: Option<String>,
+    pub class_id: String,
+    pub weekday: i64,
+    pub period_no: i64,
+    pub class_subject_id: String,
+    pub teacher_id: String,
+}
+
+/// The stable rule code for a clash (shown inline on the slot editor).
+fn clash_rule(c: &vidya_core::timetable::Clash) -> &'static str {
+    use vidya_core::timetable::Clash::*;
+    match c {
+        TeacherDoubleBooked { .. } => "teacher_busy",
+        ClassDoubleBooked { .. } => "class_busy",
+        TeacherNotAssigned { .. } => "teacher_not_assigned",
+    }
+}
+
+/// Create or update one timetable slot (Principal). Rejects clashes via vidya-core.
+pub fn save_timetable_slot_logic(conn: &mut Connection, actor_s: &SessionStaff, input: &TimetableSlotInput) -> CmdResult<TimetableSlotDto> {
+    let actor = actor_from(conn, actor_s)?;
+    require_allow(&actor, Action::ManageTimetable, &Target::of(TargetKind::School))?;
+    require_module_enabled(conn, vidya_core::modules::Module::Classroom)?;
+    if !(1..=7).contains(&input.weekday) || input.period_no < 1 {
+        return Err(CmdError::validation("slot", "range"));
+    }
+    // The class_subject must belong to the slot's class.
+    let cs_class: Option<String> = conn
+        .query_row("SELECT class_id FROM class_subject WHERE id=?1", params![input.class_subject_id], |r| r.get(0))
+        .optional()?;
+    if cs_class.as_deref() != Some(input.class_id.as_str()) {
+        return Err(CmdError::validation("class_subject", "wrong_class"));
+    }
+    let session_id = current_session_id(conn)?.ok_or_else(CmdError::not_found)?;
+    let assigned = class_subject_assignments(conn)?;
+    let id = input.id.clone().unwrap_or_else(|| new_id("ts"));
+    let candidate = vidya_core::timetable::Slot {
+        id: id.clone(),
+        class_id: input.class_id.clone(),
+        weekday: input.weekday as u8,
+        period_no: input.period_no as u8,
+        class_subject_id: input.class_subject_id.clone(),
+        teacher_id: input.teacher_id.clone(),
+    };
+    // Every current slot except the one being edited.
+    let others: Vec<vidya_core::timetable::Slot> =
+        all_session_slots(conn, &session_id)?.into_iter().filter(|s| s.id != id).collect();
+    if let Err(clashes) = vidya_core::timetable::slot_is_valid(&candidate, &others, &assigned) {
+        let rule = clashes.first().map(clash_rule).unwrap_or("clash");
+        return Err(CmdError::validation("timetable", rule));
+    }
+    let now = now_iso();
+    let school_id = single_school_id(conn)?;
+    if input.id.is_some() {
+        conn.execute(
+            "UPDATE timetable_slot SET class_id=?1, weekday=?2, period_no=?3, class_subject_id=?4, teacher_id=?5, updated_at=?6 WHERE id=?7",
+            params![input.class_id, input.weekday, input.period_no, input.class_subject_id, input.teacher_id, now, id],
+        )?;
+    } else {
+        conn.execute(
+            "INSERT INTO timetable_slot(id,session_id,class_id,weekday,period_no,class_subject_id,teacher_id,school_id,created_at,updated_at,sync_state) \
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?9,'confirmed')",
+            params![id, session_id, input.class_id, input.weekday, input.period_no, input.class_subject_id, input.teacher_id, school_id, now],
+        )?;
+    }
+    audit_action(conn, AuditEntry {
+        at: now,
+        staff_id: Some(actor_s.id.clone()),
+        action: "save_timetable_slot".into(),
+        table: Some("timetable_slot".into()),
+        record_id: Some(id.clone()),
+        after_json: Some(serde_json::json!({ "class_id": input.class_id, "weekday": input.weekday, "period_no": input.period_no }).to_string()),
+        ..Default::default()
+    })?;
+    load_class_slots(conn, &input.class_id)?
+        .into_iter()
+        .find(|s| s.id == id)
+        .ok_or_else(CmdError::not_found)
+}
+
+/// Delete one timetable slot (Principal).
+pub fn delete_timetable_slot_logic(conn: &mut Connection, actor_s: &SessionStaff, slot_id: &str) -> CmdResult<()> {
+    let actor = actor_from(conn, actor_s)?;
+    require_allow(&actor, Action::ManageTimetable, &Target::of(TargetKind::School))?;
+    require_module_enabled(conn, vidya_core::modules::Module::Classroom)?;
+    let n = conn.execute("DELETE FROM timetable_slot WHERE id=?1", params![slot_id])?;
+    if n == 0 {
+        return Err(CmdError::not_found());
+    }
+    audit_action(conn, AuditEntry {
+        at: now_iso(),
+        staff_id: Some(actor_s.id.clone()),
+        action: "delete_timetable_slot".into(),
+        table: Some("timetable_slot".into()),
+        record_id: Some(slot_id.to_string()),
+        ..Default::default()
+    })?;
+    Ok(())
+}
+
+#[derive(Debug, Serialize)]
+pub struct CopyWeekResult {
+    pub copied: i64,
+    pub skipped: i64,
+}
+
+/// Copy a class's week to another class (Principal). Each source slot is matched
+/// to the target class's class-subject for the SAME subject (its assigned
+/// teacher); a subject the target class does not offer is skipped. The result is
+/// re-validated for clashes before anything is written (all-or-nothing).
+pub fn copy_timetable_week_logic(conn: &mut Connection, actor_s: &SessionStaff, from_class_id: &str, to_class_id: &str) -> CmdResult<CopyWeekResult> {
+    let actor = actor_from(conn, actor_s)?;
+    require_allow(&actor, Action::ManageTimetable, &Target::of(TargetKind::School))?;
+    require_module_enabled(conn, vidya_core::modules::Module::Classroom)?;
+    if from_class_id == to_class_id {
+        return Err(CmdError::validation("class", "same_class"));
+    }
+    let session_id = current_session_id(conn)?.ok_or_else(CmdError::not_found)?;
+    // Target class's subject → (class_subject_id, teacher_id).
+    let mut target_cs: std::collections::BTreeMap<String, (String, Option<String>)> = std::collections::BTreeMap::new();
+    {
+        let mut stmt = conn.prepare("SELECT subject_id, id, teacher_id FROM class_subject WHERE class_id=?1")?;
+        let rows = stmt.query_map(params![to_class_id], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, Option<String>>(2)?))
+        })?;
+        for row in rows {
+            let (subj, cs, t) = row?;
+            target_cs.insert(subj, (cs, t));
+        }
+    }
+    // Source slots with their subject_id.
+    let mut source: Vec<(i64, i64, String)> = Vec::new(); // weekday, period, subject_id
+    {
+        let mut stmt = conn.prepare(
+            "SELECT ts.weekday, ts.period_no, cs.subject_id FROM timetable_slot ts \
+             JOIN class_subject cs ON cs.id=ts.class_subject_id \
+             WHERE ts.class_id=?1 AND ts.effective_to IS NULL ORDER BY ts.weekday, ts.period_no",
+        )?;
+        let rows = stmt.query_map(params![from_class_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+        for row in rows {
+            source.push(row?);
+        }
+    }
+    // Build the proposed new slots, skipping subjects the target lacks / has no teacher.
+    let mut proposed: Vec<vidya_core::timetable::Slot> = Vec::new();
+    let mut skipped = 0i64;
+    for (weekday, period_no, subject_id) in &source {
+        match target_cs.get(subject_id) {
+            Some((cs_id, Some(teacher))) => proposed.push(vidya_core::timetable::Slot {
+                id: new_id("ts"),
+                class_id: to_class_id.to_string(),
+                weekday: *weekday as u8,
+                period_no: *period_no as u8,
+                class_subject_id: cs_id.clone(),
+                teacher_id: teacher.clone(),
+            }),
+            _ => skipped += 1,
+        }
+    }
+    // Re-validate the whole timetable with the target's existing slots replaced.
+    let assigned = class_subject_assignments(conn)?;
+    let mut all: Vec<vidya_core::timetable::Slot> = all_session_slots(conn, &session_id)?
+        .into_iter()
+        .filter(|s| s.class_id != to_class_id)
+        .collect();
+    all.extend(proposed.iter().cloned());
+    let clashes = vidya_core::timetable::clashes(&all, &assigned);
+    if !clashes.is_empty() {
+        let rule = clashes.first().map(clash_rule).unwrap_or("clash");
+        return Err(CmdError::validation("timetable", rule));
+    }
+    let now = now_iso();
+    let school_id = single_school_id(conn)?;
+    let copied = proposed.len() as i64;
+    let tx = conn.transaction()?;
+    tx.execute("DELETE FROM timetable_slot WHERE class_id=?1 AND effective_to IS NULL", params![to_class_id])?;
+    for s in &proposed {
+        tx.execute(
+            "INSERT INTO timetable_slot(id,session_id,class_id,weekday,period_no,class_subject_id,teacher_id,school_id,created_at,updated_at,sync_state) \
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?9,'confirmed')",
+            params![s.id, session_id, s.class_id, s.weekday as i64, s.period_no as i64, s.class_subject_id, s.teacher_id, school_id, now],
+        )?;
+    }
+    crate::security::audit::append(&tx, &AuditEntry {
+        at: now.clone(),
+        staff_id: Some(actor_s.id.clone()),
+        action: "copy_timetable_week".into(),
+        table: Some("timetable_slot".into()),
+        record_id: Some(to_class_id.to_string()),
+        after_json: Some(serde_json::json!({ "from": from_class_id, "to": to_class_id, "copied": copied, "skipped": skipped }).to_string()),
+        ..Default::default()
+    })?;
+    tx.commit()?;
+    Ok(CopyWeekResult { copied, skipped })
+}
+
+#[derive(Debug, Deserialize)]
+pub struct PeriodInput {
+    pub no: i64,
+    pub starts_at: String,
+    pub ends_at: String,
+}
+
+/// Replace the session's period bell times (Principal). Slots keep their
+/// `period_no`, so this only re-times the grid rows.
+pub fn save_periods_logic(conn: &mut Connection, actor_s: &SessionStaff, periods: &[PeriodInput]) -> CmdResult<Vec<PeriodDto>> {
+    let actor = actor_from(conn, actor_s)?;
+    require_allow(&actor, Action::ManageTimetable, &Target::of(TargetKind::School))?;
+    require_module_enabled(conn, vidya_core::modules::Module::Classroom)?;
+    let session_id = current_session_id(conn)?.ok_or_else(CmdError::not_found)?;
+    let now = now_iso();
+    let school_id = single_school_id(conn)?;
+    let tx = conn.transaction()?;
+    tx.execute("DELETE FROM period WHERE session_id=?1", params![session_id])?;
+    for p in periods {
+        if p.no < 1 {
+            return Err(CmdError::validation("period", "range"));
+        }
+        tx.execute(
+            "INSERT INTO period(id,session_id,no,starts_at,ends_at,school_id,created_at,updated_at,sync_state) \
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?7,'confirmed')",
+            params![new_id("per"), session_id, p.no, p.starts_at, p.ends_at, school_id, now],
+        )?;
+    }
+    crate::security::audit::append(&tx, &AuditEntry {
+        at: now.clone(),
+        staff_id: Some(actor_s.id.clone()),
+        action: "save_periods".into(),
+        table: Some("period".into()),
+        record_id: Some(session_id.clone()),
+        after_json: Some(serde_json::json!({ "count": periods.len() }).to_string()),
+        ..Default::default()
+    })?;
+    tx.commit()?;
+    load_periods(conn, &session_id).map_err(Into::into)
+}
+
 // ============================================================= receipts =======
 //
 // Receipt search / open (full receipt data incl. amount in words en+hi, heads
@@ -8668,5 +9089,84 @@ mod tests {
         // Contiguous 0..=1000 is accepted.
         let saved = update_grade_bands_logic(&mut c, &principal(), &[band(0, 499, "F", None), band(500, 1000, "P", Some(5))]).unwrap();
         assert_eq!(saved.len(), 2);
+    }
+
+    // ---- Classroom: timetable (P16 Step 1) -------------------------------
+
+    #[test]
+    fn timetable_loads_and_rejects_clashes() {
+        let mut c = seeded();
+        // The seed builds a clash-free V-A week (24 slots).
+        let tt = get_timetable_logic(&mut c, &principal(), "cls-5a").unwrap();
+        assert_eq!(tt.periods.len(), 6);
+        assert_eq!(tt.slots.len(), 24);
+        assert!(!tt.subjects.is_empty(), "class-subject options for the editor");
+
+        // Editing V-A Wed period 1 to a subject whose teacher (Meena) is already
+        // teaching V-A elsewhere that period would clash — but there is exactly one
+        // subject per (weekday, period) in one class, so instead prove a genuine
+        // clash: put Meena (cs-5a-eng) into a period she already teaches Social in.
+        // Find a Wed slot Meena teaches, then try to add her English in the SAME slot
+        // via a second class — simplest: a teacher-not-assigned clash.
+        let bad = TimetableSlotInput {
+            id: None,
+            class_id: "cls-5a".into(),
+            weekday: 3,
+            period_no: 1,
+            class_subject_id: "cs-5a-eng".into(),
+            teacher_id: "stf-nair".into(), // Nair is NOT assigned to English
+        };
+        let err = save_timetable_slot_logic(&mut c, &principal(), &bad).unwrap_err();
+        assert_eq!(err.code, "VALIDATION");
+        assert_eq!(err.vars["rule"], "teacher_not_assigned");
+    }
+
+    #[test]
+    fn teacher_double_book_is_rejected_across_classes() {
+        let mut c = seeded();
+        // Give VI-B an English class-subject taught by Meena.
+        c.execute(
+            "INSERT INTO class_subject(id,class_id,subject_id,teacher_id) VALUES ('cs-6b-eng','cls-6b','sub-eng','stf-meena')",
+            [],
+        ).unwrap();
+        // V-A already has Meena teaching *something* at (weekday 3, some period).
+        // Find one of Meena's V-A slots and try to book her for VI-B at the same time.
+        let (wd, per): (i64, i64) = c
+            .query_row(
+                "SELECT weekday, period_no FROM timetable_slot WHERE teacher_id='stf-meena' AND class_id='cls-5a' LIMIT 1",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        let clash = TimetableSlotInput {
+            id: None,
+            class_id: "cls-6b".into(),
+            weekday: wd,
+            period_no: per,
+            class_subject_id: "cs-6b-eng".into(),
+            teacher_id: "stf-meena".into(),
+        };
+        let err = save_timetable_slot_logic(&mut c, &principal(), &clash).unwrap_err();
+        assert_eq!(err.code, "VALIDATION");
+        assert_eq!(err.vars["rule"], "teacher_busy");
+    }
+
+    #[test]
+    fn my_timetable_returns_only_the_teachers_slots() {
+        let mut c = seeded();
+        let mine = my_timetable_logic(&mut c, &meena()).unwrap();
+        assert!(!mine.slots.is_empty());
+        assert!(mine.slots.iter().all(|s| s.teacher_id == "stf-meena"), "only Meena's periods");
+        assert!(mine.slots.iter().all(|s| s.class_display.is_some()));
+    }
+
+    #[test]
+    fn teacher_cannot_manage_the_timetable() {
+        let mut c = seeded();
+        let input = TimetableSlotInput {
+            id: None, class_id: "cls-5a".into(), weekday: 1, period_no: 5,
+            class_subject_id: "cs-5a-eng".into(), teacher_id: "stf-meena".into(),
+        };
+        assert!(save_timetable_slot_logic(&mut c, &meena(), &input).is_err(), "teacher cannot edit the timetable");
     }
 }

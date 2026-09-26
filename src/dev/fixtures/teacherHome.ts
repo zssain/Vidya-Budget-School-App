@@ -65,7 +65,7 @@ export const teacherHomeFixture: TeacherHomeData = {
     { labelKey: 'teacher.tile.attendance', icon: 'inline:attendance', delay: '140ms', to: '/teacher/attendance/v-a' },
     { labelKey: 'teacher.tile.marks', icon: 'inline:marks', delay: '180ms', to: '/placeholder' },
     { labelKey: 'teacher.tile.reportCard', icon: 'icon:reportCard', delay: '220ms', to: '/placeholder' },
-    { labelKey: 'teacher.tile.myClasses', icon: 'icon:myClasses', delay: '260ms', to: '/placeholder' },
+    { labelKey: 'teacher.tile.myClasses', icon: 'icon:myClasses', delay: '260ms', to: '/teacher/timetable' },
     { labelKey: 'teacher.tile.students', icon: 'inline:students', delay: '300ms', to: '/placeholder' },
     { labelKey: 'teacher.tile.requests', icon: 'inline:requests', badge: '1', delay: '340ms', to: '/placeholder' },
     { labelKey: 'teacher.tile.inbox', icon: 'icon:inbox', delay: '380ms', to: '/placeholder' },
