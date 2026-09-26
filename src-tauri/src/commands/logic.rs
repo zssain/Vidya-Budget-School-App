@@ -67,7 +67,7 @@ fn require_allow(actor: &Actor, action: Action, target: &Target) -> CmdResult<()
     }
 }
 
-fn new_id(prefix: &str) -> String {
+pub(crate) fn new_id(prefix: &str) -> String {
     format!("{prefix}-{}", uuid::Uuid::now_v7())
 }
 

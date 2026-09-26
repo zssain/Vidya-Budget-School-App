@@ -11,6 +11,7 @@ pub mod ctx;
 pub mod dash;
 pub mod db;
 pub mod drive_account;
+pub mod email;
 pub mod error;
 pub mod guardians;
 pub mod kv;
