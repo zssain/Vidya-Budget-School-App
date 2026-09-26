@@ -28,6 +28,7 @@ pub mod licence;
 pub mod marks;
 pub mod messages;
 pub mod modules;
+pub mod notes;
 pub mod numbering;
 pub mod permissions;
 pub mod receipts;

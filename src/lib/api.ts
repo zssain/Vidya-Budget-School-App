@@ -1151,6 +1151,46 @@ export const substitute_plan = (date: string, absentTeacherId: string) =>
 export const assign_substitute = (date: string, absentTeacherId: string, substituteTeacherId: string) =>
   invoke<AssignSubstituteResult>('assign_substitute', { date, absentTeacherId, substituteTeacherId })
 
+// ---- Phase 16: Classroom — homework & notes -------------------------------
+export interface AttachmentMeta {
+  name: string
+  size: number
+  mime: string
+  drive_file_id?: string | null
+  local_hash?: string | null
+}
+export interface HomeworkNoteDto {
+  id: string
+  class_id: string
+  class_subject_id: string | null
+  subject_name: string | null
+  kind: string
+  text: string
+  attachments: AttachmentMeta[]
+  created_by: string | null
+  created_by_name: string | null
+  created_at: string
+  can_delete: boolean
+}
+export interface HomeworkNoteInput {
+  class_id: string
+  class_subject_id?: string | null
+  kind: string
+  text: string
+  attachments: AttachmentMeta[]
+}
+export interface NoteShareResult {
+  queued: number
+  skipped_no_email: number
+  skipped_no_consent: number
+}
+export const list_homework_notes = (classId: string) =>
+  invoke<HomeworkNoteDto[]>('list_homework_notes', { classId })
+export const save_homework_note = (input: HomeworkNoteInput) =>
+  invoke<HomeworkNoteDto>('save_homework_note', { input })
+export const delete_homework_note = (id: string) => invoke<void>('delete_homework_note', { id })
+export const email_homework_note = (id: string) => invoke<NoteShareResult>('email_homework_note', { id })
+
 export const update_fee_head = (id: string, input: FeeHeadInput) =>
   invoke<FeeHeadDto>('update_fee_head', { id, input })
 export const deactivate_fee_head = (id: string) => invoke<void>('deactivate_fee_head', { id })

@@ -75,20 +75,24 @@ fn action_for(table: &str, kind: &str) -> Option<Action> {
         ("payment", _) => Some(Action::RecordPayment),
         ("attendance_sheet", _) | ("attendance_mark", _) => Some(Action::TakeAttendance),
         ("mark_entry", _) | ("marks_sheet", _) => Some(Action::EnterMarks),
+        // Classroom (P16): a teacher's homework/notes and report-card remarks.
+        ("homework_note", _) => Some(Action::ManageNotes),
+        ("report_remark", _) => Some(Action::EnterReportRemark),
         _ => None,
     }
 }
 
 fn target_for(table: &str, payload: &serde_json::Value) -> Target {
     let class_id = payload.get("class_id").and_then(|v| v.as_str()).map(str::to_string);
+    let class_subject_id = payload.get("class_subject_id").and_then(|v| v.as_str()).map(str::to_string);
     let kind = match table {
         "student" | "enrollment" => TargetKind::Student,
         "payment" | "fee_due" => TargetKind::Fee,
-        "attendance_sheet" | "attendance_mark" => TargetKind::Attendance,
-        "mark_entry" | "marks_sheet" => TargetKind::Marks,
+        "attendance_sheet" | "attendance_mark" | "homework_note" => TargetKind::Attendance,
+        "mark_entry" | "marks_sheet" | "report_remark" => TargetKind::Marks,
         _ => TargetKind::Own,
     };
-    Target { kind, class_id, ..Default::default() }
+    Target { kind, class_id, class_subject_id, ..Default::default() }
 }
 
 /// Resolve the class a target belongs to (attendance ops don't carry class_id).

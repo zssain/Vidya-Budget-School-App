@@ -3701,6 +3701,256 @@ pub fn assign_substitute_logic(conn: &mut Connection, actor_s: &SessionStaff, da
     Ok(AssignSubstituteResult { periods_covered, includes_attendance })
 }
 
+// ---- Homework & notes (P16 Step 3, §10.4) -----------------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AttachmentMeta {
+    pub name: String,
+    pub size: i64,
+    pub mime: String,
+    #[serde(default)]
+    pub drive_file_id: Option<String>,
+    #[serde(default)]
+    pub local_hash: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct HomeworkNoteDto {
+    pub id: String,
+    pub class_id: String,
+    pub class_subject_id: Option<String>,
+    pub subject_name: Option<String>,
+    pub kind: String,
+    pub text: String,
+    pub attachments: Vec<AttachmentMeta>,
+    pub created_by: Option<String>,
+    pub created_by_name: Option<String>,
+    pub created_at: String,
+    pub can_delete: bool,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct HomeworkNoteInput {
+    pub class_id: String,
+    pub class_subject_id: Option<String>,
+    pub kind: String,
+    pub text: String,
+    #[serde(default)]
+    pub attachments: Vec<AttachmentMeta>,
+}
+
+/// Milliseconds between two RFC-3339 timestamps (`now − then`); 0 if unparseable.
+fn elapsed_ms(then: &str, now: &str) -> i64 {
+    let fmt = &time::format_description::well_known::Rfc3339;
+    match (time::OffsetDateTime::parse(then, fmt), time::OffsetDateTime::parse(now, fmt)) {
+        (Ok(a), Ok(b)) => ((b - a).whole_milliseconds()).clamp(i64::MIN as i128, i64::MAX as i128) as i64,
+        _ => 0,
+    }
+}
+
+fn note_dto(r: &rusqlite::Row, staff_id: &str, now: &str) -> rusqlite::Result<HomeworkNoteDto> {
+    let created_by: Option<String> = r.get("created_by")?;
+    let created_at: String = r.get("created_at")?;
+    let attachments_json: String = r.get("attachments_json")?;
+    let attachments: Vec<AttachmentMeta> = serde_json::from_str(&attachments_json).unwrap_or_default();
+    let is_author = created_by.as_deref() == Some(staff_id);
+    Ok(HomeworkNoteDto {
+        id: r.get("id")?,
+        class_id: r.get("class_id")?,
+        class_subject_id: r.get("class_subject_id")?,
+        subject_name: r.get("subject_name")?,
+        kind: r.get("kind")?,
+        text: r.get("text")?,
+        can_delete: vidya_core::notes::can_delete_own(is_author, elapsed_ms(&created_at, now)),
+        attachments,
+        created_by,
+        created_by_name: r.get("created_by_name")?,
+        created_at,
+    })
+}
+
+const NOTE_SELECT: &str = "SELECT h.id, h.class_id, h.class_subject_id, sub.name AS subject_name, h.kind, h.text, \
+     h.attachments_json, h.created_by, st.name AS created_by_name, h.created_at \
+     FROM homework_note h LEFT JOIN class_subject cs ON cs.id=h.class_subject_id \
+     LEFT JOIN subject sub ON sub.id=cs.subject_id LEFT JOIN staff st ON st.id=h.created_by";
+
+/// Homework & notes history for a class (prototype `notes` history). Every teacher
+/// of the class + the Principal.
+pub fn list_homework_notes_logic(conn: &mut Connection, actor_s: &SessionStaff, class_id: &str) -> CmdResult<Vec<HomeworkNoteDto>> {
+    let actor = actor_from(conn, actor_s)?;
+    require_allow(&actor, Action::ViewNotes, &Target { kind: TargetKind::Attendance, class_id: Some(class_id.to_string()), ..Default::default() })?;
+    require_module_enabled(conn, vidya_core::modules::Module::Classroom)?;
+    if actor.role == Role::Teacher && !teacher_in_class(conn, &actor_s.id, class_id)? {
+        return Err(CmdError::forbidden("teacher_not_own_class"));
+    }
+    let now = now_iso();
+    let sql = format!("{NOTE_SELECT} WHERE h.class_id=?1 ORDER BY h.created_at DESC");
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt
+        .query_map(params![class_id], |r| note_dto(r, &actor_s.id, &now))?
+        .collect::<rusqlite::Result<Vec<HomeworkNoteDto>>>()?;
+    Ok(rows)
+}
+
+/// Write a homework/notes entry (teacher of the class; Principal). Validates the
+/// attachment size limits (≤ 10 MB each, ≤ 20 MB total) via vidya-core.
+pub fn save_homework_note_logic(conn: &mut Connection, actor_s: &SessionStaff, device_id: Option<&str>, device_mode: DeviceMode, input: &HomeworkNoteInput) -> CmdResult<HomeworkNoteDto> {
+    let actor = actor_from(conn, actor_s)?;
+    let target = Target {
+        kind: TargetKind::Attendance,
+        class_id: Some(input.class_id.clone()),
+        class_subject_id: input.class_subject_id.clone(),
+        ..Default::default()
+    };
+    require_allow(&actor, Action::ManageNotes, &target)?;
+    require_module_enabled(conn, vidya_core::modules::Module::Classroom)?;
+    let kind = vidya_core::notes::validate_kind(&input.kind)?;
+    vidya_core::notes::validate_note(&input.text, input.attachments.len())?;
+    vidya_core::notes::validate_attachments(&input.attachments.iter().map(|a| a.size).collect::<Vec<_>>())?;
+    // The class-subject (if given) must belong to this class.
+    if let Some(cs) = &input.class_subject_id {
+        let ok: bool = conn
+            .query_row("SELECT 1 FROM class_subject WHERE id=?1 AND class_id=?2", params![cs, input.class_id], |_| Ok(()))
+            .optional()?
+            .is_some();
+        if !ok {
+            return Err(CmdError::validation("class_subject", "wrong_class"));
+        }
+    }
+    let now = now_iso();
+    let school_id = single_school_id(conn)?;
+    let id = new_id("hw");
+    let attachments_json = serde_json::to_string(&input.attachments).unwrap_or_else(|_| "[]".into());
+    let sync_state = if device_mode == DeviceMode::Server { "confirmed" } else { "on_device" };
+    let ctx = WriteCtx { mode: device_mode };
+    let dev = device_id.map(str::to_string);
+    let id2 = id.clone();
+    let class_id = input.class_id.clone();
+    let cs = input.class_subject_id.clone();
+    let kind_s = kind.as_key().to_string();
+    let text = input.text.clone();
+
+    with_write(conn, &ctx, move |tx| {
+        tx.execute(
+            "INSERT INTO homework_note(id,class_id,class_subject_id,kind,text,attachments_json,shared_json,created_by,school_id,created_at,updated_at,updated_by_staff,updated_by_device,sync_state) \
+             VALUES (?1,?2,?3,?4,?5,?6,'[]',?7,?8,?9,?9,?7,?10,?11)",
+            params![id2, class_id, cs, kind_s, text, attachments_json, actor_s.id, school_id, now, dev, sync_state],
+        )?;
+        let audit = AuditEntry {
+            at: now.clone(), staff_id: Some(actor_s.id.clone()), action: "save_homework_note".into(),
+            table: Some("homework_note".into()), record_id: Some(id2.clone()),
+            after_json: Some(serde_json::json!({ "class_id": class_id, "kind": kind_s }).to_string()),
+            ..Default::default()
+        };
+        let op = Op {
+            op_id: new_id("op"), hlc: now.clone(), device_id: dev.clone().unwrap_or_default(), staff_id: actor_s.id.clone(),
+            audience: format!("class:{class_id}"), table: "homework_note".into(), record_id: id2.clone(), kind: "insert".into(),
+            payload: serde_json::json!({ "class_id": class_id, "class_subject_id": cs }).to_string(),
+            base_version: None, server_epoch: 1,
+        };
+        Ok(Effect { value: (), audit, op })
+    })?;
+    let now2 = now_iso();
+    let sql = format!("{NOTE_SELECT} WHERE h.id=?1");
+    conn.query_row(&sql, params![id], |r| note_dto(r, &actor_s.id, &now2)).optional()?.ok_or_else(CmdError::not_found)
+}
+
+/// Delete one's own note within 24 h (audited). Principal may delete any.
+pub fn delete_homework_note_logic(conn: &mut Connection, actor_s: &SessionStaff, id: &str) -> CmdResult<()> {
+    let actor = actor_from(conn, actor_s)?;
+    require_module_enabled(conn, vidya_core::modules::Module::Classroom)?;
+    let (created_by, created_at, class_id): (Option<String>, String, String) = conn
+        .query_row("SELECT created_by, created_at, class_id FROM homework_note WHERE id=?1", params![id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+        .optional()?
+        .ok_or_else(CmdError::not_found)?;
+    let is_author = created_by.as_deref() == Some(actor_s.id.as_str());
+    let now = now_iso();
+    // Principal may delete any note; a teacher only their own within 24 h.
+    let allowed = if actor.role == Role::Principal {
+        require_allow(&actor, Action::ManageNotes, &Target { kind: TargetKind::Attendance, class_id: Some(class_id), ..Default::default() }).is_ok()
+    } else {
+        vidya_core::notes::can_delete_own(is_author, elapsed_ms(&created_at, &now))
+    };
+    if !allowed {
+        return Err(CmdError::forbidden("not_deletable"));
+    }
+    conn.execute("DELETE FROM homework_note WHERE id=?1", params![id])?;
+    audit_action(conn, AuditEntry {
+        at: now, staff_id: Some(actor_s.id.clone()), action: "delete_homework_note".into(),
+        table: Some("homework_note".into()), record_id: Some(id.to_string()), ..Default::default()
+    })?;
+    Ok(())
+}
+
+#[derive(Debug, Serialize)]
+pub struct NoteShareResult {
+    pub queued: i64,
+    pub skipped_no_email: i64,
+    pub skipped_no_consent: i64,
+}
+
+/// Email a note to the class's parents (queued through the P14 pipeline; the
+/// school PC sends when online). Consent-gated (`messages`), guardian's language.
+#[allow(clippy::type_complexity)]
+pub fn email_homework_note_logic(conn: &mut Connection, actor_s: &SessionStaff, device_id: Option<&str>, device_mode: DeviceMode, id: &str) -> CmdResult<NoteShareResult> {
+    let actor = actor_from(conn, actor_s)?;
+    let (class_id, kind, text): (String, String, String) = conn
+        .query_row("SELECT class_id, kind, text FROM homework_note WHERE id=?1", params![id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+        .optional()?
+        .ok_or_else(CmdError::not_found)?;
+    require_allow(&actor, Action::ManageNotes, &Target { kind: TargetKind::Attendance, class_id: Some(class_id.clone()), ..Default::default() })?;
+    require_module_enabled(conn, vidya_core::modules::Module::Classroom)?;
+
+    // Primary guardians of students currently enrolled in the class.
+    let guardians: Vec<(String, Option<String>, Option<String>, String, bool)> = {
+        let mut stmt = conn.prepare(
+            "SELECT g.id, g.email, g.language, g.name, COALESCE((SELECT 1 FROM consent c WHERE c.student_id=sg.student_id AND c.purpose='messages' AND c.withdrawn_at IS NULL LIMIT 1),0) \
+             FROM student_guardian sg JOIN guardian g ON g.id=sg.guardian_id \
+             JOIN enrollment e ON e.student_id=sg.student_id AND e.to_date IS NULL \
+             WHERE e.class_id=?1 AND sg.is_primary=1",
+        )?;
+        let rows = stmt.query_map(params![class_id], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?, r.get::<_, Option<String>>(2)?, r.get::<_, String>(3)?, r.get::<_, i64>(4)? != 0))
+        })?
+        .collect::<rusqlite::Result<Vec<(String, Option<String>, Option<String>, String, bool)>>>()?;
+        rows
+    };
+    let now = now_iso();
+    let school_id = single_school_id(conn)?;
+    let subject = if kind == "homework" { "Homework" } else { "Class notes" };
+    let mut queued = 0i64;
+    let mut skipped_no_email = 0i64;
+    let mut skipped_no_consent = 0i64;
+    let ctx = WriteCtx { mode: device_mode };
+    let dev = device_id.map(str::to_string);
+
+    let tx = conn.transaction()?;
+    for (gid, email, language, _name, has_consent) in &guardians {
+        if !has_consent {
+            skipped_no_consent += 1;
+            continue;
+        }
+        if email.as_deref().unwrap_or("").is_empty() {
+            skipped_no_email += 1;
+            continue;
+        }
+        let lang = language.clone().unwrap_or_else(|| "en".into());
+        insert_message_in_tx(
+            &tx, ctx.mode, &actor_s.id, dev.as_deref(), "email", "homework", &lang,
+            Some(gid), None, email.as_deref(), Some(subject), Some(&text),
+            Some("homework_note"), Some(id), "queued", school_id.as_deref(), &now,
+        )?;
+        queued += 1;
+    }
+    // Record the share on the note.
+    tx.execute(
+        "UPDATE homework_note SET shared_json=?1, updated_at=?2 WHERE id=?3",
+        params![serde_json::json!([{ "channel": "email", "at": now, "count": queued }]).to_string(), now, id],
+    )?;
+    tx.commit()?;
+    Ok(NoteShareResult { queued, skipped_no_email, skipped_no_consent })
+}
+
 // ============================================================= receipts =======
 //
 // Receipt search / open (full receipt data incl. amount in words en+hi, heads
@@ -9437,5 +9687,59 @@ mod tests {
         assign_substitute_logic(&mut c, &principal(), "2026-09-23", "stf-meena", "stf-anita").unwrap();
         let n: i64 = c.query_row("SELECT COUNT(*) FROM notification WHERE staff_id='stf-anita' AND kind='substitute'", [], |r| r.get(0)).unwrap();
         assert_eq!(n, 1, "substitute is notified");
+    }
+
+    // ---- Classroom: homework & notes (P16 Step 3) ------------------------
+
+    fn note_input(class_id: &str, cs: Option<&str>, kind: &str, text: &str, sizes: &[i64]) -> HomeworkNoteInput {
+        HomeworkNoteInput {
+            class_id: class_id.into(),
+            class_subject_id: cs.map(str::to_string),
+            kind: kind.into(),
+            text: text.into(),
+            attachments: sizes.iter().enumerate().map(|(i, s)| AttachmentMeta {
+                name: format!("f{i}.pdf"), size: *s, mime: "application/pdf".into(), drive_file_id: None, local_hash: None,
+            }).collect(),
+        }
+    }
+
+    #[test]
+    fn homework_note_save_list_delete_and_size_limits() {
+        let mut c = seeded();
+        // Meena teaches V-A English; she posts homework.
+        let note = save_homework_note_logic(&mut c, &meena(), Some("dev-a3"), DeviceMode::Client,
+            &note_input("cls-5a", Some("cs-5a-eng"), "homework", "Do exercise 5.2", &[])).unwrap();
+        let hist = list_homework_notes_logic(&mut c, &meena(), "cls-5a").unwrap();
+        assert_eq!(hist.len(), 1);
+        assert!(hist[0].can_delete, "the author can delete within 24h");
+
+        // A teacher unrelated to VII-B cannot post to it (Anita teaches neither a
+        // subject in VII-B nor is its class teacher).
+        assert!(save_homework_note_logic(&mut c, &teacher_anita(), None, DeviceMode::Server,
+            &note_input("cls-7b", None, "homework", "x", &[])).is_err());
+
+        // A single 11 MB attachment is rejected (≤ 10 MB each).
+        assert!(save_homework_note_logic(&mut c, &meena(), None, DeviceMode::Server,
+            &note_input("cls-5a", Some("cs-5a-eng"), "notes", "", &[11_000_000])).is_err());
+
+        // Anita (not the author) cannot delete Meena's note; Meena can.
+        assert!(delete_homework_note_logic(&mut c, &teacher_anita(), &note.id).is_err());
+        assert!(delete_homework_note_logic(&mut c, &meena(), &note.id).is_ok());
+        assert!(list_homework_notes_logic(&mut c, &meena(), "cls-5a").unwrap().is_empty());
+    }
+
+    #[test]
+    fn email_homework_note_queues_only_for_consenting_parents() {
+        let mut c = seeded();
+        let sid: String = c.query_row("SELECT student_id FROM enrollment WHERE class_id='cls-5a' AND to_date IS NULL LIMIT 1", [], |r| r.get(0)).unwrap();
+        c.execute("INSERT INTO guardian(id,name,mobile,email,language,created_at,updated_at,sync_state) VALUES ('g-t','Parent','9800000000','p@example.com','en','t','t','confirmed')", []).unwrap();
+        c.execute("INSERT INTO student_guardian(id,student_id,guardian_id,is_primary,created_at,updated_at,sync_state) VALUES ('sg-t',?1,'g-t',1,'t','t','confirmed')", params![sid]).unwrap();
+        c.execute("INSERT INTO consent(id,student_id,guardian_id,purpose,method,recorded_at) VALUES ('cn-t',?1,'g-t','messages','in_person','t')", params![sid]).unwrap();
+        let note = save_homework_note_logic(&mut c, &meena(), None, DeviceMode::Server,
+            &note_input("cls-5a", Some("cs-5a-eng"), "homework", "Read chapter 5", &[])).unwrap();
+        let r = email_homework_note_logic(&mut c, &meena(), None, DeviceMode::Server, &note.id).unwrap();
+        assert_eq!(r.queued, 1, "one consenting parent with an email");
+        let n: i64 = c.query_row("SELECT COUNT(*) FROM message WHERE channel='email' AND kind='homework' AND related_id=?1", params![note.id], |r| r.get(0)).unwrap();
+        assert_eq!(n, 1);
     }
 }

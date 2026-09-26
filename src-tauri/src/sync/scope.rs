@@ -236,6 +236,10 @@ pub fn visible_row(conn: &Connection, actor: &Actor, table: &str, id: &str) -> r
                         .optional()?;
                     Ok(if who.is_some() { mk(row, None) } else { None })
                 }
+                "homework_note" => {
+                    let cid: Option<String> = conn.query_row("SELECT class_id FROM homework_note WHERE id=?1", [id], |r| r.get(0)).optional()?;
+                    Ok(if cid.map(|c| classes.contains(&c)).unwrap_or(false) { mk(row, None) } else { None })
+                }
                 "guardian" => {
                     // Guardian of one of the teacher's students → name+mobile only.
                     if guardian_visible_to_teacher(conn, &classes, id)? {
@@ -334,7 +338,7 @@ pub fn snapshot(conn: &Connection, actor: &Actor) -> rusqlite::Result<Vec<Change
                       "ledger_account", "voucher", "ledger_entry", "expense", "expense_reversal",
                       "salary_structure", "staff_advance", "salary_run", "salary_line",
                       "store_item", "store_sale", "stock_move",
-                      "timetable_slot", "substitution",
+                      "timetable_slot", "substitution", "homework_note",
                       "marks_sheet", "mark_entry", "exam", "exam_subject"] {
                 for id in ids_of(conn, &format!("SELECT id FROM {t}"), &[])? {
                     push(conn, t, &id, None)?;
@@ -424,6 +428,10 @@ pub fn snapshot(conn: &Connection, actor: &Actor) -> rusqlite::Result<Vec<Change
             // substitute's assigned class shows up and their attendance grant works.
             for id in ids_of(conn, "SELECT id FROM substitution WHERE substitute_teacher_id=?1 OR absent_teacher_id=?1", &[&actor.staff_id])? {
                 push(conn, "substitution", &id, None)?;
+            }
+            // Homework & notes history for the teacher's classes.
+            for id in ids_of(conn, &format!("SELECT id FROM homework_note WHERE class_id IN ({ph})"), cargs.as_slice())? {
+                push(conn, "homework_note", &id, None)?;
             }
         }
     }

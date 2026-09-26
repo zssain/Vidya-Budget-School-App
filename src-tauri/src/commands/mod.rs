@@ -86,6 +86,10 @@ pub const COMMANDS: &[&str] = &[
     "save_periods",
     "substitute_plan",
     "assign_substitute",
+    "list_homework_notes",
+    "save_homework_note",
+    "delete_homework_note",
+    "email_homework_note",
     "get_receipt",
     "search_receipts",
     "reverse_payment",
@@ -626,6 +630,34 @@ pub fn substitute_plan(state: State<RtCtx>, date: String, absent_teacher_id: Str
 pub fn assign_substitute(state: State<RtCtx>, date: String, absent_teacher_id: String, substitute_teacher_id: String) -> CmdResult<AssignSubstituteResult> {
     let actor = state.require_session()?;
     state.with_db(|conn| assign_substitute_logic(conn, &actor, &date, &absent_teacher_id, &substitute_teacher_id))
+}
+
+#[tauri::command]
+pub fn list_homework_notes(state: State<RtCtx>, class_id: String) -> CmdResult<Vec<HomeworkNoteDto>> {
+    let actor = state.require_session()?;
+    state.with_db(|conn| list_homework_notes_logic(conn, &actor, &class_id))
+}
+
+#[tauri::command]
+pub fn save_homework_note(state: State<RtCtx>, input: HomeworkNoteInput) -> CmdResult<HomeworkNoteDto> {
+    let actor = state.require_session()?;
+    let device_id = state.device_id.lock().map_err(|_| crate::error::CmdError::internal("lock"))?.clone();
+    let mode = state.device_mode;
+    state.with_db(|conn| save_homework_note_logic(conn, &actor, device_id.as_deref(), mode, &input))
+}
+
+#[tauri::command]
+pub fn delete_homework_note(state: State<RtCtx>, id: String) -> CmdResult<()> {
+    let actor = state.require_session()?;
+    state.with_db(|conn| delete_homework_note_logic(conn, &actor, &id))
+}
+
+#[tauri::command]
+pub fn email_homework_note(state: State<RtCtx>, id: String) -> CmdResult<NoteShareResult> {
+    let actor = state.require_session()?;
+    let device_id = state.device_id.lock().map_err(|_| crate::error::CmdError::internal("lock"))?.clone();
+    let mode = state.device_mode;
+    state.with_db(|conn| email_homework_note_logic(conn, &actor, device_id.as_deref(), mode, &id))
 }
 
 // -------------------------------------------------------------- receipts ------

@@ -78,8 +78,11 @@ export default function TeacherTimetableScreen() {
         })}
       </div>
 
-      <div style={{ flexShrink: 0, background: '#FDFDFB', borderTop: '1px solid #D5DDE0', padding: '12px 16px 16px' }}>
-        <button type="button" onClick={() => setDutyOpen(true)} style={{ width: '100%', height: 52, borderRadius: 6, border: '1px solid var(--line-strong)', background: 'var(--surface)', color: 'var(--ink)', fontSize: 15, fontWeight: 500 }}>
+      <div style={{ flexShrink: 0, background: '#FDFDFB', borderTop: '1px solid #D5DDE0', padding: '12px 16px 16px', display: 'flex', flexDirection: 'column', gap: 8 }}>
+        <button type="button" onClick={() => navigate('/teacher/notes')} style={{ width: '100%', height: 48, borderRadius: 6, border: '1px solid var(--line-strong)', background: 'var(--surface)', color: 'var(--ink)', fontSize: 15, fontWeight: 500 }}>
+          {t('notes.title')}
+        </button>
+        <button type="button" onClick={() => setDutyOpen(true)} style={{ width: '100%', height: 48, borderRadius: 6, border: '1px solid var(--line-strong)', background: 'var(--surface)', color: 'var(--ink)', fontSize: 15, fontWeight: 500 }}>
           {t('tt.duty.request')}
         </button>
       </div>
