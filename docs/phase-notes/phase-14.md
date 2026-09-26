@@ -1,11 +1,11 @@
 # Phase 14 handoff — Communication (UPI QR, email, WhatsApp, absence alerts, fee reminders, circulars)
 
 > **Status: IN PROGRESS.** Steps 0, 1, the Step 2 **foundation**, **Step 3** core (MIME +
-> send queue), **Step 4**, and **Step 5** are built, tested and committed. Steps 2 (Android
-> native), 3-live (real Gmail client, gated on the P12 OAuth spike), 6, 7 and the Playwright
-> fidelity of Step 8 are **specced in detail below and not yet built** — a scoped runway, the
-> way P12/P13 handed off partial phases. Every committed increment is genuinely working and
-> green; nothing is marked "done" that isn't.
+> send queue), **Step 4**, **Step 5**, and **Step 6** are built, tested and committed. Step 7
+> (auto-WhatsApp), Step 2 (Android native), 3-live (real Gmail client, gated on the P12 OAuth
+> spike), and the Playwright fidelity of Step 8 are **specced below and not yet built** — a
+> scoped runway, the way P12/P13 handed off partial phases. Every committed increment is
+> genuinely working and green; nothing is marked "done" that isn't.
 
 ## Start state / environment
 - Branch `v2/p14`, cut from `v2/p13` @ `71b0658`. HEAD at write time `ab46f3f`.
@@ -24,6 +24,7 @@
   | `863fc6b` | 5 — Fee dues screen + reminder sheet |
   | `be24f36` | 3 — email sender testable core (MIME + send queue) |
   | `8787320` | 4 — absence alerts (phone + SendAbsenceAlert) |
+  | `c3a4aa2` | 6 — circulars & notices (compose, numbering, read tracking) |
 
 ## Owner decisions taken this phase
 - **#13 Gmail (`gmail.send`) → decided (interim): run the OAuth app in Testing mode now**,
@@ -198,22 +199,26 @@ compose-side wire-up.
   guardian names and 0 emailable. A seed guardian backfill is a small follow-up (also helps the
   Playwright `feesadmin` fidelity + a richer demo). Real data is unaffected.
 
-### Step 6 — Circulars & notices (module `circulars`, on by default)
-- **Migration 0018**: `circular(id, number, title, body, languages_json, audience_json,
-  channels_json, attachments_json, status draft|pending_approval|sent, created_by, approved_by,
-  sent_at, calendar_event_id NULL, + sync/`school_id` columns)`, `circular_read(circular_id,
-  staff_id, read_at, …)`. Add both to `sync/scope::module_of_table` → `Some("circulars")` and to
-  the role scopes (circular → all staff by audience; circular_read → own). Number assigned on the
-  **server** at send via `vidya_core::numbering::next_no(Circular, session)` → `CIR/2026-27/014`.
-- New actions `ManageCirculars` (Circulars module; Principal) + `DraftClassNotice` (Circulars;
-  Teacher → a `class_notice` request the Principal approves — the request type already exists from
-  P13). Compose (prototype `circulars` state 1): title, message, audience (whole school / classes /
-  staff only), per-language bodies (hi/te optional), attachment, channels (staff app, parent
-  WhatsApp groups via share, email, printed notice, automatic WhatsApp if on), optional "Add to
-  calendar". Sent view (state 2): channel summary + staff "Read by N of M" + "Remind" (in-app
-  notification). Staff phones Inbox (prototype `staffday` state 4) → "Mark as read" writes a
-  `circular_read` op. Printed notice via the print engine (A4 letterhead, number, date, chosen
-  language, optional tear-off slip). WhatsApp groups: one "Share" per class, each marked `tapped`.
+### Step 6 — Circulars & notices (DONE, committed `c3a4aa2`) — core built
+- **Migration 0018**: `circular` (status draft|pending_approval|sent, `number`, audience/channels/
+  languages_json, `calendar_event_id`, + sync/`school_id`) + `circular_read` (UNIQUE per staff).
+  Both under the `circulars` module in `scope::module_of_table`.
+- **vidya-core**: `ManageCirculars` (Principal) + `DraftClassNotice` (Teacher →
+  `NeedsRequest(ClassNotice)` — the `class_notice` request type exists from P13). Accountant denied
+  both. `ALL` 42→44 (test updated). `module_for` → `Module::Circulars`.
+- **app**: `list` / `save` (draft) / `send` / `mark_circular_read`. **Send assigns the server
+  number `CIR/<session>/NNN` atomically** (`numbering::next_no(Circular)`), sets `status=sent`;
+  `mark_circular_read` idempotent. All gated by `require_module(circulars)` + permission. Scope:
+  Principal all; other staff only **sent** circulars (their inbox); `circular_read` own.
+- **frontend**: Circulars nav item (School group, `inbox` icon — no circulars icon in the mock
+  set, rule 6) + `CircularsScreen` (list + compose: title/message/audience/languages/channels +
+  Save draft / Send; Sent view: channel summary + "Read by N of M" bar). i18n bundle en/hi.
+- **Deferred (documented):** the **teacher class-notice approval flow** (`DraftClassNotice` →
+  `class_notice` request → Principal approves → sent), **send-time channel fan-out** (queue guardian
+  emails / wa-group taps / printed notice / `wa_auto`), the **per-staff read list + "Remind"**, the
+  **printed notice with tear-off slip**, **"Add to calendar"**, and the **staff phone Inbox screen**
+  (`staffday` 4 — the `mark_circular_read` backend is done, the phone UI is not). Pixel fidelity on
+  the canonical machine.
 
 ### Step 7 — Automatic WhatsApp (module `wa_auto`, off by default)
 - **[VERIFY still owed]** current Meta WhatsApp **Cloud API** send endpoint + Graph API version,
@@ -243,10 +248,12 @@ compose-side wire-up.
 
 ## Tests (all real, this session)
 - `cargo test -p vidya-core --lib` → **362 passed** (upi **11**, messages **8**, +permissions
-  SendFeeReminder/SendAbsenceAlert); `cargo test -p vidya --lib` → **232 passed / 0 failed** (was
-  215 at P13 tip; +3 messaging, +5 Step 5, +8 Step 3 email, +2 Step 4 absence).
+  SendFeeReminder/SendAbsenceAlert/ManageCirculars/DraftClassNotice); `cargo test -p vidya --lib`
+  → **234 passed / 0 failed** (was 215 at P13 tip; +3 messaging, +5 Step 5, +8 Step 3 email, +2
+  Step 4 absence, +2 Step 6 circulars). `migrations_apply_and_are_idempotent` green (0018).
 - **Changed existing test expectation (P14):** `permissions::…action_all_covers…` `ALL.len()`
-  40→**42** (added `SendFeeReminder`, `SendAbsenceAlert`). No other existing test value changed.
+  40→**44** (added `SendFeeReminder`, `SendAbsenceAlert`, `ManageCirculars`, `DraftClassNotice`).
+  No other existing test value changed.
 - `cargo clippy -p vidya -p vidya-core --lib -- -D warnings` → clean.
 - `npm run typecheck` clean; `check:i18n` **990 keys en/hi in sync**; `check:hex` OK (42 tokens,
   no new colours); `api.test.ts` command parity green (COMMANDS ↔ commands.json ↔ api.ts).
