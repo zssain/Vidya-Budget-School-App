@@ -1,10 +1,11 @@
 # Phase 14 handoff — Communication (UPI QR, email, WhatsApp, absence alerts, fee reminders, circulars)
 
-> **Status: IN PROGRESS.** Steps 0, 1, the Step 2 **foundation**, and **Step 5** are
-> built, tested and committed. Steps 2 (Android native), 3, 4, 6, 7 and the Playwright
-> fidelity of Step 8 are **specced in detail below and not yet built** — a scoped runway,
-> the way P12/P13 handed off partial phases. Every committed increment is genuinely
-> working and green; nothing is marked "done" that isn't.
+> **Status: IN PROGRESS.** Steps 0, 1, the Step 2 **foundation**, **Step 5**, and the
+> **Step 3 testable core** (MIME + send queue) are built, tested and committed. Steps 2
+> (Android native), 3-live (real Gmail client, gated on the P12 OAuth spike), 4, 6, 7 and
+> the Playwright fidelity of Step 8 are **specced in detail below and not yet built** — a
+> scoped runway, the way P12/P13 handed off partial phases. Every committed increment is
+> genuinely working and green; nothing is marked "done" that isn't.
 
 ## Start state / environment
 - Branch `v2/p14`, cut from `v2/p13` @ `71b0658`. HEAD at write time `ab46f3f`.
@@ -21,6 +22,7 @@
   | `ab46f3f` | 2 (part) — message outbox foundation + desktop tap-to-WhatsApp |
   | `abe535f` | interim handoff + OWNER-DECISIONS #13 |
   | `863fc6b` | 5 — Fee dues screen + reminder sheet |
+  | `be24f36` | 3 — email sender testable core (MIME + send queue) |
 
 ## Owner decisions taken this phase
 - **#13 Gmail (`gmail.send`) → decided (interim): run the OAuth app in Testing mode now**,
@@ -128,27 +130,32 @@ present — a Rule-3 doc/code discrepancy, reported). Step 2's phone share sheet
 
 ## Steps 3–7 — SPECCED, NOT YET BUILT (design worked out; foundation is ready)
 
-### Step 3 — Email sender (school PC only), Testing mode (owner #13)
-- Add `https://www.googleapis.com/auth/gmail.send` to the **sync-account** OAuth request
-  (currently `drive.file` only). Settings → Google Drive shows "Email: allowed / needs sign-in
-  again" (re-consent). *(The live Drive/OAuth client itself is still spike-gated from P12 — see
-  P12 handoff Step 0; the Gmail scope rides on the same client when it lands.)*
-- **Sender service on the server** (a tokio loop like the Drive import loop in
-  `server/start.rs`): take `message` rows with `channel='email'` + `status='queued'`, build MIME
-  **by hand** (UTF-8 subject per RFC 2047 `=?UTF-8?B?…?=`; `multipart/related` with the QR PNG
-  inline via `cid:`; `multipart/mixed` for attachments ≤ 20 MB total), base64url the message,
-  `POST users/me/messages/send`, mark `sent` (+ `provider_ref` = returned id) or `failed` (+ the
-  exact error). Rate **1 msg / 2 s**; daily cap setting (default **400**, never above the
-  account's real limit); remaining queue continues next day with a visible note. Guardians with
-  no `messages` consent or no email are **skipped with a reason** (`vidya_core::messages::can_message`).
-- From-name = school name; reply-to = school email if set.
-- **Tests (runnable here):** MIME builder unit + snapshot tests (Hindi/Telugu subjects — RFC-2047);
-  daily-cap counter; consent-skip; an integration test with a **fake Gmail API** (a trait the
-  sender calls, real impl = `reqwest`, test impl = in-memory) proving offline `queued` → synced →
-  server sends → status back. **Not verifiable live here** (needs the real OAuth client) → mark
-  "not verified live."
-- QR-as-PNG: render the SVG to PNG in the webview canvas (no new crate) when composing the email,
-  attach the PNG bytes (base64) to the `message` row (`attachments_json`).
+### Step 3 — Email sender, Testing mode (owner #13) — CORE DONE (`be24f36`); live wiring gated
+**Built + tested (`src-tauri/src/email.rs`, 8 tests):**
+- `build_mime` — hand-built RFC 2822: **RFC-2047** `=?UTF-8?B?…?=` subject/from (Hindi/Telugu),
+  base64 bodies, **`multipart/related`** with the inline QR PNG (`cid:qrcode`), **`multipart/mixed`**
+  for attachments; `to_raw` = base64url for Gmail's `raw`. Date + boundary are passed in → output
+  is deterministic and snapshot-testable.
+- `GmailSender` trait + `FakeGmail` (mirrors `sync::drive::DriveApi`, so the live client and the
+  fake are interchangeable). `GmailError` = RateLimited / DailyLimit / TokenRevoked / Io.
+- `send_queued_emails` — drains `channel='email' status='queued'`: builds MIME, sends, marks
+  **`sent`** (+ provider id) / **`failed`** (+ exact error), skips no-email / withdrawn-consent
+  with a counted reason, honours the **daily cap** (default 400, < the ~500/day free-Gmail limit),
+  stops on cap / rate-limit / revoked (leaving rows `queued`), and appends a status **op** so
+  devices sync the honest status. `email_config` (from-name = school, from = connected sync Gmail,
+  reply-to, cap from `settings_json.email_daily_cap`) + `drain_queue` (background-task entry;
+  **no-op without a connected sync account**). `GMAIL_SEND_SCOPE` / `GMAIL_SEND_ENDPOINT` constants.
+
+**NOT built / not verified live (gated on the P12 OAuth spike):** the real `reqwest` Gmail client
+(a `GmailSender` impl that POSTs to `GMAIL_SEND_ENDPOINT` with the sync account's bearer token), the
+**timer** in `server/start.rs` that calls `drain_queue` at 1 msg / 2 s when online, adding
+`gmail.send` to the sync-account **OAuth consent** (re-consent), and the Settings → Google Drive
+"Email: allowed / needs sign-in again" indicator (deferred with the P12 Drive UI). The queued rows
+Step 5 creates therefore accumulate honestly as `queued` until that client lands.
+
+**Enhancement:** inline-QR emails need the webview to render the SVG→PNG (no new crate) and put the
+PNG bytes in `message.attachments_json`; the MIME builder already accepts `qr_png`, so this is a
+compose-side wire-up.
 
 ### Step 4 — Absence alerts (phone + desktop register)
 - New action `SendAbsenceAlert` (Core module; **class teacher of the target class + Principal**;
@@ -233,9 +240,9 @@ present — a Rule-3 doc/code discrepancy, reported). Step 2's phone share sheet
 
 ## Tests (all real, this session)
 - `cargo test -p vidya-core --lib` → **362 passed** (upi **11**, messages **8**, +permissions
-  SendFeeReminder); `cargo test -p vidya --lib` → **222 passed / 0 failed** (was 215 at P13 tip;
-  +3 messaging, +5 Step 5: `inr` grouping, dues list + reminder queue + skip, no-UPI toggle,
-  teacher forbidden).
+  SendFeeReminder); `cargo test -p vidya --lib` → **230 passed / 0 failed** (was 215 at P13 tip;
+  +3 messaging, +5 Step 5, +8 Step 3 email: MIME plain/utf-8-subject/related+mixed, base64url,
+  send loop sent+op / skip-no-email+cap / rate-limit-stop / drain-noop-then-send).
 - **Changed existing test expectation (P14):** `permissions::…action_all_covers…` `ALL.len()`
   40→41 (added `SendFeeReminder`). No other existing test value changed.
 - `cargo clippy -p vidya -p vidya-core --lib -- -D warnings` → clean.
