@@ -29,6 +29,7 @@ const errors: Bundle = {
     'error.LEASE_EXPIRED': 'Connect to your school to continue.',
     'error.EPOCH_OLD': 'This computer is no longer the school server.',
     'error.INTERNAL': 'Something went wrong. Please try again.',
+    'error.ATTACHMENT_TAMPER': 'This photo could not be verified and may be damaged.',
     'error.DB_KEY_MISSING': "This device's key is missing. Recover to continue.",
 
     // Licence activation copy (prompt Step 3, verbatim).
@@ -132,6 +133,7 @@ errors.hi = {
   'error.LEASE_EXPIRED': 'जारी रखने के लिए अपने स्कूल से जुड़ें।',
   'error.EPOCH_OLD': 'यह कंप्यूटर अब स्कूल सर्वर नहीं है।',
   'error.INTERNAL': 'कुछ गड़बड़ हो गई। कृपया फिर कोशिश करें।',
+  'error.ATTACHMENT_TAMPER': 'यह फ़ोटो सत्यापित नहीं हो सकी और क्षतिग्रस्त हो सकती है।',
   'error.DB_KEY_MISSING': 'इस डिवाइस की कुंजी गायब है। जारी रखने के लिए पुनर्प्राप्त करें।',
 
   // Licence activation copy.

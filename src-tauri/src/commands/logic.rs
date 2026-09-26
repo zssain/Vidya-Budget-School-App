@@ -1914,6 +1914,20 @@ pub struct ExpenseAccountDto {
     pub name_hi: Option<String>,
 }
 
+/// Permission gate for saving an attachment (bill photo): a finance write.
+pub fn check_attachment_write(conn: &mut Connection, actor_s: &SessionStaff) -> CmdResult<()> {
+    let actor = actor_from(conn, actor_s)?;
+    require_allow(&actor, Action::RecordExpense, &Target::of(TargetKind::Fee))?;
+    require_module_enabled(conn, vidya_core::modules::Module::Accounts)
+}
+
+/// Permission gate for reading an attachment: a finance view.
+pub fn check_attachment_read(conn: &mut Connection, actor_s: &SessionStaff) -> CmdResult<()> {
+    let actor = actor_from(conn, actor_s)?;
+    require_allow(&actor, Action::ViewAccounts, &Target::of(TargetKind::Fee))?;
+    require_module_enabled(conn, vidya_core::modules::Module::Accounts)
+}
+
 /// Active expense ledger accounts, for the Record-expense category chips.
 pub fn list_expense_accounts_logic(conn: &mut Connection, actor_s: &SessionStaff) -> CmdResult<Vec<ExpenseAccountDto>> {
     let actor = actor_from(conn, actor_s)?;
@@ -1965,6 +1979,10 @@ pub struct ExpenseDto {
     /// True when a cash expense would drive cash in hand negative (a warning that
     /// the save still succeeded — [OWNER default]).
     pub cash_warning: bool,
+    /// Whether the bill photo blob is present locally (P15 Step 2). `false` when
+    /// there is a `bill_attachment` hash but the blob hasn't arrived yet → the UI
+    /// shows "photo not yet received". Set by the command wrapper from the store.
+    pub bill_received: bool,
 }
 
 pub fn record_expense_logic(
@@ -2079,6 +2097,7 @@ pub fn record_expense_logic(
         confirmed,
         reversed: false,
         cash_warning,
+        bill_received: input.bill_attachment.is_some(),
     })
 }
 
@@ -2112,6 +2131,7 @@ pub fn list_expenses_logic(conn: &mut Connection, actor_s: &SessionStaff, from: 
                 confirmed: r.get::<_, String>(10)? == "confirmed",
                 reversed: r.get::<_, i64>(11)? != 0,
                 cash_warning: false,
+                bill_received: false, // set by the command wrapper from the store
             })
         })?
         .collect::<rusqlite::Result<_>>()?;
@@ -8149,6 +8169,28 @@ mod tests {
         assert_eq!(pay_salaries_logic(&mut c, &principal(), Some("dev-a1"), DeviceMode::Server, "2026-09", "bank", &days).unwrap().paid, 0);
         // Accountant cannot manage salary.
         assert!(salary_register_logic(&mut c, &accountant(), "2026-09", &[]).is_err());
+    }
+
+    #[test]
+    fn expense_with_bill_photo_confirms_voucher_and_blob() {
+        // Step 8: an (offline-)recorded expense with a photo → the server confirms
+        // both the voucher and the encrypted blob. Single-PC Server mode here.
+        let mut c = seeded();
+        let dir = std::env::temp_dir().join(format!("vidya-att-int-{}", uuid::Uuid::now_v7()));
+        let store = crate::attachments::AttachmentStore::new(&dir, KEY);
+        let hash = store.put(b"a compressed bill jpeg").unwrap();
+        assert!(store.has(&hash), "blob stored");
+
+        let exp = record_expense_logic(
+            &mut c, &accountant(), Some("dev-a2"), DeviceMode::Server, "2026-09-23",
+            &ExpenseInput { category_account_id: "repairs".into(), amount_paise: 120_000, paid_via: "cash".into(), details: Some("Fan".into()), vendor: None, bill_attachment: Some(hash.clone()), spent_on: Some("2026-09-23".into()) },
+        ).unwrap();
+        assert!(exp.confirmed && exp.voucher_no.is_some(), "voucher confirmed");
+        // The expense row references the blob hash…
+        let stored: Option<String> = c.query_row("SELECT bill_attachment FROM expense WHERE id=?1", params![exp.id], |r| r.get(0)).unwrap();
+        assert_eq!(stored.as_deref(), Some(hash.as_str()));
+        // …and the blob is present + decryptable (tamper-verified) locally.
+        assert_eq!(store.get(&hash).unwrap().unwrap(), b"a compressed bill jpeg");
     }
 
     #[test]

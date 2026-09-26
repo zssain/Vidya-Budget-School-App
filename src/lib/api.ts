@@ -315,6 +315,7 @@ export interface ExpenseDto {
   confirmed: boolean
   reversed: boolean
   cash_warning: boolean
+  bill_received: boolean
 }
 
 export interface PaymentDto {
@@ -907,6 +908,11 @@ export const record_expense = (input: ExpenseInput) => invoke<ExpenseDto>('recor
 export const list_expenses = (from: string, to: string) => invoke<ExpenseDto[]>('list_expenses', { from, to })
 export const reverse_expense = (expenseId: string, reason: string) =>
   invoke<void>('reverse_expense', { expenseId, reason })
+
+// Encrypted attachment store — bill photos (P15 Step 2). Bytes are the compressed
+// JPEG (device: Android plugin; desktop: webview canvas), base64-encoded.
+export const save_attachment = (dataBase64: string) => invoke<string>('save_attachment', { dataBase64 })
+export const read_attachment = (hash: string) => invoke<string | null>('read_attachment', { hash })
 
 // School accounts — cash book, opening balance, profit (P15 Step 4, prototype accounts 1/3).
 export interface OpeningBalanceDto {

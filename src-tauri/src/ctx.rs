@@ -69,4 +69,11 @@ impl RtCtx {
     pub fn db_path(&self) -> PathBuf {
         self.data_dir.join("vidya.db")
     }
+
+    /// The encrypted attachment store (bill photos, P15). Errors if the DB key is
+    /// unavailable (attachments are encrypted with a key derived from it).
+    pub fn attachment_store(&self) -> CmdResult<crate::attachments::AttachmentStore> {
+        let key = self.db_key_hex.as_deref().ok_or_else(|| CmdError::internal("db key missing"))?;
+        Ok(crate::attachments::AttachmentStore::new(&self.data_dir, key))
+    }
 }

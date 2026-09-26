@@ -7,6 +7,7 @@ import { useEffect, useState } from 'react'
 import type { CSSProperties } from 'react'
 import { t } from '@/lib/i18n'
 import { formatMoney } from '@/lib/format'
+import { compressImageToJpegBase64 } from '@/lib/image'
 import * as api from '@/lib/api'
 import type { ExpenseAccountDto } from '@/lib/api'
 
@@ -33,9 +34,28 @@ export default function RecordExpenseSheet({ onClose, onSaved }: { onClose: () =
   const [paidVia, setPaidVia] = useState('cash')
   const [details, setDetails] = useState('')
   const [vendor, setVendor] = useState('')
+  const [billHash, setBillHash] = useState<string | null>(null)
+  const [billName, setBillName] = useState<string | null>(null)
+  const [billBusy, setBillBusy] = useState(false)
   const [busy, setBusy] = useState(false)
   const [warn, setWarn] = useState<string | null>(null)
   const [err, setErr] = useState<string | null>(null)
+
+  const onBill = async (file: File | undefined) => {
+    if (!file) return
+    setBillBusy(true)
+    setErr(null)
+    try {
+      const b64 = await compressImageToJpegBase64(file)
+      const hash = await api.save_attachment(b64)
+      setBillHash(hash)
+      setBillName(file.name)
+    } catch {
+      setErr(t('accounts.exp.billError'))
+    } finally {
+      setBillBusy(false)
+    }
+  }
 
   useEffect(() => {
     api.list_expense_accounts().then((c) => { setCats(c); if (c[0]) setCategory(c[0].id) }).catch(() => setCats([]))
@@ -47,7 +67,7 @@ export default function RecordExpenseSheet({ onClose, onSaved }: { onClose: () =
     setWarn(null)
     setBusy(true)
     try {
-      const dto = await api.record_expense({ category_account_id: category, amount_paise: amountPaise, paid_via: paidVia, details: details || null, vendor: vendor || null, bill_attachment: null, spent_on: null })
+      const dto = await api.record_expense({ category_account_id: category, amount_paise: amountPaise, paid_via: paidVia, details: details || null, vendor: vendor || null, bill_attachment: billHash, spent_on: null })
       if (dto.cash_warning) {
         // Honest: the expense saved, but cash in hand went negative.
         setWarn(t('accounts.exp.cashWarn'))
@@ -108,6 +128,15 @@ export default function RecordExpenseSheet({ onClose, onSaved }: { onClose: () =
             <span style={label}>{t('accounts.exp.vendor')}</span>
             <input value={vendor} onChange={(e) => setVendor(e.target.value)} style={field()} />
           </label>
+
+          {/* Bill photo — compressed on device, stored encrypted (P15 Step 2). */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }} data-hl="bill">
+            <span style={label}>{t('accounts.exp.billPhoto')}</span>
+            <label style={{ display: 'flex', gap: '12px', alignItems: 'center', padding: '12px 14px', border: '1px dashed var(--line-strong)', borderRadius: '8px', cursor: 'pointer', fontSize: '13px', color: 'var(--muted)' }}>
+              <input type="file" accept="image/*" style={{ display: 'none' }} onChange={(e) => onBill(e.target.files?.[0])} />
+              <span>{billBusy ? t('accounts.exp.billCompressing') : billName ? `✓ ${billName}` : t('accounts.exp.billChoose')}</span>
+            </label>
+          </div>
 
           {warn ? <div style={{ fontSize: '13px', color: 'var(--gold-text)', background: 'var(--unmarked)', border: '1px solid var(--gold-line)', borderRadius: '8px', padding: '10px 12px' }}>{warn}</div> : null}
           {err ? <div style={{ fontSize: '13px', color: 'var(--danger)' }}>{err}</div> : null}

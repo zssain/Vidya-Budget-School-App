@@ -223,7 +223,11 @@ function ExpensesTab({ role }: { role: Role }) {
             <div key={r.id} style={{ display: 'grid', gridTemplateColumns: cols, alignItems: 'center', padding: '13px 24px', borderTop: i > 0 ? '1px solid var(--track)' : 'none', fontSize: '14px', fontVariantNumeric: 'tabular-nums', opacity: r.reversed ? 0.55 : 1 }}>
               <span style={{ color: 'var(--muted)' }}>{r.spent_on}</span>
               <span>{r.category_name}</span>
-              <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{r.details ?? '—'}{r.reversed ? ` · ${t('accounts.exp.reversed')}` : ''}</span>
+              <span style={{ minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {r.details ?? '—'}{r.reversed ? ` · ${t('accounts.exp.reversed')}` : ''}
+                {r.bill_attachment && !r.bill_received ? <span style={{ color: 'var(--gold-text)' }}> · {t('accounts.exp.billNotReceived')}</span> : null}
+                {r.bill_received ? <span style={{ color: 'var(--muted)' }}> · {t('accounts.exp.billReceived')}</span> : null}
+              </span>
               <span style={{ textAlign: 'right', fontWeight: 500, textDecoration: r.reversed ? 'line-through' : undefined }}>{formatMoney(r.amount_paise)}</span>
               <span style={{ textAlign: 'right', color: 'var(--gold-text)' }}>{r.voucher_no ?? '—'}</span>
               {role !== 'accountant' ? (

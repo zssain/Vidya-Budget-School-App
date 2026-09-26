@@ -64,6 +64,8 @@ pub const COMMANDS: &[&str] = &[
     "record_expense",
     "list_expenses",
     "reverse_expense",
+    "save_attachment",
+    "read_attachment",
     "get_opening_balance",
     "set_opening_balance",
     "cash_book",
@@ -425,7 +427,48 @@ pub fn record_expense(state: State<RtCtx>, input: ExpenseInput) -> CmdResult<Exp
 #[tauri::command]
 pub fn list_expenses(state: State<RtCtx>, from: String, to: String) -> CmdResult<Vec<ExpenseDto>> {
     let actor = state.require_session()?;
-    state.with_db(|conn| list_expenses_logic(conn, &actor, &from, &to))
+    let mut rows = state.with_db(|conn| list_expenses_logic(conn, &actor, &from, &to))?;
+    // Mark which bill photos have arrived locally (missing → "photo not yet received").
+    if let Ok(store) = state.attachment_store() {
+        for r in &mut rows {
+            r.bill_received = r.bill_attachment.as_deref().map(|h| store.has(h)).unwrap_or(false);
+        }
+    }
+    Ok(rows)
+}
+
+#[tauri::command]
+pub fn save_attachment(state: State<RtCtx>, data_base64: String) -> CmdResult<String> {
+    use base64::Engine;
+    let actor = state.require_session()?;
+    state.with_db(|conn| check_attachment_write(conn, &actor))?;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(data_base64.as_bytes())
+        .map_err(|_| crate::error::CmdError::validation("attachment", "base64"))?;
+    let store = state.attachment_store()?;
+    store.put(&bytes).map_err(attachment_err)
+}
+
+#[tauri::command]
+pub fn read_attachment(state: State<RtCtx>, hash: String) -> CmdResult<Option<String>> {
+    use base64::Engine;
+    let actor = state.require_session()?;
+    state.with_db(|conn| check_attachment_read(conn, &actor))?;
+    let store = state.attachment_store()?;
+    match store.get(&hash).map_err(attachment_err)? {
+        Some(bytes) => Ok(Some(base64::engine::general_purpose::STANDARD.encode(bytes))),
+        None => Ok(None),
+    }
+}
+
+fn attachment_err(e: crate::attachments::AttachmentError) -> crate::error::CmdError {
+    use crate::attachments::AttachmentError as A;
+    match e {
+        A::TooLarge => crate::error::CmdError::validation("attachment", "too_large"),
+        A::Tamper => crate::error::CmdError::new("ATTACHMENT_TAMPER", "error.ATTACHMENT_TAMPER", serde_json::Value::Null),
+        A::NotFound => crate::error::CmdError::not_found(),
+        A::Io(_) => crate::error::CmdError::internal("attachment_io"),
+    }
 }
 
 #[tauri::command]

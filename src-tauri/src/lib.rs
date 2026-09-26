@@ -3,6 +3,7 @@
 //! Phase 3 adds the licence/setup/PIN command surface, the app state machine and
 //! the demo seed on top of the Phase-2 encrypted DB + audit chain + write helper.
 
+pub mod attachments;
 pub mod backup;
 pub mod calendar;
 pub mod commands;
@@ -191,6 +192,7 @@ fn invoke_handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'stat
         export_csv, students_csv_template, import_students_dry_run, import_students_commit,
         fees_overview, list_fee_heads, create_fee_head, preview_fee_head_change, update_fee_head, deactivate_fee_head,
         list_expense_accounts, record_expense, list_expenses, reverse_expense,
+        save_attachment, read_attachment,
         get_opening_balance, set_opening_balance, cash_book, profit_summary,
         salary_register, set_salary_structure, give_advance, pay_salaries,
         list_store_items, save_store_item, record_store_sale, stock_adjust,
@@ -227,6 +229,7 @@ fn invoke_handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'stat
         export_csv, students_csv_template, import_students_dry_run, import_students_commit,
         fees_overview, list_fee_heads, create_fee_head, preview_fee_head_change, update_fee_head, deactivate_fee_head,
         list_expense_accounts, record_expense, list_expenses, reverse_expense,
+        save_attachment, read_attachment,
         get_opening_balance, set_opening_balance, cash_book, profit_summary,
         salary_register, set_salary_structure, give_advance, pay_salaries,
         list_store_items, save_store_item, record_store_sale, stock_adjust,

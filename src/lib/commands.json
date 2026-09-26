@@ -40,6 +40,8 @@
     "record_expense",
     "list_expenses",
     "reverse_expense",
+    "save_attachment",
+    "read_attachment",
     "get_opening_balance",
     "set_opening_balance",
     "cash_book",
