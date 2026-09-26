@@ -240,6 +240,33 @@ fn classroom(tx: &rusqlite::Transaction) -> rusqlite::Result<()> {
             )?;
         }
     }
+
+    // Exam seating (Step 5): add V-A English to the Half-Yearly so two classes
+    // (V-A + VI-B) can be paired, plus two rooms and a small schedule.
+    tx.execute(
+        "INSERT INTO exam_subject(id,exam_id,class_subject_id,max_marks) VALUES ('es-5a-eng','exam-hy','cs-5a-eng',100)",
+        [],
+    )?;
+    for (id, name, rows, cols, invig) in [
+        ("room-1", "Room 1 · ground floor", 12i64, 10i64, "stf-meena"),
+        ("room-2", "Room 2 · first floor", 12, 10, "stf-anita"),
+    ] {
+        tx.execute(
+            "INSERT INTO exam_room(id,exam_id,name,rows,cols,invigilator_id,sort_order,created_at,updated_at,sync_state) \
+             VALUES (?1,'exam-hy',?2,?3,?4,?5,0,?6,?6,'confirmed')",
+            params![id, name, rows, cols, invig, now],
+        )?;
+    }
+    for (cls, date, cs_id) in [
+        ("cls-5a", "2026-09-15", "cs-5a-eng"),
+        ("cls-6b", "2026-09-15", "cs-6b-maths"),
+    ] {
+        tx.execute(
+            "INSERT INTO exam_schedule(id,exam_id,date,class_id,class_subject_id,starts_at,created_at,updated_at,sync_state) \
+             VALUES (?1,'exam-hy',?2,?3,?4,'09:30',?5,?5,'confirmed')",
+            params![format!("esch-{cls}"), date, cls, cs_id, now],
+        )?;
+    }
     Ok(())
 }
 

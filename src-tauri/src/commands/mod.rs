@@ -94,6 +94,12 @@ pub const COMMANDS: &[&str] = &[
     "list_report_templates",
     "save_report_remark",
     "finalize_report_cards",
+    "list_exam_rooms",
+    "get_exam_seating",
+    "save_exam_room",
+    "delete_exam_room",
+    "generate_seating",
+    "save_exam_schedule",
     "get_receipt",
     "search_receipts",
     "reverse_payment",
@@ -688,6 +694,42 @@ pub fn save_report_remark(state: State<RtCtx>, input: ReportRemarkInput) -> CmdR
 pub fn finalize_report_cards(state: State<RtCtx>, exam_id: String) -> CmdResult<()> {
     let actor = state.require_session()?;
     state.with_db(|conn| finalize_report_cards_logic(conn, &actor, &exam_id))
+}
+
+#[tauri::command]
+pub fn list_exam_rooms(state: State<RtCtx>, exam_id: String) -> CmdResult<ExamSeatingDto> {
+    let actor = state.require_session()?;
+    state.with_db(|conn| list_exam_rooms_logic(conn, &actor, &exam_id))
+}
+
+#[tauri::command]
+pub fn get_exam_seating(state: State<RtCtx>, exam_id: String) -> CmdResult<ExamSeatingDto> {
+    let actor = state.require_session()?;
+    state.with_db(|conn| get_exam_seating_logic(conn, &actor, &exam_id))
+}
+
+#[tauri::command]
+pub fn save_exam_room(state: State<RtCtx>, input: ExamRoomInput) -> CmdResult<()> {
+    let actor = state.require_session()?;
+    state.with_db(|conn| save_exam_room_logic(conn, &actor, &input))
+}
+
+#[tauri::command]
+pub fn delete_exam_room(state: State<RtCtx>, room_id: String) -> CmdResult<()> {
+    let actor = state.require_session()?;
+    state.with_db(|conn| delete_exam_room_logic(conn, &actor, &room_id))
+}
+
+#[tauri::command]
+pub fn generate_seating(state: State<RtCtx>, exam_id: String) -> CmdResult<SeatingResult> {
+    let actor = state.require_session()?;
+    state.with_db(|conn| generate_seating_logic(conn, &actor, &exam_id))
+}
+
+#[tauri::command]
+pub fn save_exam_schedule(state: State<RtCtx>, input: ExamScheduleInput) -> CmdResult<()> {
+    let actor = state.require_session()?;
+    state.with_db(|conn| save_exam_schedule_logic(conn, &actor, &input))
 }
 
 // -------------------------------------------------------------- receipts ------

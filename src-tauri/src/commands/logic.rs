@@ -6304,6 +6304,314 @@ pub fn finalize_report_cards_logic(conn: &mut Connection, actor_s: &SessionStaff
     Ok(())
 }
 
+// ---- Exam seating & hall tickets (P16 Step 5, §10.4) ------------------------
+
+#[derive(Debug, Serialize)]
+pub struct ExamRoomDto {
+    pub id: String,
+    pub name: String,
+    pub rows: i64,
+    pub cols: i64,
+    pub invigilator_id: Option<String>,
+    pub invigilator_name: Option<String>,
+    pub seats: Vec<SeatDto>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SeatDto {
+    pub seat_no: i64,
+    pub student_id: String,
+    pub student_name: String,
+    pub roll_no: Option<i64>,
+    pub class_display: Option<String>,
+    pub class_slot: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ScheduleLineDto {
+    pub date: String,
+    pub subject_name: Option<String>,
+    pub starts_at: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct HallTicketDto {
+    pub student_id: String,
+    pub student_name: String,
+    pub class_display: Option<String>,
+    pub roll_no: Option<i64>,
+    pub room_name: String,
+    pub seat_no: i64,
+    pub schedule: Vec<ScheduleLineDto>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ExamSeatingDto {
+    pub exam_id: String,
+    pub exam_name: String,
+    pub rooms: Vec<ExamRoomDto>,
+    pub hall_tickets: Vec<HallTicketDto>,
+}
+
+fn exam_name_of(conn: &Connection, exam_id: &str) -> CmdResult<String> {
+    conn.query_row("SELECT name FROM exam WHERE id=?1", params![exam_id], |r| r.get(0)).optional()?.ok_or_else(CmdError::not_found)
+}
+
+/// The distinct classes sitting an exam (those with an exam_subject), ordered.
+fn exam_classes(conn: &Connection, exam_id: &str) -> rusqlite::Result<Vec<String>> {
+    let mut stmt = conn.prepare(
+        "SELECT DISTINCT cs.class_id FROM exam_subject es JOIN class_subject cs ON cs.id=es.class_subject_id \
+         JOIN class c ON c.id=cs.class_id WHERE es.exam_id=?1 ORDER BY c.sort_order",
+    )?;
+    let rows = stmt.query_map(params![exam_id], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<Vec<String>>>()?;
+    Ok(rows)
+}
+
+fn class_roster(conn: &Connection, class_id: &str) -> rusqlite::Result<Vec<String>> {
+    let mut stmt = conn.prepare("SELECT student_id FROM enrollment WHERE class_id=?1 AND to_date IS NULL ORDER BY roll_no")?;
+    let rows = stmt.query_map(params![class_id], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<Vec<String>>>()?;
+    Ok(rows)
+}
+
+/// Rooms of an exam (for the rooms list). Principal only.
+pub fn list_exam_rooms_logic(conn: &mut Connection, actor_s: &SessionStaff, exam_id: &str) -> CmdResult<ExamSeatingDto> {
+    let actor = actor_from(conn, actor_s)?;
+    require_allow(&actor, Action::ManageExamSeating, &Target::of(TargetKind::School))?;
+    require_module_enabled(conn, vidya_core::modules::Module::Classroom)?;
+    get_exam_seating_inner(conn, exam_id)
+}
+
+/// Rooms + their seats + per-student hall tickets (used by the screen and prints).
+pub fn get_exam_seating_logic(conn: &mut Connection, actor_s: &SessionStaff, exam_id: &str) -> CmdResult<ExamSeatingDto> {
+    let actor = actor_from(conn, actor_s)?;
+    require_allow(&actor, Action::ManageExamSeating, &Target::of(TargetKind::School))?;
+    require_module_enabled(conn, vidya_core::modules::Module::Classroom)?;
+    get_exam_seating_inner(conn, exam_id)
+}
+
+#[allow(clippy::type_complexity)]
+fn get_exam_seating_inner(conn: &Connection, exam_id: &str) -> CmdResult<ExamSeatingDto> {
+    let exam_name = exam_name_of(conn, exam_id)?;
+    let rooms_meta: Vec<(String, String, i64, i64, Option<String>, Option<String>)> = {
+        let mut stmt = conn.prepare(
+            "SELECT r.id, r.name, r.rows, r.cols, r.invigilator_id, st.name FROM exam_room r \
+             LEFT JOIN staff st ON st.id=r.invigilator_id WHERE r.exam_id=?1 ORDER BY r.sort_order, r.name",
+        )?;
+        let v = stmt.query_map(params![exam_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        v
+    };
+    let mut rooms = Vec::new();
+    let mut hall_tickets = Vec::new();
+    for (id, name, rows, cols, invig_id, invig_name) in rooms_meta {
+        let seats: Vec<SeatDto> = {
+            let mut stmt = conn.prepare(
+                "SELECT es.seat_no, es.student_id, s.name, e.roll_no, c.display, es.class_slot FROM exam_seat es \
+                 JOIN student s ON s.id=es.student_id \
+                 LEFT JOIN enrollment e ON e.student_id=es.student_id AND e.to_date IS NULL \
+                 LEFT JOIN class c ON c.id=e.class_id \
+                 WHERE es.exam_id=?1 AND es.room_id=?2 ORDER BY es.seat_no",
+            )?;
+            let v = stmt.query_map(params![exam_id, id], |r| Ok(SeatDto {
+                seat_no: r.get(0)?, student_id: r.get(1)?, student_name: r.get(2)?, roll_no: r.get(3)?, class_display: r.get(4)?, class_slot: r.get(5)?,
+            }))?.collect::<rusqlite::Result<Vec<_>>>()?;
+            v
+        };
+        for s in &seats {
+            let schedule = student_schedule(conn, exam_id, &s.student_id)?;
+            hall_tickets.push(HallTicketDto {
+                student_id: s.student_id.clone(), student_name: s.student_name.clone(), class_display: s.class_display.clone(),
+                roll_no: s.roll_no, room_name: name.clone(), seat_no: s.seat_no, schedule,
+            });
+        }
+        rooms.push(ExamRoomDto { id, name, rows, cols, invigilator_id: invig_id, invigilator_name: invig_name, seats });
+    }
+    Ok(ExamSeatingDto { exam_id: exam_id.to_string(), exam_name, rooms, hall_tickets })
+}
+
+fn student_schedule(conn: &Connection, exam_id: &str, student_id: &str) -> rusqlite::Result<Vec<ScheduleLineDto>> {
+    let mut stmt = conn.prepare(
+        "SELECT sch.date, sub.name, sch.starts_at FROM exam_schedule sch \
+         JOIN enrollment e ON e.class_id=sch.class_id AND e.to_date IS NULL AND e.student_id=?2 \
+         LEFT JOIN class_subject cs ON cs.id=sch.class_subject_id LEFT JOIN subject sub ON sub.id=cs.subject_id \
+         WHERE sch.exam_id=?1 ORDER BY sch.date, sch.starts_at",
+    )?;
+    let rows = stmt.query_map(params![exam_id, student_id], |r| Ok(ScheduleLineDto { date: r.get(0)?, subject_name: r.get(1)?, starts_at: r.get(2)? }))?
+        .collect::<rusqlite::Result<Vec<ScheduleLineDto>>>()?;
+    Ok(rows)
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ExamRoomInput {
+    pub id: Option<String>,
+    pub exam_id: String,
+    pub name: String,
+    pub rows: i64,
+    pub cols: i64,
+    pub invigilator_id: Option<String>,
+}
+
+/// Create or update an exam room (Principal).
+pub fn save_exam_room_logic(conn: &mut Connection, actor_s: &SessionStaff, input: &ExamRoomInput) -> CmdResult<()> {
+    let actor = actor_from(conn, actor_s)?;
+    require_allow(&actor, Action::ManageExamSeating, &Target::of(TargetKind::School))?;
+    require_module_enabled(conn, vidya_core::modules::Module::Classroom)?;
+    if input.rows < 1 || input.cols < 1 {
+        return Err(CmdError::validation("room", "range"));
+    }
+    let now = now_iso();
+    let school_id = single_school_id(conn)?;
+    let id = match &input.id {
+        Some(id) => {
+            conn.execute(
+                "UPDATE exam_room SET name=?1, rows=?2, cols=?3, invigilator_id=?4, updated_at=?5 WHERE id=?6",
+                params![input.name, input.rows, input.cols, input.invigilator_id, now, id],
+            )?;
+            id.clone()
+        }
+        None => {
+            let id = new_id("room");
+            let next: i64 = conn.query_row("SELECT COALESCE(MAX(sort_order),-1)+1 FROM exam_room WHERE exam_id=?1", params![input.exam_id], |r| r.get(0))?;
+            conn.execute(
+                "INSERT INTO exam_room(id,exam_id,name,rows,cols,invigilator_id,sort_order,school_id,created_at,updated_at,sync_state) \
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?9,'confirmed')",
+                params![id, input.exam_id, input.name, input.rows, input.cols, input.invigilator_id, next, school_id, now],
+            )?;
+            id
+        }
+    };
+    audit_action(conn, AuditEntry {
+        at: now, staff_id: Some(actor_s.id.clone()), action: "save_exam_room".into(),
+        table: Some("exam_room".into()), record_id: Some(id), ..Default::default()
+    })?;
+    Ok(())
+}
+
+/// Delete an exam room and its seats (Principal).
+pub fn delete_exam_room_logic(conn: &mut Connection, actor_s: &SessionStaff, room_id: &str) -> CmdResult<()> {
+    let actor = actor_from(conn, actor_s)?;
+    require_allow(&actor, Action::ManageExamSeating, &Target::of(TargetKind::School))?;
+    require_module_enabled(conn, vidya_core::modules::Module::Classroom)?;
+    let tx = conn.transaction()?;
+    tx.execute("DELETE FROM exam_seat WHERE room_id=?1", params![room_id])?;
+    tx.execute("DELETE FROM exam_room WHERE id=?1", params![room_id])?;
+    tx.commit()?;
+    audit_action(conn, AuditEntry {
+        at: now_iso(), staff_id: Some(actor_s.id.clone()), action: "delete_exam_room".into(),
+        table: Some("exam_room".into()), record_id: Some(room_id.to_string()), ..Default::default()
+    })?;
+    Ok(())
+}
+
+#[derive(Debug, Serialize)]
+pub struct SeatingErrorDto {
+    pub room_name: String,
+    pub capacity: i64,
+    pub needed: i64,
+    pub missing: i64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SeatingResult {
+    pub seated: i64,
+    pub rooms_used: i64,
+    pub unpaired_classes: i64,
+    pub errors: Vec<SeatingErrorDto>,
+}
+
+/// Generate seating for an exam: auto-pair its classes (adjacent by order), fill
+/// the rooms in order, deterministically. Capacity-short rooms are reported and
+/// nothing is written. Principal only.
+pub fn generate_seating_logic(conn: &mut Connection, actor_s: &SessionStaff, exam_id: &str) -> CmdResult<SeatingResult> {
+    let actor = actor_from(conn, actor_s)?;
+    require_allow(&actor, Action::ManageExamSeating, &Target::of(TargetKind::School))?;
+    require_module_enabled(conn, vidya_core::modules::Module::Classroom)?;
+    let classes = exam_classes(conn, exam_id)?;
+    let pairs = vidya_core::seating::auto_pairs(&classes);
+    let rooms: Vec<(String, u32, u32)> = {
+        let mut stmt = conn.prepare("SELECT id, rows, cols FROM exam_room WHERE exam_id=?1 ORDER BY sort_order, name")?;
+        let v = stmt.query_map(params![exam_id], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)? as u32, r.get::<_, i64>(2)? as u32)))?
+            .collect::<rusqlite::Result<Vec<(String, u32, u32)>>>()?;
+        v
+    };
+    let usable = pairs.len().min(rooms.len());
+    let unpaired = (pairs.len() - usable) as i64;
+    // Build the room plans for as many pairs as there are rooms.
+    let mut plans = Vec::new();
+    for i in 0..usable {
+        let (a, b) = &pairs[i];
+        let (room_id, rows, cols) = &rooms[i];
+        plans.push(vidya_core::seating::RoomPlan {
+            room_id: room_id.clone(),
+            rows: *rows,
+            cols: *cols,
+            class_a: class_roster(conn, a)?,
+            class_b: match b { Some(bc) => class_roster(conn, bc)?, None => vec![] },
+        });
+    }
+    match vidya_core::seating::generate_seating(&plans) {
+        Err(errs) => {
+            // Map room ids to names for the error report.
+            let mut out = Vec::new();
+            for e in errs {
+                let name: String = conn.query_row("SELECT name FROM exam_room WHERE id=?1", params![e.room_id], |r| r.get(0)).optional()?.unwrap_or_default();
+                out.push(SeatingErrorDto { room_name: name, capacity: e.capacity as i64, needed: e.needed as i64, missing: e.missing as i64 });
+            }
+            Ok(SeatingResult { seated: 0, rooms_used: 0, unpaired_classes: unpaired, errors: out })
+        }
+        Ok(seats) => {
+            let now = now_iso();
+            let school_id = single_school_id(conn)?;
+            let seated = seats.len() as i64;
+            let tx = conn.transaction()?;
+            tx.execute("DELETE FROM exam_seat WHERE exam_id=?1", params![exam_id])?;
+            for s in &seats {
+                tx.execute(
+                    "INSERT INTO exam_seat(id,exam_id,room_id,seat_no,student_id,class_slot,school_id,created_at,updated_at,sync_state) \
+                     VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?8,'confirmed')",
+                    params![new_id("seat"), exam_id, s.room_id, s.seat_no as i64, s.student_id, s.class_slot, school_id, now],
+                )?;
+            }
+            crate::security::audit::append(&tx, &AuditEntry {
+                at: now.clone(), staff_id: Some(actor_s.id.clone()), action: "generate_seating".into(),
+                table: Some("exam_seat".into()), record_id: Some(exam_id.to_string()),
+                after_json: Some(serde_json::json!({ "seated": seated, "rooms": usable }).to_string()),
+                ..Default::default()
+            })?;
+            tx.commit()?;
+            Ok(SeatingResult { seated, rooms_used: usable as i64, unpaired_classes: unpaired, errors: vec![] })
+        }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ExamScheduleInput {
+    pub exam_id: String,
+    pub class_id: String,
+    pub date: String,
+    pub starts_at: Option<String>,
+    pub class_subject_id: Option<String>,
+}
+
+/// Add one exam-schedule row (date/subject/time for a class). Principal only.
+pub fn save_exam_schedule_logic(conn: &mut Connection, actor_s: &SessionStaff, input: &ExamScheduleInput) -> CmdResult<()> {
+    let actor = actor_from(conn, actor_s)?;
+    require_allow(&actor, Action::ManageExamSeating, &Target::of(TargetKind::School))?;
+    require_module_enabled(conn, vidya_core::modules::Module::Classroom)?;
+    let now = now_iso();
+    let school_id = single_school_id(conn)?;
+    conn.execute(
+        "INSERT INTO exam_schedule(id,exam_id,date,class_id,class_subject_id,starts_at,school_id,created_at,updated_at,sync_state) \
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?8,'confirmed')",
+        params![new_id("esch"), input.exam_id, input.date, input.class_id, input.class_subject_id, input.starts_at, school_id, now],
+    )?;
+    audit_action(conn, AuditEntry {
+        at: now, staff_id: Some(actor_s.id.clone()), action: "save_exam_schedule".into(),
+        table: Some("exam_schedule".into()), record_id: Some(input.exam_id.clone()), ..Default::default()
+    })?;
+    Ok(())
+}
+
 // ============================================================= reports ========
 //
 // Read-only reports (docs/00 §12). The audit-log viewer is filterable, paginated
@@ -9724,8 +10032,10 @@ mod tests {
         assert!(mine.total >= 1 && mine.total < all.total);
 
         let res = exam_results_logic(&mut c, &principal(), "exam-hy").unwrap();
-        assert_eq!(res.len(), 1, "one exam subject (VI-B Maths)");
-        assert!(res[0].graded >= 1 && res[0].average_pct_tenths > 0);
+        // P16 seed adds V-A English to the Half-Yearly (for exam seating), so the
+        // exam now has two subjects; VI-B Maths still carries the seeded marks.
+        assert_eq!(res.len(), 2, "two exam subjects (V-A English + VI-B Maths)");
+        assert!(res.iter().any(|r| r.graded >= 1 && r.average_pct_tenths > 0));
     }
 
     #[test]
@@ -9952,6 +10262,48 @@ mod tests {
         assert!(save_report_remark_logic(&mut c, &principal(), None, DeviceMode::Server, &ReportRemarkInput {
             exam_id: "exam-hy".into(), student_id: sid, text: "Principal note.".into(), template_key: None,
         }).is_ok());
+    }
+
+    // ---- Classroom: exam seating & hall tickets (P16 Step 5) -------------
+
+    #[test]
+    fn generate_seating_is_deterministic_and_builds_hall_tickets() {
+        let mut c = seeded();
+        // The seed pairs V-A + VI-B into Room 1 (12×10) for the Half-Yearly.
+        let r1 = generate_seating_logic(&mut c, &principal(), "exam-hy").unwrap();
+        assert!(r1.errors.is_empty(), "rooms are big enough");
+        assert!(r1.seated > 0);
+        assert_eq!(r1.rooms_used, 1, "two classes → one paired room");
+        // Deterministic: regenerating gives the same seat count.
+        let r2 = generate_seating_logic(&mut c, &principal(), "exam-hy").unwrap();
+        assert_eq!(r1.seated, r2.seated);
+        // Seating + hall tickets read back.
+        let seating = get_exam_seating_logic(&mut c, &principal(), "exam-hy").unwrap();
+        let room = seating.rooms.iter().find(|r| !r.seats.is_empty()).unwrap();
+        assert!(room.seats.iter().any(|s| s.class_slot.as_deref() == Some("a")));
+        assert!(room.seats.iter().any(|s| s.class_slot.as_deref() == Some("b")), "two classes interleaved");
+        assert_eq!(seating.hall_tickets.len() as i64, r1.seated, "one hall ticket per seated student");
+        assert!(seating.hall_tickets.iter().all(|h| !h.schedule.is_empty()), "hall tickets carry the schedule");
+    }
+
+    #[test]
+    fn generate_seating_reports_a_short_room() {
+        let mut c = seeded();
+        // Shrink Room 1 to 1×1 and delete Room 2 → V-A + VI-B won't fit.
+        c.execute("UPDATE exam_room SET rows=1, cols=1 WHERE id='room-1'", []).unwrap();
+        c.execute("DELETE FROM exam_seat WHERE room_id='room-2'", []).unwrap();
+        c.execute("DELETE FROM exam_room WHERE id='room-2'", []).unwrap();
+        let r = generate_seating_logic(&mut c, &principal(), "exam-hy").unwrap();
+        assert_eq!(r.seated, 0, "nothing written when a room is short");
+        assert!(!r.errors.is_empty());
+        assert!(r.errors[0].missing > 0);
+    }
+
+    #[test]
+    fn only_principal_manages_seating() {
+        let mut c = seeded();
+        assert!(generate_seating_logic(&mut c, &teacher_anita(), "exam-hy").is_err());
+        assert!(list_exam_rooms_logic(&mut c, &accountant(), "exam-hy").is_err());
     }
 
     #[test]

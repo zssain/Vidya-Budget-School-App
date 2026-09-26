@@ -35,6 +35,9 @@ import SessionScreen from '@/screens/desktop/SessionScreen'
 import GlobalSearch from '@/screens/desktop/GlobalSearch'
 import MarksScreen from '@/screens/desktop/MarksScreen'
 import ReportRemarksScreen from '@/screens/desktop/ReportRemarksScreen'
+import ExamsScreen from '@/screens/desktop/ExamsScreen'
+import HallTicketsDoc from '@/screens/print/HallTicketsDoc'
+import SeatingChartDoc from '@/screens/print/SeatingChartDoc'
 import GradeScaleScreen from '@/screens/desktop/GradeScaleScreen'
 import ReportsScreen from '@/screens/desktop/ReportsScreen'
 import SettingsScreen from '@/screens/desktop/SettingsScreen'
@@ -164,6 +167,16 @@ export default function App() {
           const q = new URLSearchParams(path.split('?')[1] ?? '')
           return <ReportCardDoc mode="class" id={rcc.classId} examId={q.get('exam') ?? ''} auto={q.get('auto') === '1'} />
         }
+        const ht = matchRoute('/print/halltickets/:examId', base)
+        if (ht) {
+          const q = new URLSearchParams(path.split('?')[1] ?? '')
+          return <HallTicketsDoc examId={ht.examId} auto={q.get('auto') === '1'} />
+        }
+        const sc = matchRoute('/print/seatingcharts/:examId', base)
+        if (sc) {
+          const q = new URLSearchParams(path.split('?')[1] ?? '')
+          return <SeatingChartDoc examId={sc.examId} auto={q.get('auto') === '1'} />
+        }
       }
       // Teachers use the phone screens (no desktop shell).
       if (route.role === 'teacher') {
@@ -216,6 +229,7 @@ function desktopRoute(base: string, role: Role): { active: string; node: ReactNo
   if (base === '/principal/attendance') return { active: 'attendance', node: <AttendanceRegisterScreen /> }
   if (base === '/principal/marks') return { active: 'marks', node: <MarksScreen /> }
   if (base === '/principal/remarks') return { active: 'marks', node: <ReportRemarksScreen /> }
+  if (base === '/principal/exams') return { active: 'marks', node: <ExamsScreen /> }
   if (base === '/principal/timetable') return { active: 'timetable', node: <TimetableScreen /> }
   if (base === '/principal/grade-scale') return { active: 'settings', node: <GradeScaleScreen /> }
   if (base === '/principal/settings') return { active: 'settings', node: <SettingsScreen /> }

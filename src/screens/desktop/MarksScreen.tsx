@@ -55,6 +55,7 @@ export default function MarksScreen() {
           <>
             <button type="button" style={secondaryBtn()} onClick={() => navigate('/principal/grade-scale')}>{t('grade.title').replace('.', '')}</button>
             <button type="button" style={secondaryBtn()} onClick={() => navigate('/principal/remarks')}>{t('remarks.title').replace('.', '')}</button>
+            <button type="button" style={secondaryBtn()} onClick={() => navigate('/principal/exams')}>{t('exams.seatingTitle')}</button>
             <button type="button" style={primaryBtn()} onClick={() => setNewExam(true)}>{t('marks.newExam')}</button>
           </>
         }

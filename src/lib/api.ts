@@ -1224,6 +1224,78 @@ export const list_report_templates = () => invoke<ReportTemplateDto[]>('list_rep
 export const save_report_remark = (input: ReportRemarkInput) => invoke<void>('save_report_remark', { input })
 export const finalize_report_cards = (examId: string) => invoke<void>('finalize_report_cards', { examId })
 
+// ---- Phase 16: Classroom — exam seating & hall tickets --------------------
+export interface SeatDto {
+  seat_no: number
+  student_id: string
+  student_name: string
+  roll_no: number | null
+  class_display: string | null
+  class_slot: string | null
+}
+export interface ExamRoomDto {
+  id: string
+  name: string
+  rows: number
+  cols: number
+  invigilator_id: string | null
+  invigilator_name: string | null
+  seats: SeatDto[]
+}
+export interface ScheduleLineDto {
+  date: string
+  subject_name: string | null
+  starts_at: string | null
+}
+export interface HallTicketDto {
+  student_id: string
+  student_name: string
+  class_display: string | null
+  roll_no: number | null
+  room_name: string
+  seat_no: number
+  schedule: ScheduleLineDto[]
+}
+export interface ExamSeatingDto {
+  exam_id: string
+  exam_name: string
+  rooms: ExamRoomDto[]
+  hall_tickets: HallTicketDto[]
+}
+export interface ExamRoomInput {
+  id?: string | null
+  exam_id: string
+  name: string
+  rows: number
+  cols: number
+  invigilator_id?: string | null
+}
+export interface SeatingErrorDto {
+  room_name: string
+  capacity: number
+  needed: number
+  missing: number
+}
+export interface SeatingResult {
+  seated: number
+  rooms_used: number
+  unpaired_classes: number
+  errors: SeatingErrorDto[]
+}
+export interface ExamScheduleInput {
+  exam_id: string
+  class_id: string
+  date: string
+  starts_at?: string | null
+  class_subject_id?: string | null
+}
+export const list_exam_rooms = (examId: string) => invoke<ExamSeatingDto>('list_exam_rooms', { examId })
+export const get_exam_seating = (examId: string) => invoke<ExamSeatingDto>('get_exam_seating', { examId })
+export const save_exam_room = (input: ExamRoomInput) => invoke<void>('save_exam_room', { input })
+export const delete_exam_room = (roomId: string) => invoke<void>('delete_exam_room', { roomId })
+export const generate_seating = (examId: string) => invoke<SeatingResult>('generate_seating', { examId })
+export const save_exam_schedule = (input: ExamScheduleInput) => invoke<void>('save_exam_schedule', { input })
+
 export const update_fee_head = (id: string, input: FeeHeadInput) =>
   invoke<FeeHeadDto>('update_fee_head', { id, input })
 export const deactivate_fee_head = (id: string) => invoke<void>('deactivate_fee_head', { id })
