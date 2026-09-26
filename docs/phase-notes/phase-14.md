@@ -1,11 +1,11 @@
 # Phase 14 handoff — Communication (UPI QR, email, WhatsApp, absence alerts, fee reminders, circulars)
 
-> **Status: IN PROGRESS.** Steps 0, 1, the Step 2 **foundation**, **Step 5**, and the
-> **Step 3 testable core** (MIME + send queue) are built, tested and committed. Steps 2
-> (Android native), 3-live (real Gmail client, gated on the P12 OAuth spike), 4, 6, 7 and
-> the Playwright fidelity of Step 8 are **specced in detail below and not yet built** — a
-> scoped runway, the way P12/P13 handed off partial phases. Every committed increment is
-> genuinely working and green; nothing is marked "done" that isn't.
+> **Status: IN PROGRESS.** Steps 0, 1, the Step 2 **foundation**, **Step 3** core (MIME +
+> send queue), **Step 4**, and **Step 5** are built, tested and committed. Steps 2 (Android
+> native), 3-live (real Gmail client, gated on the P12 OAuth spike), 6, 7 and the Playwright
+> fidelity of Step 8 are **specced in detail below and not yet built** — a scoped runway, the
+> way P12/P13 handed off partial phases. Every committed increment is genuinely working and
+> green; nothing is marked "done" that isn't.
 
 ## Start state / environment
 - Branch `v2/p14`, cut from `v2/p13` @ `71b0658`. HEAD at write time `ab46f3f`.
@@ -23,6 +23,7 @@
   | `abe535f` | interim handoff + OWNER-DECISIONS #13 |
   | `863fc6b` | 5 — Fee dues screen + reminder sheet |
   | `be24f36` | 3 — email sender testable core (MIME + send queue) |
+  | `8787320` | 4 — absence alerts (phone + SendAbsenceAlert) |
 
 ## Owner decisions taken this phase
 - **#13 Gmail (`gmail.send`) → decided (interim): run the OAuth app in Testing mode now**,
@@ -157,19 +158,21 @@ Step 5 creates therefore accumulate honestly as `queued` until that client lands
 PNG bytes in `message.attachments_json`; the MIME builder already accepts `qr_png`, so this is a
 compose-side wire-up.
 
-### Step 4 — Absence alerts (phone + desktop register)
-- New action `SendAbsenceAlert` (Core module; **class teacher of the target class + Principal**;
-  Accountant never). Add to `Action`/`ALL`/`as_key`/`from_key`/`can`/`module_for`; the exhaustive
-  `role_matrix` test auto-covers it. Extend `action_for_message_kind`: `absence_alert →
-  SendAbsenceAlert`. Refine sync scope so a teacher also sees their own `absence_alert` messages
-  (already creator-scoped) and the `absence_alert` template (already all-roles).
-- After a sheet is **submitted**, the phone shows **Absent today** (prototype `absence`): each
-  absent student + primary guardian, buttons Email / WhatsApp, "Email both parents", a preview in
-  the guardian's language (template `absence_alert`, placeholders `student_name/date/school_name`).
-  Email → `record_message(channel:email, kind:absence_alert, …)` (queued); WhatsApp → `wa_me_url` +
-  `record_message(channel:wa_tap…)` + share sheet (phone) / opener (desktop).
-- Desktop register: same action for a chosen date. Principal setting "who may send absence alerts"
-  (class teacher default) stored in `settings_json`.
+### Step 4 — Absence alerts (DONE, committed `8787320`) — phone screen built
+- **vidya-core**: new action **`SendAbsenceAlert`** (Core; class teacher of `target.class_id` +
+  Principal; Accountant never) via `class_owned` targeting. `ALL` 41→42 (test updated to 42).
+- **app**: `action_for_message_kind` now returns `(Action, TargetKind)`; `record_message` derives
+  the absence **target class from the related student server-side**, so a teacher can only alert
+  their OWN class's absentees (a `cls-2a` student via `stf-meena` → FORBIDDEN, tested).
+  `list_absent` (submitted sheet only) → absent students + primary guardian + consent +
+  `absence_alert` preview in the guardian's language. Command `list_absent`.
+- **frontend**: phone **AbsenceContainer** (prototype `absence`), shown after attendance submit
+  (route `/teacher/absence/:classId/:date`, navigated from `AttendanceContainer.onSubmit`). Email →
+  **queued** (honest — the school PC sends later; **deviates from the prototype's optimistic "Email
+  sent" copy per rule 13**, noted); WhatsApp → `wa_tap` + `wa.me`; "Email all parents". i18n en/hi.
+  Action buttons are **text-only** (the mock icon set has no mail/chat icon — rule 6).
+- **Deferred:** the desktop-register variant of the same action, the Principal "who may send absence
+  alerts" setting (class-teacher default), and phone pixel-fidelity (canonical machine only).
 
 ### Step 5 — Fee dues + reminders (DONE, committed `863fc6b`)
 - **vidya-core**: new action **`SendFeeReminder`** (Core; Accountant + Principal; Teacher never),
@@ -240,11 +243,10 @@ compose-side wire-up.
 
 ## Tests (all real, this session)
 - `cargo test -p vidya-core --lib` → **362 passed** (upi **11**, messages **8**, +permissions
-  SendFeeReminder); `cargo test -p vidya --lib` → **230 passed / 0 failed** (was 215 at P13 tip;
-  +3 messaging, +5 Step 5, +8 Step 3 email: MIME plain/utf-8-subject/related+mixed, base64url,
-  send loop sent+op / skip-no-email+cap / rate-limit-stop / drain-noop-then-send).
+  SendFeeReminder/SendAbsenceAlert); `cargo test -p vidya --lib` → **232 passed / 0 failed** (was
+  215 at P13 tip; +3 messaging, +5 Step 5, +8 Step 3 email, +2 Step 4 absence).
 - **Changed existing test expectation (P14):** `permissions::…action_all_covers…` `ALL.len()`
-  40→41 (added `SendFeeReminder`). No other existing test value changed.
+  40→**42** (added `SendFeeReminder`, `SendAbsenceAlert`). No other existing test value changed.
 - `cargo clippy -p vidya -p vidya-core --lib -- -D warnings` → clean.
 - `npm run typecheck` clean; `check:i18n` **990 keys en/hi in sync**; `check:hex` OK (42 tokens,
   no new colours); `api.test.ts` command parity green (COMMANDS ↔ commands.json ↔ api.ts).
