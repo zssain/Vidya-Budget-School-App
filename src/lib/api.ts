@@ -1368,6 +1368,7 @@ export interface CalendarEventInput {
   is_non_working: boolean
 }
 export const get_calendar = () => invoke<CalendarDto>('get_calendar')
+export const working_days = (from: string, to: string) => invoke<number>('working_days', { from, to })
 export const set_weekly_offs = (working: boolean[]) => invoke<void>('set_weekly_offs', { working })
 export const add_calendar_event = (input: CalendarEventInput) =>
   invoke<CalendarEventDto>('add_calendar_event', { input })

@@ -95,6 +95,8 @@ export const ACCOUNTANT_NAV: NavSection[] = [
       { key: 'daybook', labelKey: 'nav.daybook', icon: 'daybook', path: '/accountant/daybook' },
       { key: 'accounts', labelKey: 'nav.accounts', icon: 'daybook', path: '/accountant/accounts' },
       { key: 'schoolstore', labelKey: 'nav.schoolstore', icon: 'receipts', path: '/accountant/schoolstore', module: 'store' },
+      // Calendar (P16): accountants view the school calendar (read-only, no edit).
+      { key: 'calendar', labelKey: 'nav.calendar', icon: 'clock', path: '/accountant/calendar' },
       { key: 'requests', labelKey: 'nav.myRequests', icon: 'requests', path: '/accountant/requests', badge: 'requests' },
     ],
   },

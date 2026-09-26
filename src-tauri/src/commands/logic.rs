@@ -7659,6 +7659,19 @@ pub fn get_calendar_logic(conn: &mut Connection, _actor_s: &SessionStaff) -> Cmd
     Ok(CalendarDto { week: week.working, events })
 }
 
+/// The number of working days in `[from, to]` (inclusive, `YYYY-MM-DD`), from the
+/// school's weekly pattern + non-working events (P16 calendar screen). Authoritative
+/// count via vidya-core so it matches attendance % and fee due dates.
+pub fn working_days_logic(conn: &mut Connection, from: &str, to: &str) -> CmdResult<i64> {
+    let week = crate::calendar::load_week(conn)?;
+    let events = crate::calendar::load_events(conn)?;
+    let (f, t) = match (vidya_core::calendar::parse_date(from), vidya_core::calendar::parse_date(to)) {
+        (Some(f), Some(t)) => (f, t),
+        _ => return Err(CmdError::validation("date", "format")),
+    };
+    Ok(vidya_core::calendar::working_days(f, t, &week, &events) as i64)
+}
+
 /// Validate an event input; returns the trimmed title. Shared by add/update.
 fn validate_event_input(input: &CalendarEventInput) -> CmdResult<String> {
     let start = vidya_core::calendar::parse_date(&input.starts_on)
@@ -10304,6 +10317,19 @@ mod tests {
         let mut c = seeded();
         assert!(generate_seating_logic(&mut c, &teacher_anita(), "exam-hy").is_err());
         assert!(list_exam_rooms_logic(&mut c, &accountant(), "exam-hy").is_err());
+    }
+
+    // ---- Classroom: calendar working-day count (P16 Step 6) --------------
+
+    #[test]
+    fn working_days_counts_the_month() {
+        let mut c = seeded();
+        // September 2026: 30 days, four Sundays (default Mon–Sat working) → ≤ 26,
+        // minus any seeded holidays. The exact count comes from vidya-core.
+        let n = working_days_logic(&mut c, "2026-09-01", "2026-09-30").unwrap();
+        assert!(n > 0 && n <= 26, "got {n}");
+        // A single non-working Sunday counts as zero.
+        assert_eq!(working_days_logic(&mut c, "2026-09-06", "2026-09-06").unwrap(), 0, "6 Sep 2026 is a Sunday");
     }
 
     #[test]

@@ -113,7 +113,7 @@ mod tests {
     #[test]
     fn interleaves_two_classes_and_is_deterministic() {
         let room = RoomPlan { room_id: "r1".into(), rows: 5, cols: 2, class_a: ids("a", 5), class_b: ids("b", 5) };
-        let seats = generate_seating(&[room.clone()]).unwrap();
+        let seats = generate_seating(std::slice::from_ref(&room)).unwrap();
         assert_eq!(seats.len(), 10);
         // Seats alternate A, B, A, B …
         assert_eq!(seats[0].student_id, "a1");

@@ -130,6 +130,7 @@
     "send_circular",
     "mark_circular_read",
     "get_calendar",
+    "working_days",
     "set_weekly_offs",
     "add_calendar_event",
     "update_calendar_event",

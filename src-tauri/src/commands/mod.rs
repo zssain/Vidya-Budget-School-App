@@ -154,6 +154,7 @@ pub const COMMANDS: &[&str] = &[
     "send_circular",
     "mark_circular_read",
     "get_calendar",
+    "working_days",
     "set_weekly_offs",
     "add_calendar_event",
     "update_calendar_event",
@@ -930,6 +931,12 @@ pub fn mark_circular_read(state: State<RtCtx>, circular_id: String) -> CmdResult
 pub fn get_calendar(state: State<RtCtx>) -> CmdResult<CalendarDto> {
     let actor = state.require_session()?;
     state.with_db(|conn| get_calendar_logic(conn, &actor))
+}
+
+#[tauri::command]
+pub fn working_days(state: State<RtCtx>, from: String, to: String) -> CmdResult<i64> {
+    state.require_session()?;
+    state.with_db(|conn| working_days_logic(conn, &from, &to))
 }
 
 #[tauri::command]
