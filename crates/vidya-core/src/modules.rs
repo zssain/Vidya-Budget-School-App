@@ -69,7 +69,7 @@ pub fn module_for(action: Action) -> Module {
         | EditStudentDetails | ViewStudent | ViewGuardianAddress | StudentCsvImport
         | StudentCsvExport | ViewFees | RecordPayment | PrintShareReceipt
         | PaymentReversal | DayBook | FeeReports | SendFeeReminder | TakeAttendance
-        | EditSubmittedAttendance | ViewAttendance | EnterMarks | EditSubmittedMarks
+        | EditSubmittedAttendance | ViewAttendance | SendAbsenceAlert | EnterMarks | EditSubmittedMarks
         | ViewMarks | ViewReportCard | ManageStaff | InviteStaff | SuspendStaff
         | RemoveStaff | ManageDevices | Settings | Licence | Drive | Backups
         | Restore | SessionRollover | ApproveRequest | ViewOwnRequests | ViewInbox

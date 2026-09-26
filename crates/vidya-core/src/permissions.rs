@@ -206,6 +206,10 @@ pub enum Action {
     /// View attendance registers. Teacher for their own classes; Principal
     /// always. (Accountant: never — attendance data.)
     ViewAttendance,
+    /// Send an absence alert to a guardian (email queued / WhatsApp tap), P14.
+    /// Teacher only if class teacher of `target.class_id`; Principal always.
+    /// (Accountant: never — attendance data.)
+    SendAbsenceAlert,
 
     // ---- Marks (Teacher for own class-subjects + Principal) ----
     /// Enter marks for an exam subject. Teacher only for their own
@@ -401,6 +405,7 @@ fn accountant(action: Action, _target: &Target) -> Decision {
         Action::TakeAttendance
         | Action::EditSubmittedAttendance
         | Action::ViewAttendance
+        | Action::SendAbsenceAlert
         | Action::EnterMarks
         | Action::EditSubmittedMarks
         | Action::ViewMarks
@@ -436,7 +441,7 @@ fn accountant(action: Action, _target: &Target) -> Decision {
 fn teacher(actor: &Actor, action: Action, target: &Target) -> Decision {
     match action {
         // ---- Attendance: only for classes they are class teacher of. ----
-        Action::TakeAttendance | Action::ViewAttendance => {
+        Action::TakeAttendance | Action::ViewAttendance | Action::SendAbsenceAlert => {
             if class_owned(actor, target) {
                 Decision::allow()
             } else {
@@ -572,13 +577,13 @@ fn class_subject_owned(actor: &Actor, target: &Target) -> bool {
 
 impl Action {
     /// Every action variant (for the matrix-as-data seed and exhaustive checks).
-    pub const ALL: [Action; 41] = [
+    pub const ALL: [Action; 42] = [
         Action::CreateStudent, Action::EnrollStudent, Action::TransferSection, Action::MarkStudentLeft,
         Action::EditStudentDetails, Action::ViewStudent, Action::ViewGuardianAddress,
         Action::StudentCsvImport, Action::StudentCsvExport,
         Action::ViewFees, Action::RecordPayment, Action::PrintShareReceipt, Action::PaymentReversal,
         Action::DayBook, Action::FeeReports, Action::SendFeeReminder,
-        Action::TakeAttendance, Action::EditSubmittedAttendance, Action::ViewAttendance,
+        Action::TakeAttendance, Action::EditSubmittedAttendance, Action::ViewAttendance, Action::SendAbsenceAlert,
         Action::EnterMarks, Action::EditSubmittedMarks, Action::ViewMarks, Action::ViewReportCard,
         Action::ManageStaff, Action::InviteStaff, Action::SuspendStaff, Action::RemoveStaff,
         Action::ManageDevices, Action::Settings, Action::Licence, Action::Drive, Action::Backups,
@@ -630,7 +635,7 @@ fn target_kind_for(action: Action) -> TargetKind {
         CreateStudent | EnrollStudent | TransferSection | MarkStudentLeft | EditStudentDetails
         | ViewStudent | ViewGuardianAddress | StudentCsvImport | StudentCsvExport => TargetKind::Student,
         ViewFees | RecordPayment | PrintShareReceipt | PaymentReversal | DayBook | FeeReports | SendFeeReminder => TargetKind::Fee,
-        TakeAttendance | EditSubmittedAttendance | ViewAttendance => TargetKind::Attendance,
+        TakeAttendance | EditSubmittedAttendance | ViewAttendance | SendAbsenceAlert => TargetKind::Attendance,
         EnterMarks | EditSubmittedMarks | ViewMarks | ViewReportCard => TargetKind::Marks,
         ManageStaff | InviteStaff | SuspendStaff | RemoveStaff | ManageDevices => TargetKind::Staff,
         Settings | Licence | Drive | Backups | Restore | SessionRollover => TargetKind::School,
@@ -1243,7 +1248,7 @@ mod tests {
 
     #[test]
     fn action_all_covers_every_variant_and_keys_round_trip() {
-        assert_eq!(Action::ALL.len(), 41); // P14 added SendFeeReminder
+        assert_eq!(Action::ALL.len(), 42); // P14 added SendFeeReminder, SendAbsenceAlert
 
         for a in Action::ALL {
             assert_eq!(Action::from_key(&a.as_key()), Some(a), "{a:?}");

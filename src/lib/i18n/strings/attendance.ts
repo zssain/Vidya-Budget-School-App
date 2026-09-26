@@ -5,6 +5,26 @@ import type { Bundle } from '../index'
 // translation (Phase 8, Part F). No visible string is
 // hard-coded in AttendanceScreen.tsx — it reads these via t('att.*').
 const en: Record<string, string> = {
+  // Absence alerts (P14 Step 4, prototype `absence`). Email = queued (the school
+  // PC sends later — honest status, not "sent").
+  'absence.title': 'Absent today.',
+  'absence.back': 'Back to home',
+  'absence.oneAbsent': '1 student absent',
+  'absence.nAbsent': '{n} students absent',
+  'absence.intro': 'Let parents know. Both are free: email from the school, or WhatsApp with the message ready.',
+  'absence.guardian': 'Guardian',
+  'absence.noGuardian': 'No guardian on file',
+  'absence.email': 'Email',
+  'absence.whatsapp': 'WhatsApp',
+  'absence.queued': 'Email queued',
+  'absence.opened': 'WhatsApp opened',
+  'absence.noEmail': 'No email',
+  'absence.noConsent': 'No consent',
+  'absence.message': 'Message',
+  'absence.emailAll': 'Email all parents',
+  'absence.queuedNote': 'Emails are sent from the school computer when it is online.',
+  'absence.none': 'No absentees today.',
+  'absence.notSubmitted': 'Submit the attendance first.',
   'att.h1': 'Attendance.',
   'att.subtitle': 'Class V-A · Wed, 23 Sep',
   'att.count.present': 'Present',
@@ -28,6 +48,24 @@ const en: Record<string, string> = {
 }
 
 const hi: Record<string, string> = {
+  'absence.title': 'आज अनुपस्थित।',
+  'absence.back': 'होम पर वापस',
+  'absence.oneAbsent': '1 विद्यार्थी अनुपस्थित',
+  'absence.nAbsent': '{n} विद्यार्थी अनुपस्थित',
+  'absence.intro': 'अभिभावकों को बताएँ। दोनों मुफ़्त हैं: स्कूल से ईमेल, या तैयार संदेश के साथ WhatsApp।',
+  'absence.guardian': 'अभिभावक',
+  'absence.noGuardian': 'कोई अभिभावक दर्ज नहीं',
+  'absence.email': 'ईमेल',
+  'absence.whatsapp': 'WhatsApp',
+  'absence.queued': 'ईमेल कतार में',
+  'absence.opened': 'WhatsApp खुला',
+  'absence.noEmail': 'ईमेल नहीं',
+  'absence.noConsent': 'सहमति नहीं',
+  'absence.message': 'संदेश',
+  'absence.emailAll': 'सभी अभिभावकों को ईमेल करें',
+  'absence.queuedNote': 'स्कूल कंप्यूटर ऑनलाइन होने पर ईमेल भेजे जाते हैं।',
+  'absence.none': 'आज कोई अनुपस्थित नहीं।',
+  'absence.notSubmitted': 'पहले उपस्थिति जमा करें।',
   'att.h1': 'उपस्थिति।',
   'att.subtitle': 'कक्षा V-A · बुध, 23 सितंबर',
   'att.count.present': 'उपस्थित',

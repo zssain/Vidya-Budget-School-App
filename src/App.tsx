@@ -38,6 +38,7 @@ import DayBookDoc from '@/screens/print/DayBookDoc'
 import PrincipalHomeContainer from '@/screens/containers/PrincipalHomeContainer'
 import CollectFeeContainer from '@/screens/containers/CollectFeeContainer'
 import AttendanceContainer from '@/screens/containers/AttendanceContainer'
+import AbsenceContainer from '@/screens/containers/AbsenceContainer'
 import TeacherHomeScreen from '@/screens/phone/TeacherHomeScreen'
 import Gallery from '@/dev/Gallery'
 import Mocks from '@/dev/Mocks'
@@ -156,6 +157,8 @@ export default function App() {
       if (route.role === 'teacher') {
         const m = matchRoute('/teacher/attendance/:classId', base)
         if (m) return <AttendanceContainer classId={m.classId} />
+        const ab = matchRoute('/teacher/absence/:classId/:date', base)
+        if (ab) return <AbsenceContainer classId={ab.classId} date={ab.date} />
         return <TeacherHomeScreen data={teacherHomeFixture} />
       }
       // Principal / Accountant: every desktop screen renders inside AppShell

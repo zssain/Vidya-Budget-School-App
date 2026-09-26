@@ -661,6 +661,27 @@ export interface BulkReminderDto {
   skipped_no_email: number
   skipped_no_consent: number
 }
+
+// Absence alerts (P14 Step 4, prototype `absence`).
+export interface AbsentStudentDto {
+  student_id: string
+  student_name: string
+  roll_no: number | null
+  guardian_id: string | null
+  guardian_name: string | null
+  guardian_mobile: string | null
+  guardian_email: string | null
+  guardian_language: string | null
+  has_messages_consent: boolean
+  preview: string
+}
+export interface AbsenceListDto {
+  class_id: string
+  class_display: string | null
+  date: string
+  submitted: boolean
+  students: AbsentStudentDto[]
+}
 export interface SessionInput {
   label: string
   starts_on: string
@@ -824,6 +845,7 @@ export const preview_fee_reminder = (studentId: string, language?: string | null
   invoke<ReminderPreviewDto>('preview_fee_reminder', { studentId, language: language ?? null })
 export const queue_fee_reminders = (studentIds: string[], language?: string | null) =>
   invoke<BulkReminderDto>('queue_fee_reminders', { studentIds, language: language ?? null })
+export const list_absent = (classId: string, date: string) => invoke<AbsenceListDto>('list_absent', { classId, date })
 
 // ---- Phase 13: school calendar (weekly offs + holidays/exams/events) --------
 export interface CalendarEventDto {

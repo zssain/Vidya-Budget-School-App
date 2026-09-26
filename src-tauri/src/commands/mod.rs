@@ -106,6 +106,7 @@ pub const COMMANDS: &[&str] = &[
     "list_dues",
     "preview_fee_reminder",
     "queue_fee_reminders",
+    "list_absent",
     "get_calendar",
     "set_weekly_offs",
     "add_calendar_event",
@@ -520,6 +521,14 @@ pub fn queue_fee_reminders(state: State<RtCtx>, student_ids: Vec<String>, langua
     let device_id = state.device_id.lock().map_err(|_| crate::error::CmdError::internal("lock"))?.clone();
     let mode = state.device_mode;
     state.with_db(|conn| queue_fee_reminders_logic(conn, &actor, device_id.as_deref(), mode, &student_ids, language.as_deref()))
+}
+
+// --------------------------------------------------------------- absence ------
+
+#[tauri::command]
+pub fn list_absent(state: State<RtCtx>, class_id: String, date: String) -> CmdResult<AbsenceListDto> {
+    let actor = state.require_session()?;
+    state.with_db(|conn| list_absent_logic(conn, &actor, &class_id, &date))
 }
 
 // --------------------------------------------------------------- calendar -----

@@ -9,6 +9,7 @@ import type { CmdError } from '@/lib/api'
 import AttendanceScreen from '@/screens/phone/AttendanceScreen'
 import type { AttendanceData, Mark } from '@/dev/fixtures/attendance'
 import { t } from '@/lib/i18n'
+import { navigate } from '@/lib/router'
 
 function today(): string {
   return new Date().toISOString().slice(0, 10)
@@ -50,7 +51,12 @@ export default function AttendanceContainer({ classId }: { classId: string }) {
         void api.save_attendance_draft(classId, date, toInput(ms)).catch((e) => setError(e as CmdError))
       }}
       onSubmit={(ms) => {
-        void api.submit_attendance(classId, date, toInput(ms)).catch((e) => setError(e as CmdError))
+        // On success, show the "Absent today" alert screen (P14 Step 4) so the
+        // teacher can notify guardians of the absentees.
+        void api
+          .submit_attendance(classId, date, toInput(ms))
+          .then(() => navigate(`/teacher/absence/${classId}/${date}`))
+          .catch((e) => setError(e as CmdError))
       }}
     />
   )

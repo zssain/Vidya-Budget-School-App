@@ -4115,16 +4115,24 @@ pub struct RecordMessageInput {
     pub related_id: Option<String>,
 }
 
-/// The permission a message purpose (`kind`) requires. Extended as P14 steps land
-/// (fee_reminder → SendFeeReminder in Step 5, absence_alert → SendAbsenceAlert in
-/// Step 4, circular → ManageCirculars in Step 6). Unknown kinds are rejected so a
-/// new purpose can never sneak past a permission check.
-fn action_for_message_kind(kind: &str) -> CmdResult<Action> {
+/// The permission (action + target kind) a message purpose (`kind`) requires.
+/// Extended as P14 steps land (circular → ManageCirculars in Step 6). Unknown
+/// kinds are rejected so a new purpose can never sneak past a permission check.
+fn action_for_message_kind(kind: &str) -> CmdResult<(Action, TargetKind)> {
     match kind {
-        "receipt_share" => Ok(Action::PrintShareReceipt),
-        "fee_reminder" => Ok(Action::SendFeeReminder),
+        "receipt_share" => Ok((Action::PrintShareReceipt, TargetKind::Fee)),
+        "fee_reminder" => Ok((Action::SendFeeReminder, TargetKind::Fee)),
+        "absence_alert" => Ok((Action::SendAbsenceAlert, TargetKind::Attendance)),
         _ => Err(CmdError::validation("kind", "unsupported")),
     }
+}
+
+/// The student's current class id (open enrollment), for permission targets.
+fn current_class_of(conn: &Connection, student_id: &str) -> Option<String> {
+    conn.query_row(
+        "SELECT class_id FROM enrollment WHERE student_id=?1 AND to_date IS NULL LIMIT 1",
+        params![student_id], |r| r.get(0),
+    ).optional().ok().flatten()
 }
 
 /// Insert one message row + its audit entry + its op on an OPEN transaction, and
@@ -4205,7 +4213,19 @@ pub fn record_message_logic(
     input: &RecordMessageInput,
 ) -> CmdResult<MessageDto> {
     let actor = actor_from(conn, actor_s)?;
-    require_allow(&actor, action_for_message_kind(&input.kind)?, &Target::of(TargetKind::Fee))?;
+    let (action, target_kind) = action_for_message_kind(&input.kind)?;
+    // For an attendance-scoped purpose (absence_alert) the target class is derived
+    // from the related student, so a teacher can only alert their OWN class's
+    // absentees (never a class they don't class-teach).
+    let target = match target_kind {
+        TargetKind::Attendance => Target {
+            kind: TargetKind::Attendance,
+            class_id: input.related_id.as_deref().and_then(|sid| current_class_of(conn, sid)),
+            ..Default::default()
+        },
+        k => Target::of(k),
+    };
+    require_allow(&actor, action, &target)?;
 
     let channel = vidya_core::messages::Channel::parse(&input.channel)
         .ok_or_else(|| CmdError::validation("channel", "unknown"))?;
@@ -4258,6 +4278,95 @@ pub fn list_messages_logic(
         .query_map(rusqlite::params_from_iter(args.iter()), map_message)?
         .collect::<rusqlite::Result<_>>()?;
     Ok(rows)
+}
+
+// ---- Absence alerts (P14 Step 4, prototype `absence`) -----------------------
+
+#[derive(Debug, Serialize)]
+pub struct AbsentStudentDto {
+    pub student_id: String,
+    pub student_name: String,
+    pub roll_no: Option<i64>,
+    pub guardian_id: Option<String>,
+    pub guardian_name: Option<String>,
+    pub guardian_mobile: Option<String>,
+    pub guardian_email: Option<String>,
+    pub guardian_language: Option<String>,
+    pub has_messages_consent: bool,
+    /// The `absence_alert` body rendered in the guardian's language, for the preview.
+    pub preview: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct AbsenceListDto {
+    pub class_id: String,
+    pub class_display: Option<String>,
+    pub date: String,
+    /// False when there is no submitted sheet for (class, date) yet.
+    pub submitted: bool,
+    pub students: Vec<AbsentStudentDto>,
+}
+
+/// Render the `absence_alert` template for a student on `date` in `lang`
+/// (`{student_name} {date} {school_name}`).
+fn render_absence_alert(conn: &Connection, student_name: &str, date: &str, lang: &str) -> CmdResult<String> {
+    let lang = if matches!(lang, "en" | "hi" | "te") { lang } else { "en" };
+    let (_subj, body_tmpl) = load_message_template(conn, "absence_alert", lang)?;
+    let school_name: String = conn.query_row("SELECT name FROM school LIMIT 1", [], |r| r.get(0)).optional()?.unwrap_or_default();
+    let mut vars: std::collections::BTreeMap<String, String> = std::collections::BTreeMap::new();
+    vars.insert("student_name".into(), student_name.to_string());
+    vars.insert("date".into(), date.to_string());
+    vars.insert("school_name".into(), school_name);
+    Ok(vidya_core::messages::render(&body_tmpl, &vars))
+}
+
+/// The absent students for a class on a date (after the sheet is submitted), each
+/// with their primary guardian, consent and a rendered preview. Allowed for the
+/// class teacher of the class and the Principal (`SendAbsenceAlert`). Returns
+/// `submitted=false` (and no students) when there is no submitted sheet yet.
+pub fn list_absent_logic(conn: &mut Connection, actor_s: &SessionStaff, class_id: &str, date: &str) -> CmdResult<AbsenceListDto> {
+    let actor = actor_from(conn, actor_s)?;
+    require_allow(&actor, Action::SendAbsenceAlert, &Target { kind: TargetKind::Attendance, class_id: Some(class_id.to_string()), ..Default::default() })?;
+    let class_display: Option<String> = conn.query_row("SELECT display FROM class WHERE id=?1", params![class_id], |r| r.get(0)).optional()?;
+    let sheet: Option<(String, String)> = conn
+        .query_row("SELECT id, status FROM attendance_sheet WHERE class_id=?1 AND date=?2", params![class_id, date], |r| Ok((r.get(0)?, r.get(1)?)))
+        .optional()?;
+    let (sheet_id, status) = match sheet {
+        Some(s) => s,
+        None => return Ok(AbsenceListDto { class_id: class_id.into(), class_display, date: date.into(), submitted: false, students: vec![] }),
+    };
+    if status != "submitted" {
+        return Ok(AbsenceListDto { class_id: class_id.into(), class_display, date: date.into(), submitted: false, students: vec![] });
+    }
+
+    #[allow(clippy::type_complexity)]
+    let raw: Vec<(String, String, Option<i64>, Option<String>, Option<String>, Option<String>, Option<String>, Option<String>)> = {
+        let mut stmt = conn.prepare(
+            "SELECT s.id, s.name, e.roll_no, g.id, g.name, g.mobile, g.email, g.language \
+             FROM attendance_mark m JOIN student s ON s.id=m.student_id \
+               LEFT JOIN enrollment e ON e.student_id=s.id AND e.to_date IS NULL \
+               LEFT JOIN student_guardian sg ON sg.student_id=s.id AND sg.is_primary=1 \
+               LEFT JOIN guardian g ON g.id=sg.guardian_id \
+             WHERE m.sheet_id=?1 AND m.mark='A' ORDER BY e.roll_no",
+        )?;
+        let out = stmt.query_map(params![sheet_id], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?, r.get(7)?))
+        })?.collect::<rusqlite::Result<_>>()?;
+        out
+    };
+
+    let mut students = Vec::with_capacity(raw.len());
+    for (sid, name, roll, gid, gname, gmobile, gemail, glang) in raw {
+        let lang = glang.clone().unwrap_or_else(|| "en".into());
+        let preview = render_absence_alert(conn, &name, date, &lang)?;
+        let consent = messages_consent_logic(conn, &sid).unwrap_or(false);
+        students.push(AbsentStudentDto {
+            student_id: sid, student_name: name, roll_no: roll,
+            guardian_id: gid, guardian_name: gname, guardian_mobile: gmobile, guardian_email: gemail,
+            guardian_language: glang, has_messages_consent: consent, preview,
+        });
+    }
+    Ok(AbsenceListDto { class_id: class_id.into(), class_display, date: date.into(), submitted: true, students })
 }
 
 // ============================================================ calendar =======
@@ -5563,6 +5672,49 @@ mod tests {
         let teacher = SessionStaff { id: "stf-meena".into(), name: "Meena".into(), role: "teacher".into() };
         assert_eq!(list_dues_logic(&mut c, &teacher, None).unwrap_err().code, "FORBIDDEN");
         assert_eq!(queue_fee_reminders_logic(&mut c, &teacher, None, DeviceMode::Server, &[], None).unwrap_err().code, "FORBIDDEN");
+    }
+
+    // ---- Phase 14 Step 4: absence alerts ----------------------------------
+    fn meena() -> SessionStaff {
+        SessionStaff { id: "stf-meena".into(), name: "Meena Iyer".into(), role: "teacher".into() }
+    }
+
+    #[test]
+    fn absence_list_scopes_to_class_teacher() {
+        let mut c = seeded();
+        // Meena class-teaches V-A (cls-5a): submitted sheet with 3 absentees.
+        let list = list_absent_logic(&mut c, &meena(), "cls-5a", "2026-09-23").unwrap();
+        assert!(list.submitted);
+        assert_eq!(list.students.len(), 3);
+        assert!(!list.students[0].preview.is_empty(), "absence_alert body rendered");
+        // A teacher who does not class-teach cls-5a → forbidden.
+        let other = SessionStaff { id: "stf-anita".into(), name: "Anita".into(), role: "teacher".into() };
+        assert_eq!(list_absent_logic(&mut c, &other, "cls-5a", "2026-09-23").unwrap_err().code, "FORBIDDEN");
+        // Accountant → forbidden (no attendance data).
+        assert_eq!(list_absent_logic(&mut c, &accountant(), "cls-5a", "2026-09-23").unwrap_err().code, "FORBIDDEN");
+        // Principal on a not-yet-submitted class → submitted:false, empty.
+        let pending = list_absent_logic(&mut c, &principal(), "cls-7b", "2026-09-23").unwrap();
+        assert!(!pending.submitted && pending.students.is_empty());
+    }
+
+    fn absence_input(student_id: &str) -> RecordMessageInput {
+        RecordMessageInput {
+            channel: "wa_tap".into(), kind: "absence_alert".into(), language: "en".into(),
+            to_guardian_id: None, to_staff_id: None, to_address: Some("9876543210".into()),
+            subject: None, body: Some("Absent today".into()),
+            related_table: Some("student".into()), related_id: Some(student_id.to_string()),
+        }
+    }
+
+    #[test]
+    fn absence_alert_only_for_own_class_students() {
+        let mut c = seeded();
+        let mine = list_absent_logic(&mut c, &meena(), "cls-5a", "2026-09-23").unwrap().students[0].student_id.clone();
+        // Meena may alert an absentee in her own class.
+        assert!(record_message_logic(&mut c, &meena(), None, DeviceMode::Server, &absence_input(&mine)).is_ok());
+        // But NOT a student in a class she does not class-teach (cls-2a).
+        let other: String = c.query_row("SELECT student_id FROM enrollment WHERE class_id='cls-2a' AND to_date IS NULL LIMIT 1", [], |r| r.get(0)).unwrap();
+        assert_eq!(record_message_logic(&mut c, &meena(), None, DeviceMode::Server, &absence_input(&other)).unwrap_err().code, "FORBIDDEN");
     }
 
     #[test]
