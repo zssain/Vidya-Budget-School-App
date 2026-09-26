@@ -2311,7 +2311,9 @@ pub fn set_opening_balance_logic(
         return Err(CmdError::validation("opening", "already_set"));
     }
     let now = now_iso();
-    let date = today[..today.len().min(10)].to_string();
+    // The opening voucher is dated at the session start so it counts as the
+    // opening balance (not "money in today") on every day of the session.
+    let date = current_session_range(conn)?.0.min(today[..today.len().min(10)].to_string());
     let (series, _) = receipt_series_and_last(conn, device_id)?;
     let school_id = single_school_id(conn)?;
     let ctx = WriteCtx { mode: device_mode };
@@ -8346,6 +8348,67 @@ mod tests {
         // A teacher can export no finance report.
         let teacher = SessionStaff { id: "stf-meena".into(), name: "M".into(), role: "teacher".into() };
         assert!(export_csv_logic(&mut c, &teacher, "expenses", &p("t"), Some("2026-09-01|2026-09-30")).is_err());
+    }
+
+    #[test]
+    fn cash_book_running_balance_and_profit_equal_the_ledger() {
+        let mut c = seeded();
+        // Opening balance (Principal) — dated at session start → part of "opening".
+        set_opening_balance_logic(&mut c, &principal(), Some("dev-a1"), DeviceMode::Server, "2026-09-23", 3_840_000, 0).unwrap();
+
+        let cb = cash_book_logic(&mut c, &principal(), "2026-09-23").unwrap();
+        // Strip identity: opening + in − out = in hand.
+        assert_eq!(cb.opening_paise + cb.money_in_paise - cb.money_out_paise, cb.in_hand_paise);
+        // The last row's running balance equals cash+bank in hand.
+        if let Some(last) = cb.rows.last() {
+            assert_eq!(last.balance_paise, cb.in_hand_paise);
+        }
+        // Today's expenses (electricity 6,850 + repairs 1,200 + stationery 4,300) are money out.
+        assert!(cb.money_out_paise >= 685_000 + 120_000 + 430_000);
+
+        // Profit summary = Σ income − Σ expense on the ledger accounts.
+        let pf = profit_summary_logic(&mut c, &principal()).unwrap();
+        assert_eq!(pf.surplus_paise, pf.income_paise - pf.expense_paise);
+        let income: i64 = c.query_row(
+            "SELECT COALESCE(SUM(le.credit_paise-le.debit_paise),0) FROM ledger_entry le JOIN ledger_account a ON a.id=le.account_id WHERE a.kind='income'",
+            [], |r| r.get(0)).unwrap();
+        let expense: i64 = c.query_row(
+            "SELECT COALESCE(SUM(le.debit_paise-le.credit_paise),0) FROM ledger_entry le JOIN ledger_account a ON a.id=le.account_id WHERE a.kind='expense'",
+            [], |r| r.get(0)).unwrap();
+        assert_eq!(pf.income_paise, income, "profit income = ledger income accounts");
+        assert_eq!(pf.expense_paise, expense, "profit expense = ledger expense accounts");
+    }
+
+    #[test]
+    fn every_voucher_kind_is_produced_and_balanced() {
+        let mut c = seeded();
+        c.execute("UPDATE module_setting SET enabled=1 WHERE key='store'", []).unwrap();
+        // Exercise each money movement so every voucher kind exists.
+        set_opening_balance_logic(&mut c, &principal(), Some("dev-a1"), DeviceMode::Server, "2026-09-23", 100_000, 0).unwrap(); // opening
+        let exp = record_expense_logic(&mut c, &accountant(), Some("dev-a2"), DeviceMode::Server, "2026-09-23",
+            &ExpenseInput { category_account_id: "rent".into(), amount_paise: 50_000, paid_via: "bank".into(), details: None, vendor: None, bill_attachment: None, spent_on: Some("2026-09-23".into()) }).unwrap(); // expense
+        reverse_expense_logic(&mut c, &principal(), None, DeviceMode::Server, &exp.id, "test").unwrap(); // reversal
+        give_advance_logic(&mut c, &principal(), Some("dev-a1"), DeviceMode::Server, "2026-09-23",
+            &AdvanceInput { staff_id: "stf-anita".into(), amount_paise: 100_000, recover_per_month_paise: 100_000, mode: "cash".into() }).unwrap(); // advance
+        pay_salaries_logic(&mut c, &principal(), Some("dev-a1"), DeviceMode::Server, "2026-09", "bank", &[]).unwrap(); // salary
+        record_store_sale_logic(&mut c, &accountant(), Some("dev-a2"), DeviceMode::Server, "2026-09-23",
+            &StoreSaleInput { student_id: None, guardian_id: None, mode: "cash".into(), items: vec![SaleItemInput { item_id: "itm-tie".into(), qty: 1 }] }).unwrap(); // store_sale
+        // receipt is already in the seed. Every kind present:
+        let kinds: Vec<String> = {
+            let mut s = c.prepare("SELECT DISTINCT kind FROM voucher ORDER BY kind").unwrap();
+            s.query_map([], |r| r.get::<_, String>(0)).unwrap().collect::<rusqlite::Result<_>>().unwrap()
+        };
+        for k in ["receipt", "expense", "reversal", "advance", "salary", "store_sale", "opening"] {
+            assert!(kinds.iter().any(|x| x == k), "voucher kind {k} produced");
+        }
+        // Every voucher balances, and the whole book nets to zero.
+        let mut s = c.prepare("SELECT voucher_id, SUM(debit_paise), SUM(credit_paise) FROM ledger_entry GROUP BY voucher_id").unwrap();
+        let rows = s.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?, r.get::<_, i64>(2)?))).unwrap();
+        for row in rows {
+            let (vid, d, cr) = row.unwrap();
+            assert_eq!(d, cr, "voucher {vid} balances");
+        }
+        assert_eq!(crate::ledger::ledger_imbalance(&c).unwrap(), 0);
     }
 
     #[test]
