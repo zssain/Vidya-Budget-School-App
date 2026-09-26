@@ -1263,6 +1263,32 @@ pub fn export_csv_logic(conn: &mut Connection, actor_s: &SessionStaff, kind: &st
             require_allow(&actor, Action::DayBook, &Target::of(TargetKind::Fee))?;
             daybook_csv_rows(conn, arg.unwrap_or(""))?
         }
+        // P15 reports (Step 7). Scoped by role via the same actions as the screens.
+        "expenses" => {
+            require_allow(&actor, Action::ViewAccounts, &Target::of(TargetKind::Fee))?;
+            require_module_enabled(conn, vidya_core::modules::Module::Accounts)?;
+            let (from, to) = split_range(arg);
+            expenses_csv_rows(conn, &from, &to)?
+        }
+        "salary" => {
+            // Permission (ManageSalary) + module checked inside salary_register_logic.
+            let reg = salary_register_logic(conn, actor_s, arg.unwrap_or(""), &[])?;
+            salary_csv_rows(&reg)
+        }
+        "store_sales" => {
+            require_allow(&actor, Action::RecordStoreSale, &Target::of(TargetKind::Fee))?;
+            require_module_enabled(conn, vidya_core::modules::Module::Store)?;
+            store_sales_csv_rows(conn)?
+        }
+        "store_stock" => {
+            require_allow(&actor, Action::RecordStoreSale, &Target::of(TargetKind::Fee))?;
+            require_module_enabled(conn, vidya_core::modules::Module::Store)?;
+            store_stock_csv_rows(conn)?
+        }
+        "instalment_dues" => {
+            require_allow(&actor, Action::FeeReports, &Target::of(TargetKind::Fee))?;
+            instalment_dues_csv_rows(conn)?
+        }
         _ => return Err(CmdError::validation("kind", "unknown")),
     };
     let escaped: Vec<Vec<String>> = rows
@@ -3394,6 +3420,128 @@ fn daybook_csv_rows(conn: &Connection, date: &str) -> rusqlite::Result<Vec<Vec<S
     })?;
     for row in rows {
         out.push(row?);
+    }
+    Ok(out)
+}
+
+// ---- P15 report CSV rows (Step 7) -------------------------------------------
+
+/// Split an `arg` of `"from|to"` (YYYY-MM-DD) into (from, to); wide defaults if absent.
+fn split_range(arg: Option<&str>) -> (String, String) {
+    match arg.and_then(|a| a.split_once('|')) {
+        Some((f, t)) => (f.to_string(), t.to_string()),
+        None => ("0000-01-01".into(), "9999-12-31".into()),
+    }
+}
+
+/// Expenses in a date range (for "expenses by category" — sortable in the sheet).
+fn expenses_csv_rows(conn: &Connection, from: &str, to: &str) -> rusqlite::Result<Vec<Vec<String>>> {
+    let mut out = vec![vec![
+        "Date".into(), "Category".into(), "Details".into(), "Vendor".into(),
+        "Paid via".into(), "Amount (Rs)".into(), "Voucher".into(), "Status".into(),
+    ]];
+    let mut stmt = conn.prepare(
+        "SELECT e.spent_on, COALESCE(a.name,''), COALESCE(e.details,''), COALESCE(e.vendor,''), e.paid_via, e.amount_paise, \
+                COALESCE((SELECT v.voucher_no FROM voucher v WHERE v.source_table='expense' AND v.source_id=e.id),''), \
+                EXISTS(SELECT 1 FROM expense_reversal r WHERE r.expense_id=e.id) \
+         FROM expense e LEFT JOIN ledger_account a ON a.id=e.category_account_id \
+         WHERE e.spent_on>=?1 AND e.spent_on<=?2 ORDER BY a.name, e.spent_on",
+    )?;
+    let rows = stmt.query_map(params![from, to], |r| {
+        let amount: i64 = r.get(5)?;
+        let reversed: i64 = r.get(7)?;
+        Ok(vec![
+            r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, String>(3)?,
+            r.get::<_, String>(4)?, format!("{}", amount / 100), r.get::<_, String>(6)?,
+            if reversed != 0 { "Reversed".into() } else { "Recorded".into() },
+        ])
+    })?;
+    for row in rows {
+        out.push(row?);
+    }
+    Ok(out)
+}
+
+/// The salary register for a month, from a computed [`SalaryRegisterDto`].
+fn salary_csv_rows(reg: &SalaryRegisterDto) -> Vec<Vec<String>> {
+    let mut out = vec![vec![
+        "Staff".into(), "Role".into(), "Monthly (Rs)".into(), "Working days".into(), "Days present".into(),
+        "Unpaid days".into(), "Deduction (Rs)".into(), "Advance recovery (Rs)".into(), "Net (Rs)".into(), "Status".into(),
+    ]];
+    for r in &reg.rows {
+        out.push(vec![
+            r.name.clone(), r.role.clone(), format!("{}", r.monthly_paise / 100),
+            r.working_days.to_string(), r.days_present.to_string(), r.unpaid_leave_days.to_string(),
+            format!("{}", r.deduction_paise / 100), format!("{}", r.advance_recovery_paise / 100),
+            format!("{}", r.net_paise / 100), if r.paid { "Paid".into() } else { "Pending".into() },
+        ]);
+    }
+    out
+}
+
+/// Store sales (S- receipts).
+fn store_sales_csv_rows(conn: &Connection) -> rusqlite::Result<Vec<Vec<String>>> {
+    let mut out = vec![vec!["Receipt".into(), "Date".into(), "Total (Rs)".into(), "Mode".into()]];
+    let mut stmt = conn.prepare("SELECT receipt_no, substr(sold_at,1,10), total_paise, mode FROM store_sale ORDER BY sold_at DESC")?;
+    let rows = stmt.query_map([], |r| {
+        let total: i64 = r.get(2)?;
+        Ok(vec![r.get::<_, String>(0)?, r.get::<_, String>(1)?, format!("{}", total / 100), r.get::<_, String>(3)?])
+    })?;
+    for row in rows {
+        out.push(row?);
+    }
+    Ok(out)
+}
+
+/// Store stock (items + levels).
+fn store_stock_csv_rows(conn: &Connection) -> rusqlite::Result<Vec<Vec<String>>> {
+    let mut out = vec![vec!["Item".into(), "Price (Rs)".into(), "Stock".into(), "Low stock at".into(), "Active".into()]];
+    let mut stmt = conn.prepare("SELECT name, price_paise, stock, low_stock_at, active FROM store_item ORDER BY name")?;
+    let rows = stmt.query_map([], |r| {
+        let price: i64 = r.get(1)?;
+        Ok(vec![
+            r.get::<_, String>(0)?, format!("{}", price / 100), r.get::<_, i64>(2)?.to_string(),
+            r.get::<_, i64>(3)?.to_string(), if r.get::<_, i64>(4)? != 0 { "Yes".into() } else { "No".into() },
+        ])
+    })?;
+    for row in rows {
+        out.push(row?);
+    }
+    Ok(out)
+}
+
+/// Outstanding instalment dues, ordered by due date (§10.2).
+fn instalment_dues_csv_rows(conn: &Connection) -> rusqlite::Result<Vec<Vec<String>>> {
+    let mut out = vec![vec![
+        "Due date".into(), "Student".into(), "Class".into(), "Fee head".into(),
+        "Instalment".into(), "Amount (Rs)".into(), "Balance (Rs)".into(),
+    ]];
+    let mut stmt = conn.prepare(
+        "SELECT COALESCE(d.due_date,''), s.name, COALESCE(c.display,''), COALESCE(h.name, d.period, 'Fee'), \
+                d.instalment_no, d.amount_paise, \
+                d.amount_paise - COALESCE((SELECT SUM(pa.amount_paise) FROM payment_allocation pa WHERE pa.fee_due_id=d.id AND pa.kind='due'),0) \
+         FROM fee_due d JOIN student s ON s.id=d.student_id \
+           LEFT JOIN enrollment e ON e.student_id=s.id AND e.to_date IS NULL \
+           LEFT JOIN class c ON c.id=e.class_id \
+           LEFT JOIN fee_head h ON h.id=d.fee_head_id \
+         WHERE d.cancelled_at IS NULL AND s.status='active' \
+         ORDER BY d.due_date IS NULL, d.due_date, s.name",
+    )?;
+    let rows = stmt.query_map([], |r| {
+        let inst: i64 = r.get(4)?;
+        let amount: i64 = r.get(5)?;
+        let bal: i64 = r.get(6)?;
+        Ok((amount, bal, inst, vec![r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, String>(3)?]))
+    })?;
+    for row in rows {
+        let (amount, bal, inst, mut base) = row?;
+        if bal <= 0 {
+            continue; // only outstanding dues
+        }
+        base.push(inst.to_string());
+        base.push(format!("{}", amount / 100));
+        base.push(format!("{}", bal / 100));
+        out.push(base);
     }
     Ok(out)
 }
@@ -8169,6 +8317,35 @@ mod tests {
         assert_eq!(pay_salaries_logic(&mut c, &principal(), Some("dev-a1"), DeviceMode::Server, "2026-09", "bank", &days).unwrap().paid, 0);
         // Accountant cannot manage salary.
         assert!(salary_register_logic(&mut c, &accountant(), "2026-09", &[]).is_err());
+    }
+
+    #[test]
+    fn report_csv_exports_are_scoped_and_written() {
+        let mut c = seeded();
+        let p = |k: &str| std::env::temp_dir().join(format!("vidya-rep-{k}-{}.csv", uuid::Uuid::now_v7())).to_string_lossy().to_string();
+
+        // Expenses by category — accountant can; file has the header + rows.
+        let ep = p("exp");
+        let n = export_csv_logic(&mut c, &accountant(), "expenses", &ep, Some("2026-09-01|2026-09-30")).unwrap();
+        assert!(n >= 1, "seed has September expenses");
+        assert!(std::fs::read_to_string(&ep).unwrap().contains("Category"));
+
+        // Salary register — Principal only (accountant denied).
+        assert!(export_csv_logic(&mut c, &accountant(), "salary", &p("sal"), Some("2026-09")).is_err());
+        export_csv_logic(&mut c, &principal(), "salary", &p("sal"), Some("2026-09")).unwrap();
+
+        // Instalment dues by due date.
+        export_csv_logic(&mut c, &principal(), "instalment_dues", &p("dues"), None).unwrap();
+
+        // Store CSVs need the module on.
+        assert!(export_csv_logic(&mut c, &principal(), "store_stock", &p("stk"), None).is_err());
+        c.execute("UPDATE module_setting SET enabled=1 WHERE key='store'", []).unwrap();
+        export_csv_logic(&mut c, &principal(), "store_stock", &p("stk"), None).unwrap();
+        export_csv_logic(&mut c, &principal(), "store_sales", &p("sales"), None).unwrap();
+
+        // A teacher can export no finance report.
+        let teacher = SessionStaff { id: "stf-meena".into(), name: "M".into(), role: "teacher".into() };
+        assert!(export_csv_logic(&mut c, &teacher, "expenses", &p("t"), Some("2026-09-01|2026-09-30")).is_err());
     }
 
     #[test]

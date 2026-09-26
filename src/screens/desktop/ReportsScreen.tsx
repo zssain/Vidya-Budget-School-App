@@ -6,8 +6,9 @@ import { navigate } from '@/lib/router'
 import { t } from '@/lib/i18n'
 import { formatMoney } from '@/lib/format'
 import { printCurrentWindow } from '@/lib/print'
+import { pickSavePath } from '@/lib/files'
 import * as api from '@/lib/api'
-import type { AuditPageDto, ExamDto, ExamResultRowDto, FeeCollectionDto, FeeOverviewRow, MonthCountDto } from '@/lib/api'
+import type { AuditPageDto, ExamDto, ExamResultRowDto, ExpenseDto, FeeCollectionDto, FeeOverviewRow, MonthCountDto, SalaryRegisterDto, StoreItemDto, DuesListDto } from '@/lib/api'
 
 // Reports (prompts/P07 §12): role-based, printable. Audit-log viewer (filters +
 // pagination + chain status), admissions by month, fee collection by range,
@@ -15,9 +16,23 @@ import type { AuditPageDto, ExamDto, ExamResultRowDto, FeeCollectionDto, FeeOver
 // attendance links to the register's month view. Printed via the browser (the
 // AppShell chrome is hidden by print CSS in app.css).
 
-type Tab = 'audit' | 'admissions' | 'fees' | 'dues' | 'exam' | 'attendance'
-const TABS: Tab[] = ['audit', 'admissions', 'fees', 'dues', 'exam', 'attendance']
+type Tab = 'audit' | 'admissions' | 'fees' | 'dues' | 'exam' | 'attendance' | 'expenses' | 'salaries' | 'store' | 'instdues'
+const TABS: Tab[] = ['audit', 'admissions', 'fees', 'dues', 'exam', 'attendance', 'expenses', 'salaries', 'store', 'instdues']
 const PAGE = 25
+
+/** Save a CSV via the backend export_csv command; returns rows written or null. */
+async function exportCsv(kind: string, name: string, arg?: string): Promise<void> {
+  const p = await pickSavePath(name)
+  if (!p) return
+  try {
+    await api.export_csv(kind, p, arg)
+  } catch {
+    /* ignore — the picker was cancelled or the module is off */
+  }
+}
+function csvBtn(): CSSProperties {
+  return { height: '38px', padding: '0 14px', borderRadius: '6px', border: '1px solid var(--line-strong)', background: 'var(--surface)', color: 'var(--ink)', fontSize: '13px', fontWeight: 500, cursor: 'pointer' }
+}
 
 function tabBtn(sel: boolean): CSSProperties {
   return { textAlign: 'left', padding: '10px 14px', borderRadius: '8px', border: 'none', background: sel ? 'var(--accent-12)' : 'transparent', color: sel ? 'var(--accent)' : 'var(--ink)', fontSize: '14px', fontWeight: 500, cursor: 'pointer' }
@@ -52,6 +67,10 @@ export default function ReportsScreen() {
           {tab === 'dues' ? <DuesReport /> : null}
           {tab === 'exam' ? <ExamReport /> : null}
           {tab === 'attendance' ? <AttendanceReport /> : null}
+          {tab === 'expenses' ? <ExpensesReport /> : null}
+          {tab === 'salaries' ? <SalariesReport /> : null}
+          {tab === 'store' ? <StoreReport /> : null}
+          {tab === 'instdues' ? <InstalmentDuesReport /> : null}
         </div>
       </div>
     </div>
@@ -238,6 +257,135 @@ function AttendanceReport() {
     <div style={{ ...CARD, padding: '24px', display: 'flex', flexDirection: 'column', gap: '14px' }}>
       <div style={{ fontSize: '14px', color: 'var(--ink)' }}>{t('reports.att.note')}</div>
       <button type="button" onClick={() => navigate('/principal/attendance')} style={{ alignSelf: 'flex-start', height: '40px', padding: '0 16px', borderRadius: '6px', border: '1px solid var(--accent)', background: 'var(--accent)', color: 'var(--white)', fontSize: '14px', fontWeight: 500, cursor: 'pointer' }}>{t('reports.att.open')}</button>
+    </div>
+  )
+}
+
+// ---- P15 reports (Step 7): expenses by category, salary register, store, dues ----
+
+function monthStart(): string {
+  const d = new Date()
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-01`
+}
+function todayIso(): string {
+  return new Date().toISOString().slice(0, 10)
+}
+function thisMonth(): string {
+  return new Date().toISOString().slice(0, 7)
+}
+
+function ExpensesReport() {
+  const [from, setFrom] = useState(monthStart())
+  const [to, setTo] = useState(todayIso())
+  const [rows, setRows] = useState<ExpenseDto[]>([])
+  useEffect(() => { api.list_expenses(from, to).then(setRows).catch(() => setRows([])) }, [from, to])
+  // Group by category.
+  const byCat = new Map<string, { count: number; total: number }>()
+  for (const r of rows) {
+    if (r.reversed) continue
+    const g = byCat.get(r.category_name) ?? { count: 0, total: 0 }
+    g.count += 1
+    g.total += r.amount_paise
+    byCat.set(r.category_name, g)
+  }
+  const cats = [...byCat.entries()].sort((a, b) => b[1].total - a[1].total)
+  const total = cats.reduce((n, [, g]) => n + g.total, 0)
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+      <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+        <input type="date" value={from} onChange={(e) => setFrom(e.target.value)} style={field()} />
+        <span style={{ color: 'var(--muted)' }}>→</span>
+        <input type="date" value={to} onChange={(e) => setTo(e.target.value)} style={field()} />
+        <button type="button" style={{ ...csvBtn(), marginLeft: 'auto' }} onClick={() => exportCsv('expenses', `expenses-${from}-${to}.csv`, `${from}|${to}`)}>{t('reports.exportCsv')}</button>
+      </div>
+      <div style={CARD}>
+        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+          <thead><tr><th style={th}>{t('reports.exp.category')}</th><th style={{ ...th, textAlign: 'right' }}>{t('reports.exp.count')}</th><th style={{ ...th, textAlign: 'right' }}>{t('reports.exp.total')}</th></tr></thead>
+          <tbody>
+            {cats.map(([cat, g]) => (
+              <tr key={cat}><td style={td}>{cat}</td><td style={{ ...td, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{g.count}</td><td style={{ ...td, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{formatMoney(g.total)}</td></tr>
+            ))}
+            {cats.length === 0 ? <tr><td style={{ ...td, color: 'var(--muted)' }} colSpan={3}>{t('reports.exp.none')}</td></tr> : (
+              <tr><td style={{ ...td, fontWeight: 600 }}>{t('reports.exp.grand')}</td><td style={td} /><td style={{ ...td, textAlign: 'right', fontWeight: 600, fontVariantNumeric: 'tabular-nums' }}>{formatMoney(total)}</td></tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  )
+}
+
+function SalariesReport() {
+  const [month, setMonth] = useState(thisMonth())
+  const [data, setData] = useState<SalaryRegisterDto | null>(null)
+  useEffect(() => { api.salary_register(month).then(setData).catch(() => setData(null)) }, [month])
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+      <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+        <input type="month" value={month} onChange={(e) => setMonth(e.target.value)} style={field()} />
+        <button type="button" style={{ ...csvBtn(), marginLeft: 'auto' }} onClick={() => exportCsv('salary', `salary-${month}.csv`, month)}>{t('reports.exportCsv')}</button>
+      </div>
+      {data ? (
+        <div style={CARD}>
+          <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+            <thead><tr><th style={th}>{t('salary.col.staff')}</th><th style={{ ...th, textAlign: 'right' }}>{t('salary.col.monthly')}</th><th style={{ ...th, textAlign: 'right' }}>{t('salary.col.net')}</th><th style={th}>{t('salary.col.status')}</th></tr></thead>
+            <tbody>
+              {data.rows.map((r) => (
+                <tr key={r.staff_id}><td style={td}>{r.name}</td><td style={{ ...td, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{formatMoney(r.monthly_paise)}</td><td style={{ ...td, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{formatMoney(r.net_paise)}</td><td style={td}>{r.paid ? t('salary.paid') : t('salary.pending')}</td></tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ) : <div style={{ color: 'var(--muted)', fontSize: '13px' }}>{t('reports.store.off')}</div>}
+    </div>
+  )
+}
+
+function StoreReport() {
+  const [items, setItems] = useState<StoreItemDto[] | null>(null)
+  const [off, setOff] = useState(false)
+  useEffect(() => { api.list_store_items(true).then((r) => { setItems(r); setOff(false) }).catch(() => { setItems([]); setOff(true) }) }, [])
+  if (off) return <div style={{ color: 'var(--muted)', fontSize: '13px' }}>{t('reports.store.off')}</div>
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+      <div style={{ display: 'flex', gap: '10px' }}>
+        <button type="button" style={csvBtn()} onClick={() => exportCsv('store_stock', 'store-stock.csv')}>{t('reports.store.exportStock')}</button>
+        <button type="button" style={csvBtn()} onClick={() => exportCsv('store_sales', 'store-sales.csv')}>{t('reports.store.exportSales')}</button>
+      </div>
+      <div style={CARD}>
+        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+          <thead><tr><th style={th}>{t('store.saleTitle')}</th><th style={{ ...th, textAlign: 'right' }}>{t('store.price')}</th><th style={{ ...th, textAlign: 'right' }}>{t('store.stock')}</th></tr></thead>
+          <tbody>
+            {(items ?? []).map((it) => (
+              <tr key={it.id}><td style={td}>{it.name}</td><td style={{ ...td, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{formatMoney(it.price_paise)}</td><td style={{ ...td, textAlign: 'right', color: it.low_stock ? 'var(--danger)' : 'var(--ink)', fontVariantNumeric: 'tabular-nums' }}>{it.stock}</td></tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  )
+}
+
+function InstalmentDuesReport() {
+  const [data, setData] = useState<DuesListDto | null>(null)
+  useEffect(() => { api.list_dues().then(setData).catch(() => setData(null)) }, [])
+  const rows = [...(data?.rows ?? [])].sort((a, b) => (a.due_date ?? '9999').localeCompare(b.due_date ?? '9999'))
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+      <div style={{ display: 'flex' }}>
+        <button type="button" style={{ ...csvBtn(), marginLeft: 'auto' }} onClick={() => exportCsv('instalment_dues', 'instalment-dues.csv')}>{t('reports.exportCsv')}</button>
+      </div>
+      <div style={CARD}>
+        <table style={{ width: '100%', borderCollapse: 'collapse' }}>
+          <thead><tr><th style={th}>{t('reports.dues.due')}</th><th style={th}>{t('reports.dues.student')}</th><th style={th}>{t('reports.dues.head')}</th><th style={{ ...th, textAlign: 'right' }}>{t('reports.dues.balance')}</th></tr></thead>
+          <tbody>
+            {rows.map((r) => (
+              <tr key={r.due_id}><td style={{ ...td, color: 'var(--muted)' }}>{r.due_date ?? '—'}</td><td style={td}>{r.student_name}</td><td style={td}>{r.instalment_count > 1 ? `${r.fee_head} · ${r.instalment_no}/${r.instalment_count}` : r.fee_head}</td><td style={{ ...td, textAlign: 'right', fontVariantNumeric: 'tabular-nums' }}>{formatMoney(r.balance_paise)}</td></tr>
+            ))}
+            {rows.length === 0 ? <tr><td style={{ ...td, color: 'var(--muted)' }} colSpan={4}>{t('fees.dues.none')}</td></tr> : null}
+          </tbody>
+        </table>
+      </div>
     </div>
   )
 }
