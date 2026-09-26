@@ -60,7 +60,7 @@ fn flow_setup_to_unlocked() {
     // Wizard steps.
     setup_school_logic(&mut c, &SchoolInput {
         name: "Test School".into(), address: Some("A".into()), board: Some("CBSE".into()),
-        udise: None, phone: Some("9820011111".into()),
+        udise: None, phone: Some("9820011111".into()), upi_id: None, upi_name: None,
     }).unwrap();
     // School row now exists → setup_in_progress; the licence moved out of pending.
     assert!(matches!(state::compute(&c, None).unwrap().state, AppState::SetupInProgress { .. }));

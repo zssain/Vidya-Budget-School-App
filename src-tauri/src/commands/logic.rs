@@ -5920,7 +5920,7 @@ mod tests {
         assert!(prev.upi_link.as_deref().unwrap().starts_with("upi://pay"), "reminder carries a UPI link");
         assert!(prev.has_email && prev.has_consent);
 
-        let bulk = queue_fee_reminders_logic(&mut c, &accountant(), None, DeviceMode::Server, &[sid.clone()], Some("en")).unwrap();
+        let bulk = queue_fee_reminders_logic(&mut c, &accountant(), None, DeviceMode::Server, std::slice::from_ref(&sid), Some("en")).unwrap();
         assert_eq!(bulk.queued, 1);
         let n: i64 = c.query_row("SELECT count(*) FROM message WHERE channel='email' AND kind='fee_reminder' AND status='queued'", [], |r| r.get(0)).unwrap();
         assert_eq!(n, 1);

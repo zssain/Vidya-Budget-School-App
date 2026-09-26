@@ -1,11 +1,14 @@
 # Phase 14 handoff — Communication (UPI QR, email, WhatsApp, absence alerts, fee reminders, circulars)
 
-> **Status: IN PROGRESS.** Steps 0, 1, the Step 2 **foundation**, **Step 3** core (MIME +
-> send queue), **Step 4**, **Step 5**, and **Step 6** are built, tested and committed. Step 7
-> (auto-WhatsApp), Step 2 (Android native), 3-live (real Gmail client, gated on the P12 OAuth
-> spike), and the Playwright fidelity of Step 8 are **specced below and not yet built** — a
-> scoped runway, the way P12/P13 handed off partial phases. Every committed increment is
-> genuinely working and green; nothing is marked "done" that isn't.
+> **Status: IN PROGRESS (all 8 build-step cores done).** Steps 0, 1, 2-foundation, 3-core,
+> 4, 5, 6 and 7-core are built, tested and committed. What remains is the work that **cannot
+> be built or verified in this sandbox** and is specced below: the **Android native share
+> plugin** (Step 2, no Android toolchain), the **live Gmail client** (Step 3, gated on the
+> P12 OAuth spike), the **live Meta WhatsApp client + wa_auto Settings UI** (Step 7, needs the
+> owner's Meta setup), and **Playwright pixel-fidelity** (Step 8, canonical macOS machine).
+> Plus the documented deferred UI (teacher class-notice flow, printed notice, staff phone
+> inbox, per-staff read list). Every committed increment is genuinely working and green;
+> nothing is marked "done" that isn't.
 
 ## Start state / environment
 - Branch `v2/p14`, cut from `v2/p13` @ `71b0658`. HEAD at write time `ab46f3f`.
@@ -25,6 +28,7 @@
   | `be24f36` | 3 — email sender testable core (MIME + send queue) |
   | `8787320` | 4 — absence alerts (phone + SendAbsenceAlert) |
   | `c3a4aa2` | 6 — circulars & notices (compose, numbering, read tracking) |
+  | `acec538` | 7 — automatic WhatsApp core (Meta payload + send loop + config) |
 
 ## Owner decisions taken this phase
 - **#13 Gmail (`gmail.send`) → decided (interim): run the OAuth app in Testing mode now**,
@@ -220,18 +224,25 @@ compose-side wire-up.
   (`staffday` 4 — the `mark_circular_read` backend is done, the phone UI is not). Pixel fidelity on
   the canonical machine.
 
-### Step 7 — Automatic WhatsApp (module `wa_auto`, off by default)
-- **[VERIFY still owed]** current Meta WhatsApp **Cloud API** send endpoint + Graph API version,
-  utility-template payload, error codes, template rules — from Meta's official docs, recorded like
-  the Step 0 checks **before** building on them (STOP if not confirmable). *(Not done this session.)*
-- Settings → Languages & modules → Automatic WhatsApp setup page: phone-number id, access token
-  (**stored encrypted**, like `drive_account.token_enc`), template names per purpose+language,
-  "Send test message". Plain cost note: "Your school pays Meta per message (about ₹0.12 for
-  reminders and alerts, plus GST). Vidya's developer charges nothing for this."
-- Server sends `wa_auto` queued messages (rate-limited). **No webhook** (no public server) → final
-  status **"accepted by WhatsApp"** with the returned message id, or the exact error. Gate every
-  `wa_auto` send + the config commands by `require_module(enabled, Module::WaAuto)`. ADMIN-GUIDE
-  section: step-by-step Meta setup (business account, phone number, templates).
+### Step 7 — Automatic WhatsApp (DONE core, committed `acec538`) — live client deferred
+- **[VERIFY] done** (checks §3): Meta Cloud API confirmed from official docs — `POST
+  graph.facebook.com/v23.0/<phone-number-id>/messages`, Bearer token, template payload (UTILITY),
+  `messages[].id`, `error.code` handling. **No STOP.**
+- **Built + tested (`src-tauri/src/wa_auto.rs`, 6 tests):** `graph_send_url` + `GRAPH_API_VERSION`;
+  `template_payload` (one body variable = the rendered text, so a school needs one simple utility
+  template per purpose/language); `map_error_code` (token / rate / payment / template / undeliverable);
+  `WaSender` trait + `FakeWa`; `send_queued_wa_auto` (drains `wa_auto` `queued` → `sent` = **accepted
+  by WhatsApp** + `wamid` / `failed` + exact error; skips no-mobile/no-template; stops on
+  cap/rate/token/payment; **no webhook ⇒ never "delivered"**). `WaAutoConfig` read from
+  `settings_json.wa_auto`.
+- **Config commands:** `get`/`set_wa_auto_config` (Principal + `wa_auto` module). **Token stored
+  encrypted-at-rest (SQLCipher) and NEVER returned to the UI or written to the audit** (tested).
+  `record_message` gates `channel='wa_auto'` behind `require_module(wa_auto)`.
+- **ADMIN-GUIDE:** step-by-step Meta setup + the honest "Accepted by WhatsApp" limitation + the
+  cost note (school pays Meta ~₹0.12/msg; Vidya's developer charges nothing).
+- **Not built / not verified live (needs the owner's Meta setup):** the **Settings → Automatic
+  WhatsApp setup UI**, the live `reqwest` `WaSender` impl (POST to `graph_send_url` with the token),
+  **"Send test message"**, and the drain **timer** in `server/start.rs`.
 
 ---
 
@@ -249,8 +260,9 @@ compose-side wire-up.
 ## Tests (all real, this session)
 - `cargo test -p vidya-core --lib` → **362 passed** (upi **11**, messages **8**, +permissions
   SendFeeReminder/SendAbsenceAlert/ManageCirculars/DraftClassNotice); `cargo test -p vidya --lib`
-  → **234 passed / 0 failed** (was 215 at P13 tip; +3 messaging, +5 Step 5, +8 Step 3 email, +2
-  Step 4 absence, +2 Step 6 circulars). `migrations_apply_and_are_idempotent` green (0018).
+  → **242 passed / 0 failed** (was 215 at P13 tip; +3 messaging, +5 Step 5, +8 Step 3 email, +2
+  Step 4 absence, +2 Step 6 circulars, +8 Step 7 wa_auto). `migrations_apply_and_are_idempotent`
+  green (0018).
 - **Changed existing test expectation (P14):** `permissions::…action_all_covers…` `ALL.len()`
   40→**44** (added `SendFeeReminder`, `SendAbsenceAlert`, `ManageCirculars`, `DraftClassNotice`).
   No other existing test value changed.
