@@ -200,7 +200,26 @@ pub fn backfill_vouchers(conn: &mut Connection) -> rusqlite::Result<usize> {
         rows.collect::<rusqlite::Result<_>>()?
     };
 
+    // Staff advances (P15) → advance vouchers (Dr staff advances, Cr cash).
+    // (id, amount, given_on, created_by)
+    type AdvanceRow = (String, i64, String, Option<String>);
+    let advances: Vec<AdvanceRow> = {
+        let mut stmt = conn.prepare(
+            "SELECT a.id, a.amount_paise, a.given_on, a.created_by FROM staff_advance a \
+             WHERE a.sync_state='confirmed' \
+               AND NOT EXISTS (SELECT 1 FROM voucher v WHERE v.source_table='staff_advance' AND v.source_id=a.id) \
+             ORDER BY a.given_on",
+        )?;
+        let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?;
+        rows.collect::<rusqlite::Result<_>>()?
+    };
+
     let tx = conn.transaction()?;
+    for (aid, amount, given_on, created_by) in advances {
+        let vno = crate::numbering::next_no(&tx, vidya_core::numbering::NumberKind::Voucher, "A1")?;
+        post_advance_voucher(&tx, &vno, &aid, vidya_core::ledger::CASH, amount, &date_of(&given_on), created_by.as_deref(), None, school_id.as_deref(), &now, "confirmed")?;
+        created += 1;
+    }
     for (pid, amount, mode, receipt_no, collected_at, collected_by) in payments {
         let date = collected_at.unwrap_or_else(|| now.clone());
         post_payment_voucher(&tx, &pid, &receipt_no, parse_mode(&mode), amount, &date, collected_by.as_deref(), None, school_id.as_deref(), &now, "confirmed")?;
@@ -310,6 +329,68 @@ pub fn post_expense_reversal_voucher(
         paid_via.money_account(), category_account_id, amount_paise,
         created_by, None, school_id, now, sync_state,
     )
+}
+
+/// Post an advance voucher (Dr staff advances, Cr money account). Returns the id.
+#[allow(clippy::too_many_arguments)]
+pub fn post_advance_voucher(
+    tx: &Transaction,
+    voucher_no: &str,
+    advance_id: &str,
+    money_account: &str,
+    amount_paise: i64,
+    date: &str,
+    created_by: Option<&str>,
+    device_id: Option<&str>,
+    school_id: Option<&str>,
+    now: &str,
+    sync_state: &str,
+) -> rusqlite::Result<String> {
+    post_voucher_dyn(
+        tx, voucher_no, "advance", date, Some("Staff advance"), "staff_advance", advance_id,
+        vidya_core::ledger::STAFF_ADVANCES, money_account, amount_paise,
+        created_by, device_id, school_id, now, sync_state,
+    )
+}
+
+/// Post a salary voucher: Dr Salary expense (earned = net + recovery), Cr Staff
+/// advances (recovery), Cr money account (net). Balanced by construction. Returns
+/// the voucher id. `earned` must equal `recovery + net`.
+#[allow(clippy::too_many_arguments)]
+pub fn post_salary_voucher(
+    tx: &Transaction,
+    voucher_no: &str,
+    line_id: &str,
+    money_account: &str,
+    earned_paise: i64,
+    recovery_paise: i64,
+    net_paise: i64,
+    date: &str,
+    created_by: Option<&str>,
+    device_id: Option<&str>,
+    school_id: Option<&str>,
+    now: &str,
+    sync_state: &str,
+) -> rusqlite::Result<String> {
+    let vid = format!("vch-{}", uuid::Uuid::now_v7());
+    tx.execute(
+        "INSERT INTO voucher(id, voucher_no, kind, date, narration, source_table, source_id, created_by, device_id, school_id, created_at, updated_at, sync_state) \
+         VALUES (?1,?2,'salary',?3,'Salary',?4,?5,?6,?7,?8,?9,?9,?10)",
+        params![vid, voucher_no, date, "salary_line", line_id, created_by, device_id, school_id, now, sync_state],
+    )?;
+    let add = |account: &str, debit: i64, credit: i64| -> rusqlite::Result<()> {
+        if debit > 0 || credit > 0 {
+            tx.execute(
+                "INSERT INTO ledger_entry(id, voucher_id, account_id, debit_paise, credit_paise) VALUES (?1,?2,?3,?4,?5)",
+                params![format!("le-{}", uuid::Uuid::now_v7()), vid, account, debit, credit],
+            )?;
+        }
+        Ok(())
+    };
+    add(vidya_core::ledger::SALARY_EXPENSE, earned_paise, 0)?;
+    add(vidya_core::ledger::STAFF_ADVANCES, 0, recovery_paise)?;
+    add(money_account, 0, net_paise)?;
+    Ok(vid)
 }
 
 /// Total debits minus credits across all ledger entries — must be exactly 0 if

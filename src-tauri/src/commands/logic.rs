@@ -2431,6 +2431,370 @@ pub fn profit_summary_logic(conn: &mut Connection, actor_s: &SessionStaff) -> Cm
     Ok(ProfitDto { income_paise: income, expense_paise: expense, surplus_paise: income - expense, fees_due_paise: fees_due, months })
 }
 
+// ============================================================== salary ========
+//
+// P15 Step 5 (§10.3). Principal only. Monthly salary per staff (salary_structure),
+// advances (staff_advance → advance voucher), a monthly register whose lines are
+// computed by vidya_core::salary (deduction = monthly ÷ working days × unpaid days,
+// half-up to the rupee — OWNER default), and Pay (salary voucher per staff).
+
+/// Working days in a `YYYY-MM` month from the school calendar.
+fn working_days_in_month(conn: &Connection, month: &str) -> rusqlite::Result<u32> {
+    let first = format!("{month}-01");
+    let start = match vidya_core::calendar::parse_date(&first) {
+        Some(d) => d,
+        None => return Ok(0),
+    };
+    let last_day = start.month().length(start.year());
+    let end = start.replace_day(last_day).unwrap_or(start);
+    let week = crate::calendar::load_week(conn)?;
+    let events = crate::calendar::load_events(conn)?;
+    Ok(vidya_core::calendar::working_days(start, end, &week, &events))
+}
+
+/// The staff member's latest monthly salary effective on/before the month end.
+fn monthly_salary_for(conn: &Connection, staff_id: &str, month: &str) -> rusqlite::Result<Option<i64>> {
+    let month_end = format!("{month}-31");
+    conn.query_row(
+        "SELECT monthly_paise FROM salary_structure WHERE staff_id=?1 AND effective_from<=?2 ORDER BY effective_from DESC LIMIT 1",
+        params![staff_id, month_end],
+        |r| r.get(0),
+    )
+    .optional()
+}
+
+/// (remaining advance, recover-per-month) for a staff member.
+fn advance_state(conn: &Connection, staff_id: &str) -> rusqlite::Result<(i64, i64)> {
+    conn.query_row(
+        "SELECT COALESCE(SUM(amount_paise - recovered_paise),0), COALESCE(SUM(CASE WHEN amount_paise>recovered_paise THEN recover_per_month_paise ELSE 0 END),0) \
+         FROM staff_advance WHERE staff_id=?1",
+        params![staff_id],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )
+}
+
+#[derive(Debug, Deserialize, Default)]
+pub struct StaffDaysInput {
+    pub staff_id: String,
+    pub days_present: i64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SalaryRowDto {
+    pub staff_id: String,
+    pub name: String,
+    pub role: String,
+    pub monthly_paise: i64,
+    pub working_days: i64,
+    pub days_present: i64,
+    pub unpaid_leave_days: i64,
+    pub deduction_paise: i64,
+    pub advance_recovery_paise: i64,
+    pub remaining_advance_paise: i64,
+    pub net_paise: i64,
+    pub paid: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SalaryRegisterDto {
+    pub month: String,
+    pub working_days: i64,
+    pub total_salaries_paise: i64,
+    pub advances_recovered_paise: i64,
+    pub unpaid_deducted_paise: i64,
+    pub net_to_pay_paise: i64,
+    pub pending: i64,
+    pub rows: Vec<SalaryRowDto>,
+}
+
+/// Build one register row for a staff member (computed via vidya-core).
+#[allow(clippy::too_many_arguments)]
+fn salary_row(
+    conn: &Connection,
+    staff_id: &str,
+    name: &str,
+    role: &str,
+    monthly: i64,
+    working_days: u32,
+    days_present: u32,
+    paid: bool,
+) -> rusqlite::Result<SalaryRowDto> {
+    let (remaining_advance, recover_target) = advance_state(conn, staff_id)?;
+    let line = vidya_core::salary::compute_salary_line(&vidya_core::salary::SalaryInputs {
+        monthly_paise: monthly,
+        working_days,
+        days_present,
+        advance_recovery_paise: recover_target,
+        remaining_advance_paise: remaining_advance,
+    });
+    Ok(SalaryRowDto {
+        staff_id: staff_id.to_string(),
+        name: name.to_string(),
+        role: role.to_string(),
+        monthly_paise: monthly,
+        working_days: working_days as i64,
+        days_present: line.days_present as i64,
+        unpaid_leave_days: line.unpaid_leave_days as i64,
+        deduction_paise: line.deduction_paise,
+        advance_recovery_paise: line.advance_recovery_paise,
+        remaining_advance_paise: remaining_advance,
+        net_paise: line.net_paise,
+        paid,
+    })
+}
+
+/// The salary register for a month (prototype `salary`). `days` is the Principal's
+/// per-staff days-present entry (until Phase 17); missing staff = full attendance.
+pub fn salary_register_logic(
+    conn: &mut Connection,
+    actor_s: &SessionStaff,
+    month: &str,
+    days: &[StaffDaysInput],
+) -> CmdResult<SalaryRegisterDto> {
+    let actor = actor_from(conn, actor_s)?;
+    require_allow(&actor, Action::ManageSalary, &Target::of(TargetKind::Fee))?;
+    require_module_enabled(conn, vidya_core::modules::Module::Accounts)?;
+    let working_days = working_days_in_month(conn, month)?;
+    let days_map: std::collections::HashMap<&str, u32> =
+        days.iter().map(|d| (d.staff_id.as_str(), d.days_present.max(0) as u32)).collect();
+
+    // Active staff with a salary structure.
+    let staff: Vec<(String, String, String)> = {
+        let mut stmt = conn.prepare(
+            "SELECT DISTINCT s.id, s.name, s.role FROM staff s \
+             WHERE s.state='active' AND EXISTS(SELECT 1 FROM salary_structure ss WHERE ss.staff_id=s.id) ORDER BY s.name",
+        )?;
+        let v = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?.collect::<rusqlite::Result<Vec<(String, String, String)>>>()?;
+        v
+    };
+
+    let mut rows = Vec::new();
+    let (mut total, mut recovered, mut deducted, mut net_to_pay, mut pending) = (0i64, 0i64, 0i64, 0i64, 0i64);
+    for (id, name, role) in staff {
+        let monthly = monthly_salary_for(conn, &id, month)?.unwrap_or(0);
+        if monthly <= 0 {
+            continue;
+        }
+        let days_present = *days_map.get(id.as_str()).unwrap_or(&working_days);
+        let paid: bool = conn
+            .query_row(
+                "SELECT 1 FROM salary_line l JOIN salary_run r ON r.id=l.run_id WHERE r.month=?1 AND l.staff_id=?2 AND l.paid_voucher_id IS NOT NULL",
+                params![month, id],
+                |_| Ok(()),
+            )
+            .optional()?
+            .is_some();
+        let row = salary_row(conn, &id, &name, &role, monthly, working_days, days_present, paid)?;
+        total += row.monthly_paise;
+        recovered += row.advance_recovery_paise;
+        deducted += row.deduction_paise;
+        net_to_pay += row.net_paise;
+        if !paid {
+            pending += 1;
+        }
+        rows.push(row);
+    }
+    Ok(SalaryRegisterDto {
+        month: month.to_string(),
+        working_days: working_days as i64,
+        total_salaries_paise: total,
+        advances_recovered_paise: recovered,
+        unpaid_deducted_paise: deducted,
+        net_to_pay_paise: net_to_pay,
+        pending,
+        rows,
+    })
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SalaryStructureInput {
+    pub staff_id: String,
+    pub monthly_paise: i64,
+    pub effective_from: Option<String>,
+}
+
+pub fn set_salary_structure_logic(conn: &mut Connection, actor_s: &SessionStaff, today: &str, input: &SalaryStructureInput) -> CmdResult<()> {
+    let actor = actor_from(conn, actor_s)?;
+    require_allow(&actor, Action::ManageSalary, &Target::of(TargetKind::Fee))?;
+    require_module_enabled(conn, vidya_core::modules::Module::Accounts)?;
+    vidya_core::salary::validate_monthly(input.monthly_paise)?;
+    let now = now_iso();
+    let eff = input.effective_from.clone().unwrap_or_else(|| today[..today.len().min(10)].to_string());
+    let school_id = single_school_id(conn)?;
+    let id = new_id("sal");
+    conn.execute(
+        "INSERT INTO salary_structure(id,staff_id,monthly_paise,effective_from,school_id,created_at,updated_at,sync_state) \
+         VALUES (?1,?2,?3,?4,?5,?6,?6,'confirmed')",
+        params![id, input.staff_id, input.monthly_paise, eff, school_id, now],
+    )?;
+    audit_action(conn, AuditEntry {
+        at: now, staff_id: Some(actor_s.id.clone()), action: "set_salary_structure".into(),
+        table: Some("salary_structure".into()), record_id: Some(id),
+        after_json: Some(serde_json::json!({ "staff_id": input.staff_id, "monthly_paise": input.monthly_paise }).to_string()),
+        ..Default::default()
+    })?;
+    Ok(())
+}
+
+#[derive(Debug, Deserialize)]
+pub struct AdvanceInput {
+    pub staff_id: String,
+    pub amount_paise: i64,
+    pub recover_per_month_paise: i64,
+    pub mode: String, // cash | bank
+}
+
+/// Give a staff advance (Principal): staff_advance row + advance voucher (Dr staff
+/// advances, Cr money).
+pub fn give_advance_logic(
+    conn: &mut Connection,
+    actor_s: &SessionStaff,
+    device_id: Option<&str>,
+    device_mode: DeviceMode,
+    today: &str,
+    input: &AdvanceInput,
+) -> CmdResult<()> {
+    let actor = actor_from(conn, actor_s)?;
+    require_allow(&actor, Action::ManageSalary, &Target::of(TargetKind::Fee))?;
+    require_module_enabled(conn, vidya_core::modules::Module::Accounts)?;
+    vidya_core::salary::validate_advance(input.amount_paise, input.recover_per_month_paise)?;
+    let money = if input.mode == "cash" { vidya_core::ledger::CASH } else { vidya_core::ledger::BANK };
+    let now = now_iso();
+    let date = today[..today.len().min(10)].to_string();
+    let confirmed = device_mode == DeviceMode::Server;
+    let sync_state = if confirmed { "confirmed" } else { "on_device" };
+    let (series, _) = receipt_series_and_last(conn, device_id)?;
+    let school_id = single_school_id(conn)?;
+    let ctx = WriteCtx { mode: device_mode };
+    let dev = device_id.map(str::to_string);
+    let adv_id = new_id("adv");
+    let adv_id2 = adv_id.clone();
+    let staff = input.staff_id.clone();
+    let amount = input.amount_paise;
+    let recover = input.recover_per_month_paise;
+    with_write(conn, &ctx, move |tx| {
+        let vid: Option<String> = if confirmed {
+            let vno = crate::numbering::next_no(tx, vidya_core::numbering::NumberKind::Voucher, &series)?;
+            Some(crate::ledger::post_advance_voucher(tx, &vno, &adv_id2, money, amount, &date, Some(actor_s.id.as_str()), dev.as_deref(), school_id.as_deref(), &now, "confirmed")?)
+        } else {
+            None
+        };
+        tx.execute(
+            "INSERT INTO staff_advance(id,staff_id,amount_paise,voucher_id,recover_per_month_paise,recovered_paise,given_on,created_by,device_id,school_id,created_at,updated_at,sync_state) \
+             VALUES (?1,?2,?3,?4,?5,0,?6,?7,?8,?9,?10,?10,?11)",
+            params![adv_id2, staff, amount, vid, recover, date, actor_s.id, dev, school_id, now, sync_state],
+        )?;
+        let audit = AuditEntry {
+            at: now.clone(), staff_id: Some(actor_s.id.clone()), action: "give_advance".into(),
+            table: Some("staff_advance".into()), record_id: Some(adv_id2.clone()),
+            after_json: Some(serde_json::json!({ "staff_id": staff, "amount_paise": amount }).to_string()),
+            ..Default::default()
+        };
+        let op = Op {
+            op_id: new_id("op"), hlc: now.clone(), device_id: dev.clone().unwrap_or_default(), staff_id: actor_s.id.clone(),
+            audience: "finance".into(), table: "staff_advance".into(), record_id: adv_id2.clone(), kind: "insert".into(),
+            payload: "{}".into(), base_version: None, server_epoch: 1,
+        };
+        Ok(Effect { value: (), audit, op })
+    })?;
+    Ok(())
+}
+
+#[derive(Debug, Serialize, Default)]
+pub struct PaySalariesResult {
+    pub paid: i64,
+    pub total_net_paise: i64,
+}
+
+/// Pay all currently-unpaid staff for the month (Principal). One transaction: a
+/// salary_line + salary voucher per staff, and the advance recovered updated.
+/// `mode` = cash | bank. Returns how many were paid and the total net.
+pub fn pay_salaries_logic(
+    conn: &mut Connection,
+    actor_s: &SessionStaff,
+    device_id: Option<&str>,
+    device_mode: DeviceMode,
+    month: &str,
+    mode: &str,
+    days: &[StaffDaysInput],
+) -> CmdResult<PaySalariesResult> {
+    let actor = actor_from(conn, actor_s)?;
+    require_allow(&actor, Action::ManageSalary, &Target::of(TargetKind::Fee))?;
+    require_module_enabled(conn, vidya_core::modules::Module::Accounts)?;
+    let register = salary_register_logic(conn, actor_s, month, days)?;
+    let pending: Vec<SalaryRowDto> = register.rows.into_iter().filter(|r| !r.paid && r.net_paise + r.advance_recovery_paise > 0).collect();
+    if pending.is_empty() {
+        return Ok(PaySalariesResult::default());
+    }
+    let money = if mode == "cash" { vidya_core::ledger::CASH } else { vidya_core::ledger::BANK };
+    let now = now_iso();
+    let date = format!("{month}-01");
+    let (series, _) = receipt_series_and_last(conn, device_id)?;
+    let school_id = single_school_id(conn)?;
+    let ctx = WriteCtx { mode: device_mode };
+    let dev = device_id.map(str::to_string);
+    let run_id = new_id("srun");
+    let run_id2 = run_id.clone();
+    let month_s = month.to_string();
+    let paid_count = pending.len() as i64;
+    let total_net: i64 = pending.iter().map(|r| r.net_paise).sum();
+    let staff_id_for_op = actor_s.id.clone();
+
+    with_write(conn, &ctx, move |tx| {
+        // One salary_run per month (created on first pay).
+        tx.execute(
+            "INSERT INTO salary_run(id,month,status,finalised_by,school_id,created_at,updated_at,sync_state) \
+             VALUES (?1,?2,'finalised',?3,?4,?5,?5,'confirmed') \
+             ON CONFLICT(month) DO UPDATE SET status='finalised', finalised_by=excluded.finalised_by, updated_at=excluded.updated_at",
+            params![run_id2, month_s, staff_id_for_op, school_id, now],
+        )?;
+        let run: String = tx.query_row("SELECT id FROM salary_run WHERE month=?1", params![month_s], |r| r.get(0))?;
+        for r in &pending {
+            let earned = r.monthly_paise - r.deduction_paise;
+            let line_id = new_id("sline");
+            let vid: Option<String> = if device_mode == DeviceMode::Server {
+                let vno = crate::numbering::next_no(tx, vidya_core::numbering::NumberKind::Voucher, &series)?;
+                Some(crate::ledger::post_salary_voucher(tx, &vno, &line_id, money, earned, r.advance_recovery_paise, r.net_paise, &date, Some(staff_id_for_op.as_str()), dev.as_deref(), school_id.as_deref(), &now, "confirmed")?)
+            } else {
+                None
+            };
+            tx.execute(
+                "INSERT INTO salary_line(id,run_id,staff_id,monthly_paise,working_days,days_present,unpaid_leave_days,deduction_paise,advance_recovery_paise,net_paise,paid_voucher_id,school_id,created_at,updated_at,sync_state) \
+                 VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?13,'confirmed')",
+                params![line_id, run, r.staff_id, r.monthly_paise, r.working_days, r.days_present, r.unpaid_leave_days, r.deduction_paise, r.advance_recovery_paise, r.net_paise, vid, school_id, now],
+            )?;
+            // Recover the advance oldest-first (staff_advance is mutable, not append-only).
+            let mut left = r.advance_recovery_paise;
+            if left > 0 {
+                let mut adv = tx.prepare("SELECT id, amount_paise, recovered_paise FROM staff_advance WHERE staff_id=?1 AND amount_paise>recovered_paise ORDER BY given_on")?;
+                let advs: Vec<(String, i64, i64)> = adv.query_map(params![r.staff_id], |x| Ok((x.get(0)?, x.get(1)?, x.get(2)?)))?.collect::<rusqlite::Result<_>>()?;
+                drop(adv);
+                for (aid, amt, rec) in advs {
+                    if left <= 0 {
+                        break;
+                    }
+                    let take = left.min(amt - rec);
+                    tx.execute("UPDATE staff_advance SET recovered_paise=recovered_paise+?1, updated_at=?2 WHERE id=?3", params![take, now, aid])?;
+                    left -= take;
+                }
+            }
+        }
+        let audit = AuditEntry {
+            at: now.clone(), staff_id: Some(staff_id_for_op.clone()), action: "pay_salaries".into(),
+            table: Some("salary_run".into()), record_id: Some(run.clone()),
+            after_json: Some(serde_json::json!({ "month": month_s, "paid": paid_count, "mode": mode }).to_string()),
+            ..Default::default()
+        };
+        let op = Op {
+            op_id: new_id("op"), hlc: now.clone(), device_id: dev.clone().unwrap_or_default(), staff_id: staff_id_for_op.clone(),
+            audience: "finance".into(), table: "salary_run".into(), record_id: run.clone(), kind: "update".into(),
+            payload: "{}".into(), base_version: None, server_epoch: 1,
+        };
+        Ok(Effect { value: (), audit, op })
+    })?;
+    Ok(PaySalariesResult { paid: paid_count, total_net_paise: total_net })
+}
+
 // ============================================================= receipts =======
 //
 // Receipt search / open (full receipt data incl. amount in words en+hi, heads
@@ -7510,6 +7874,38 @@ mod tests {
         let teacher = SessionStaff { id: "stf-meena".into(), name: "Meena".into(), role: "teacher".into() };
         assert!(record_expense_logic(&mut c, &teacher, Some("dev-a1"), DeviceMode::Server, "2026-09-23",
             &ExpenseInput { category_account_id: "electricity".into(), amount_paise: 100, paid_via: "cash".into(), details: None, vendor: None, bill_attachment: None, spent_on: None }).is_err());
+    }
+
+    #[test]
+    fn salary_register_and_pay_posts_balanced_vouchers() {
+        let mut c = seeded();
+        let reg = salary_register_logic(&mut c, &principal(), "2026-09", &[]).unwrap();
+        let wd = reg.working_days as u32;
+        assert!(wd > 0, "the calendar has working days in September");
+        assert!(reg.rows.len() >= 4, "seeded salary structures");
+        assert!(reg.rows.iter().all(|r| r.deduction_paise == 0), "full attendance → no deduction");
+
+        // R. Nair with 2 unpaid days → the half-up deduction; net = monthly − deduction.
+        let days = vec![StaffDaysInput { staff_id: "stf-nair".into(), days_present: (wd - 2) as i64 }];
+        let reg2 = salary_register_logic(&mut c, &principal(), "2026-09", &days).unwrap();
+        let nair = reg2.rows.iter().find(|r| r.staff_id == "stf-nair").unwrap();
+        assert_eq!(nair.deduction_paise, vidya_core::salary::unpaid_leave_deduction(1_700_000, wd, 2));
+        assert_eq!(nair.net_paise, 1_700_000 - nair.deduction_paise);
+        // Meena's ₹2,000 advance is recovered this month.
+        let meena = reg2.rows.iter().find(|r| r.staff_id == "stf-meena").unwrap();
+        assert_eq!(meena.advance_recovery_paise, 200_000);
+        assert_eq!(meena.net_paise, 1_800_000 - 200_000);
+
+        // Pay everyone (bank) → vouchers posted, book balances, advance recovered.
+        let res = pay_salaries_logic(&mut c, &principal(), Some("dev-a1"), DeviceMode::Server, "2026-09", "bank", &days).unwrap();
+        assert_eq!(res.paid, 4);
+        assert_eq!(crate::ledger::ledger_imbalance(&c).unwrap(), 0, "salary vouchers keep the book balanced");
+        let recovered: i64 = c.query_row("SELECT recovered_paise FROM staff_advance WHERE id='adv-meena'", [], |r| r.get(0)).unwrap();
+        assert_eq!(recovered, 200_000, "the advance is recovered on pay");
+        // Paying again pays nobody (idempotent for the month).
+        assert_eq!(pay_salaries_logic(&mut c, &principal(), Some("dev-a1"), DeviceMode::Server, "2026-09", "bank", &days).unwrap().paid, 0);
+        // Accountant cannot manage salary.
+        assert!(salary_register_logic(&mut c, &accountant(), "2026-09", &[]).is_err());
     }
 
     #[test]

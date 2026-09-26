@@ -948,6 +948,58 @@ export const set_opening_balance = (cashPaise: number, bankPaise: number) =>
   invoke<OpeningBalanceDto>('set_opening_balance', { cashPaise, bankPaise })
 export const cash_book = (date: string) => invoke<CashBookDto>('cash_book', { date })
 export const profit_summary = () => invoke<ProfitDto>('profit_summary')
+
+// Salary register (P15 Step 5, prototype `salary`).
+export interface StaffDaysInput {
+  staff_id: string
+  days_present: number
+}
+export interface SalaryRowDto {
+  staff_id: string
+  name: string
+  role: string
+  monthly_paise: number
+  working_days: number
+  days_present: number
+  unpaid_leave_days: number
+  deduction_paise: number
+  advance_recovery_paise: number
+  remaining_advance_paise: number
+  net_paise: number
+  paid: boolean
+}
+export interface SalaryRegisterDto {
+  month: string
+  working_days: number
+  total_salaries_paise: number
+  advances_recovered_paise: number
+  unpaid_deducted_paise: number
+  net_to_pay_paise: number
+  pending: number
+  rows: SalaryRowDto[]
+}
+export interface SalaryStructureInput {
+  staff_id: string
+  monthly_paise: number
+  effective_from?: string | null
+}
+export interface AdvanceInput {
+  staff_id: string
+  amount_paise: number
+  recover_per_month_paise: number
+  mode: string
+}
+export interface PaySalariesResult {
+  paid: number
+  total_net_paise: number
+}
+export const salary_register = (month: string, days: StaffDaysInput[] = []) =>
+  invoke<SalaryRegisterDto>('salary_register', { month, days })
+export const set_salary_structure = (input: SalaryStructureInput) =>
+  invoke<void>('set_salary_structure', { input })
+export const give_advance = (input: AdvanceInput) => invoke<void>('give_advance', { input })
+export const pay_salaries = (month: string, mode: string, days: StaffDaysInput[] = []) =>
+  invoke<PaySalariesResult>('pay_salaries', { month, mode, days })
 export const update_fee_head = (id: string, input: FeeHeadInput) =>
   invoke<FeeHeadDto>('update_fee_head', { id, input })
 export const deactivate_fee_head = (id: string) => invoke<void>('deactivate_fee_head', { id })

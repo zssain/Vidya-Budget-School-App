@@ -441,6 +441,33 @@ fn expenses(tx: &rusqlite::Transaction, c: &Ctx) -> rusqlite::Result<()> {
             params![id, cat, amt, paid, details, spent_on, created],
         )?;
     }
+    salaries(tx, c)?;
+    Ok(())
+}
+
+/// Demo salary structures + one advance (§10.3) so the salary register has data.
+/// The advance voucher is posted by `backfill_vouchers` (like payments/expenses).
+fn salaries(tx: &rusqlite::Transaction, c: &Ctx) -> rusqlite::Result<()> {
+    // Monthly salaries effective from the session start.
+    let structures = [
+        ("sal-anita", "stf-anita", 2_000_000i64),
+        ("sal-meena", "stf-meena", 1_800_000),
+        ("sal-nair", "stf-nair", 1_700_000),
+        ("sal-suresh", "stf-suresh", 1_600_000),
+    ];
+    for (id, staff, monthly) in structures {
+        tx.execute(
+            "INSERT INTO salary_structure(id,staff_id,monthly_paise,effective_from,created_at,updated_at,sync_state) \
+             VALUES (?1,?2,?3,'2026-04-01',?4,?4,'confirmed')",
+            params![id, staff, monthly, c.old],
+        )?;
+    }
+    // Meena has a ₹2,000 advance, recovered ₹2,000/month.
+    tx.execute(
+        "INSERT INTO staff_advance(id,staff_id,amount_paise,recover_per_month_paise,recovered_paise,given_on,created_by,device_id,created_at,updated_at,sync_state) \
+         VALUES ('adv-meena','stf-meena',200000,200000,0,'2026-08-01','stf-priya','dev-a1','2026-08-01T10:00:00Z','2026-08-01T10:00:00Z','confirmed')",
+        [],
+    )?;
     Ok(())
 }
 

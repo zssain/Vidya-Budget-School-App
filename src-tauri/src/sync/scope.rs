@@ -309,6 +309,7 @@ pub fn snapshot(conn: &Connection, actor: &Actor) -> rusqlite::Result<Vec<Change
                       "attendance_sheet", "attendance_mark",
                       "fee_head", "fee_due", "payment", "payment_allocation", "reversal", "request",
                       "ledger_account", "voucher", "ledger_entry", "expense", "expense_reversal",
+                      "salary_structure", "staff_advance", "salary_run", "salary_line",
                       "marks_sheet", "mark_entry", "exam", "exam_subject"] {
                 for id in ids_of(conn, &format!("SELECT id FROM {t}"), &[])? {
                     push(conn, t, &id, None)?;

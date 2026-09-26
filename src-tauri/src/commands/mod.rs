@@ -68,6 +68,10 @@ pub const COMMANDS: &[&str] = &[
     "set_opening_balance",
     "cash_book",
     "profit_summary",
+    "salary_register",
+    "set_salary_structure",
+    "give_advance",
+    "pay_salaries",
     "get_receipt",
     "search_receipts",
     "reverse_payment",
@@ -455,6 +459,38 @@ pub fn cash_book(state: State<RtCtx>, date: String) -> CmdResult<CashBookDto> {
 pub fn profit_summary(state: State<RtCtx>) -> CmdResult<ProfitDto> {
     let actor = state.require_session()?;
     state.with_db(|conn| profit_summary_logic(conn, &actor))
+}
+
+// -------------------------------------------------------- accounts: salary ----
+
+#[tauri::command]
+pub fn salary_register(state: State<RtCtx>, month: String, days: Vec<StaffDaysInput>) -> CmdResult<SalaryRegisterDto> {
+    let actor = state.require_session()?;
+    state.with_db(|conn| salary_register_logic(conn, &actor, &month, &days))
+}
+
+#[tauri::command]
+pub fn set_salary_structure(state: State<RtCtx>, input: SalaryStructureInput) -> CmdResult<()> {
+    let actor = state.require_session()?;
+    let today = crate::db::now_iso();
+    state.with_db(|conn| set_salary_structure_logic(conn, &actor, &today, &input))
+}
+
+#[tauri::command]
+pub fn give_advance(state: State<RtCtx>, input: AdvanceInput) -> CmdResult<()> {
+    let actor = state.require_session()?;
+    let device_id = state.device_id.lock().map_err(|_| crate::error::CmdError::internal("lock"))?.clone();
+    let mode = state.device_mode;
+    let today = crate::db::now_iso();
+    state.with_db(|conn| give_advance_logic(conn, &actor, device_id.as_deref(), mode, &today, &input))
+}
+
+#[tauri::command]
+pub fn pay_salaries(state: State<RtCtx>, month: String, mode: String, days: Vec<StaffDaysInput>) -> CmdResult<PaySalariesResult> {
+    let actor = state.require_session()?;
+    let device_id = state.device_id.lock().map_err(|_| crate::error::CmdError::internal("lock"))?.clone();
+    let dmode = state.device_mode;
+    state.with_db(|conn| pay_salaries_logic(conn, &actor, device_id.as_deref(), dmode, &month, &mode, &days))
 }
 
 // -------------------------------------------------------------- receipts ------

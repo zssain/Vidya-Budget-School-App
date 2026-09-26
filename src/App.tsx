@@ -37,6 +37,7 @@ import BackupsScreen from '@/screens/desktop/BackupsScreen'
 import ReportCardDoc from '@/screens/print/ReportCardDoc'
 import ReceiptDoc from '@/screens/print/ReceiptDoc'
 import DayBookDoc from '@/screens/print/DayBookDoc'
+import SalarySlipsDoc from '@/screens/print/SalarySlipsDoc'
 import PrincipalHomeContainer from '@/screens/containers/PrincipalHomeContainer'
 import CollectFeeContainer from '@/screens/containers/CollectFeeContainer'
 import AttendanceContainer from '@/screens/containers/AttendanceContainer'
@@ -143,6 +144,10 @@ export default function App() {
         if (base === '/print/daybook') {
           const q = new URLSearchParams(path.split('?')[1] ?? '')
           return <DayBookDoc date={q.get('date') ?? new Date().toISOString().slice(0, 10)} auto={q.get('auto') === '1'} />
+        }
+        if (base === '/print/salaryslips') {
+          const q = new URLSearchParams(path.split('?')[1] ?? '')
+          return <SalarySlipsDoc month={q.get('month') ?? new Date().toISOString().slice(0, 7)} auto={q.get('auto') === '1'} />
         }
         const rc = matchRoute('/print/reportcard/:id', base)
         if (rc) {

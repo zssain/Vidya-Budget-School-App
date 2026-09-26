@@ -13,11 +13,10 @@ import * as api from '@/lib/api'
 import type { CashBookDto, ExpenseDto, OpeningBalanceDto, ProfitDto } from '@/lib/api'
 import DayBookScreen from './DayBookScreen'
 import RecordExpenseSheet from './RecordExpenseSheet'
+import SalaryRegister from './SalaryRegister'
 import type { Role } from '@/lib/nav'
 
-// The Salaries tab is added in Step 5 (salary register). For now Accounts covers
-// Cash book · Day book · Expenses · Profit.
-type Tab = 'cashbook' | 'daybook' | 'expenses' | 'profit'
+type Tab = 'cashbook' | 'daybook' | 'expenses' | 'profit' | 'salaries'
 
 function seg(sel: boolean): CSSProperties {
   return { minWidth: '64px', padding: '0 16px', height: '38px', fontSize: '13px', fontWeight: 500, border: 'none', borderRight: '1px solid var(--line-strong)', background: sel ? 'var(--accent)' : 'transparent', color: sel ? 'var(--white)' : 'var(--ink)', cursor: 'pointer' }
@@ -46,7 +45,7 @@ export function Strip({ items }: { items: [string, string, string?][] }) {
 }
 
 export default function AccountsScreen({ role }: { role: Role }) {
-  const tabs: Tab[] = role === 'accountant' ? ['cashbook', 'daybook', 'expenses'] : ['cashbook', 'daybook', 'expenses', 'profit']
+  const tabs: Tab[] = role === 'accountant' ? ['cashbook', 'daybook', 'expenses'] : ['cashbook', 'daybook', 'expenses', 'profit', 'salaries']
   const [tab, setTab] = useState<Tab>('cashbook')
   const [expenseOpen, setExpenseOpen] = useState(false)
 
@@ -57,7 +56,7 @@ export default function AccountsScreen({ role }: { role: Role }) {
         title={t('accounts.title')}
         sub={t('accounts.sub')}
         actions={
-          tab !== 'daybook' ? (
+          tab !== 'daybook' && tab !== 'salaries' ? (
             <button type="button" style={primaryBtn()} onClick={() => setExpenseOpen(true)}>{t('accounts.recordExpense')}</button>
           ) : undefined
         }
@@ -73,6 +72,7 @@ export default function AccountsScreen({ role }: { role: Role }) {
       {tab === 'daybook' ? <DayBookScreen /> : null}
       {tab === 'expenses' ? <ExpensesTab role={role} /> : null}
       {tab === 'profit' ? <ProfitTab /> : null}
+      {tab === 'salaries' ? <SalaryRegister /> : null}
 
       {expenseOpen ? <RecordExpenseSheet onClose={() => setExpenseOpen(false)} onSaved={() => { setExpenseOpen(false) }} /> : null}
     </div>

@@ -33,6 +33,7 @@ pub mod permissions;
 pub mod receipts;
 pub mod requests;
 pub mod restore;
+pub mod salary;
 pub mod session;
 pub mod upi;
 pub mod validation;
