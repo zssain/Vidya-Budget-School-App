@@ -101,6 +101,8 @@ pub const COMMANDS: &[&str] = &[
     "get_payment_settings",
     "set_payment_settings",
     "qr_svg",
+    "get_wa_auto_config",
+    "set_wa_auto_config",
     "record_message",
     "list_messages",
     "list_dues",
@@ -487,6 +489,18 @@ pub fn set_payment_settings(state: State<RtCtx>, input: PaymentSettingsInput) ->
 pub fn qr_svg(state: State<RtCtx>, data: String) -> CmdResult<String> {
     state.require_session()?;
     qr_svg_logic(&data)
+}
+
+#[tauri::command]
+pub fn get_wa_auto_config(state: State<RtCtx>) -> CmdResult<WaAutoConfigDto> {
+    let actor = state.require_session()?;
+    state.with_db(|conn| get_wa_auto_config_logic(conn, &actor))
+}
+
+#[tauri::command]
+pub fn set_wa_auto_config(state: State<RtCtx>, input: WaAutoConfigInput) -> CmdResult<()> {
+    let actor = state.require_session()?;
+    state.with_db(|conn| set_wa_auto_config_logic(conn, &actor, &input))
 }
 
 // --------------------------------------------------------------- messages -----

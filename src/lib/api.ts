@@ -586,6 +586,19 @@ export interface PaymentSettingsInput {
   on_dues_list: boolean
 }
 
+// Automatic WhatsApp config (P14 Step 7, module wa_auto). Token never returned.
+export interface WaAutoConfigDto {
+  configured: boolean
+  phone_number_id: string
+  token_set: boolean
+  templates: Record<string, string>
+}
+export interface WaAutoConfigInput {
+  phone_number_id: string
+  token?: string | null
+  templates: Record<string, string>
+}
+
 // Messaging outbox (P14 §10.1). wa_tap → 'tapped'; email/wa_auto → 'queued'.
 export interface MessageDto {
   id: string
@@ -865,6 +878,8 @@ export const set_module = (key: string, enabled: boolean) => invoke<void>('set_m
 export const get_payment_settings = () => invoke<PaymentSettings>('get_payment_settings')
 export const set_payment_settings = (input: PaymentSettingsInput) => invoke<void>('set_payment_settings', { input })
 export const qr_svg = (data: string) => invoke<string>('qr_svg', { data })
+export const get_wa_auto_config = () => invoke<WaAutoConfigDto>('get_wa_auto_config')
+export const set_wa_auto_config = (input: WaAutoConfigInput) => invoke<void>('set_wa_auto_config', { input })
 export const record_message = (input: RecordMessageInput) => invoke<MessageDto>('record_message', { input })
 export const list_messages = (status?: string | null, relatedId?: string | null) =>
   invoke<MessageDto[]>('list_messages', { status: status ?? null, relatedId: relatedId ?? null })

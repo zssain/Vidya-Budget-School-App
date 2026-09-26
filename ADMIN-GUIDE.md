@@ -328,6 +328,48 @@ magically unbreakable; it claims to be honest, and to make wrongdoing show up.
 
 ---
 
+## Automatic WhatsApp (optional — the school pays Meta)
+
+Vidya can send reminders and alerts to parents on WhatsApp **automatically**, without
+you tapping anything. This is **off by default** and is the only feature that costs
+money — **your school pays Meta directly** (about **₹0.12 per message plus GST** for a
+utility message like a fee reminder or absence alert). **Vidya's developer charges
+nothing for this.** The free options — email from the school's Gmail, and one-tap
+WhatsApp sharing — keep working whether or not you turn this on.
+
+You only need this if you want messages to go out on their own. To set it up you need a
+**Meta (Facebook) WhatsApp Business** account with your own phone number. Meta's setup
+happens on their website; the button names change from time to time, so follow *what
+each step does*.
+
+**One-time Meta setup (on Meta's website):**
+1. Create a **Meta Business account** and open the **WhatsApp** product.
+2. Add and verify your school's **WhatsApp Business phone number** (a number not already
+   on a normal WhatsApp app). Note its **Phone number ID**.
+3. Create a **permanent access token** (a "system user" token with the WhatsApp
+   messaging permission). Keep it secret — treat it like a password.
+4. Add a **payment method** so Meta can bill you per message.
+5. Create and get approved a **utility** message template for each purpose (fee
+   reminder, absence alert, receipt, circular) in each language you use. The simplest
+   template has one body variable that Vidya fills with the whole message.
+
+**In Vidya (Settings → Languages & modules → Automatic WhatsApp):**
+1. Turn the **Automatic WhatsApp** module on.
+2. Enter the **Phone number ID** and the **access token** (Vidya stores the token
+   encrypted and never shows it again — it only says "set").
+3. Enter the **template name** you got approved for each purpose and language.
+4. Use **Send test message** to a number you control to confirm it works.
+
+**What Vidya can and can't promise.** Because Vidya runs on your own computer (no company
+server), it cannot receive Meta's delivery receipts. So a sent message's status is
+**"Accepted by WhatsApp"** with Meta's message id — honest, and as far as Vidya can
+know. If Meta rejects a message, Vidya shows the **exact reason** (for example the
+template isn't approved in that language, the number isn't on WhatsApp, or your Meta
+billing needs attention). Confirm your obligations (consent, opt-out) for automated
+messaging with Meta's policies and, if needed, a lawyer.
+
+---
+
 ## Where to go when something needs attention
 
 Whenever Vidya needs you, it says so plainly on **Home** under **Needs attention**,

@@ -27,6 +27,7 @@ pub mod session;
 pub mod state;
 pub mod sync;
 pub mod upi;
+pub mod wa_auto;
 pub mod write;
 
 #[cfg(debug_assertions)]
@@ -196,7 +197,7 @@ fn invoke_handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'stat
         record_payment, list_payments, create_request, cancel_request, list_requests, get_request,
         decide_request, dashboard_principal, dashboard_accountant, dashboard_teacher, set_accent,
         list_modules, set_module,
-        get_payment_settings, set_payment_settings, qr_svg, record_message, list_messages,
+        get_payment_settings, set_payment_settings, qr_svg, get_wa_auto_config, set_wa_auto_config, record_message, list_messages,
         list_dues, preview_fee_reminder, queue_fee_reminders, list_absent,
         list_circulars, save_circular, send_circular, mark_circular_read,
         get_calendar, set_weekly_offs, add_calendar_event, update_calendar_event, delete_calendar_event,
@@ -228,7 +229,7 @@ fn invoke_handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'stat
         record_payment, list_payments, create_request, cancel_request, list_requests, get_request,
         decide_request, dashboard_principal, dashboard_accountant, dashboard_teacher, set_accent,
         list_modules, set_module,
-        get_payment_settings, set_payment_settings, qr_svg, record_message, list_messages,
+        get_payment_settings, set_payment_settings, qr_svg, get_wa_auto_config, set_wa_auto_config, record_message, list_messages,
         list_dues, preview_fee_reminder, queue_fee_reminders, list_absent,
         list_circulars, save_circular, send_circular, mark_circular_read,
         get_calendar, set_weekly_offs, add_calendar_event, update_calendar_event, delete_calendar_event,

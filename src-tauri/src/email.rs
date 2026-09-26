@@ -332,7 +332,9 @@ pub fn drain_queue(conn: &mut Connection, sender: &dyn GmailSender, now: &str, d
     Ok(Some(send_queued_emails(conn, sender, &name, &from_email, reply_to.as_deref(), cap, now, date)?))
 }
 
-fn op_for_message_update(conn: &Connection, id: &str, now: &str) -> rusqlite::Result<()> {
+/// Append a server op so devices sync a message-status change. Shared by the email
+/// and wa_auto senders.
+pub(crate) fn op_for_message_update(conn: &Connection, id: &str, now: &str) -> rusqlite::Result<()> {
     conn.execute(
         "INSERT INTO op_log(op_id, hlc, device_id, staff_id, \"table\", record_id, kind, payload, applied_at) \
          VALUES (?1,?2,'','','message',?3,'update','{}',?2)",
@@ -341,7 +343,9 @@ fn op_for_message_update(conn: &Connection, id: &str, now: &str) -> rusqlite::Re
     Ok(())
 }
 
-fn mark_sent(conn: &Connection, id: &str, provider_id: &str, now: &str) -> rusqlite::Result<()> {
+/// Mark a message `sent` with the provider id (Gmail id / WhatsApp wamid). For
+/// wa_auto "sent" means **accepted by WhatsApp** (no webhook ⇒ delivery unknown).
+pub(crate) fn mark_sent(conn: &Connection, id: &str, provider_id: &str, now: &str) -> rusqlite::Result<()> {
     conn.execute(
         "UPDATE message SET status='sent', provider_ref=?2, sent_at=?3, error=NULL, updated_at=?3 WHERE id=?1",
         params![id, provider_id, now],
@@ -349,7 +353,7 @@ fn mark_sent(conn: &Connection, id: &str, provider_id: &str, now: &str) -> rusql
     op_for_message_update(conn, id, now)
 }
 
-fn mark_failed(conn: &Connection, id: &str, error: &str, now: &str) -> rusqlite::Result<()> {
+pub(crate) fn mark_failed(conn: &Connection, id: &str, error: &str, now: &str) -> rusqlite::Result<()> {
     conn.execute(
         "UPDATE message SET status='failed', error=?2, updated_at=?3 WHERE id=?1",
         params![id, error, now],

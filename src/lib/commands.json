@@ -77,6 +77,8 @@
     "get_payment_settings",
     "set_payment_settings",
     "qr_svg",
+    "get_wa_auto_config",
+    "set_wa_auto_config",
     "record_message",
     "list_messages",
     "list_dues",

@@ -151,10 +151,52 @@ Encoding rules from the spec (§1.2 notes):
 
 ---
 
+## Check 3 — Meta WhatsApp Cloud API [VERIFY] (Step 7, verified — no STOP)
+
+Verified against Meta's official *WhatsApp Cloud API* developer docs (checked September 2026).
+The prompt's Step 7 STOP applies only if the details **can't** be verified — they can, so Step 7
+proceeds; the **live** send needs the owner's own Meta setup (phone-number id + token + approved
+templates), so it is built + unit-tested against a fake and marked **not verified live**.
+
+### 3a. Send endpoint + version
+- `POST https://graph.facebook.com/<Version>/<PHONE_NUMBER_ID>/messages`. Current documented Graph
+  API version: **v23.0** (Meta bumps this; the app keeps it in one const `GRAPH_API_VERSION`).
+- Header: `Authorization: Bearer <access_token>`; body `Content-Type: application/json`.
+- Source: <https://developers.facebook.com/docs/whatsapp/cloud-api/reference/messages> ·
+  <https://developers.facebook.com/docs/whatsapp/cloud-api/guides/send-message-templates/>
+
+### 3b. Template message payload (the only type allowed outside the 24-h window)
+```json
+{ "messaging_product": "whatsapp", "to": "<msisdn>", "type": "template",
+  "template": { "name": "<approved_template>", "language": { "code": "en" },
+    "components": [ { "type": "body", "parameters": [ { "type": "text", "text": "<value>" } ] } ] } }
+```
+Reminders/alerts use the **UTILITY** template category. Success (200) →
+`{ "messages": [ { "id": "<wamid>" } ] }` — Vidya records that `id` as the honest final status
+**"accepted by WhatsApp"** (no webhook = no public server, so delivery can't be confirmed further).
+
+### 3c. Error handling (build around `error.code`, not HTTP status)
+Response shape: `{ "error": { "code": <n>, "message": …, "error_data": { "details": … }, "error_subcode", "fbtrace_id" } }`.
+Codes Vidya maps: **190/0/200** token expired/invalid/missing → *sign in again*; **4 / 80007 /
+130429 / 131056** rate/throughput → *back off, keep queued*; **131042** payment method → *school's
+Meta billing*; **132000/132001/132015** template variable-mismatch / not-approved-in-language /
+paused → *fix the template*; **131047/131026/131050** re-engagement / not-a-WhatsApp-user / opted-out
+→ per-recipient failure with the exact reason.
+- Source: <https://developers.facebook.com/docs/whatsapp/cloud-api/support/error-codes/>
+
+### 3d. Decision
+No STOP. Build the `wa_auto` module (off by default): the payload builder + error mapping + a
+rate-limited send loop + encrypted-token config, behind a `WaSender` trait so the live `reqwest`
+client and a fake are interchangeable. Live send **not verified** (needs the owner's Meta setup);
+the school pays Meta (~₹0.12/message + GST); Vidya's developer charges nothing.
+
+---
+
 ## Summary
 | Gate | Result | Effect on Phase 14 |
 |---|---|---|
 | **Gmail `gmail.send`** | Verified: sensitive scope, **verification required to publish** (3–5 business days; homepage + live privacy policy + Search Console domain + demo video). Free-Gmail cap ~500/day (default 400 is safe). | **STOP the live email sender (Step 3)** pending the owner's verification/testing decision (OWNER-DECISIONS #13). Build every non-email part; build the sender behind the scope + fake-Gmail tests, marked **not verified live**. |
 | **UPI `upi://pay`** | Verified against **NPCI Linking Spec v1.6 (Nov 2017)**: `pa`,`pn` mandatory; `am` decimal (editable if absent); `cu`=INR only; `tn` optional; **no NPCI length limit**; **no signing needed** for a personal-VPA static/dynamic QR. | Build Step 1 as specified. `tn ≤ 50` is **our** cap (documented). Unsigned `upi://pay` link. |
+| **Meta WhatsApp Cloud API** | Verified from Meta's official docs: `POST graph.facebook.com/v23.0/<phone-number-id>/messages`, Bearer token, template payload (UTILITY category), `messages[].id` success, `error.code` handling. | **No STOP.** Build the `wa_auto` module (off by default) behind a `WaSender` trait; **live send not verified** (needs the owner's Meta setup). School pays Meta. |
 
 **No STOP for UPI.** **STOP applies only to the live Gmail sender** — proceed with everything else.

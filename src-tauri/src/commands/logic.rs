@@ -4059,6 +4059,81 @@ pub fn qr_svg_logic(data: &str) -> CmdResult<String> {
     crate::upi::qr_svg(data).map_err(|e| CmdError::internal(format!("qr: {e}")))
 }
 
+// ---- Automatic WhatsApp config (P14 Step 7, module `wa_auto`) ----------------
+
+#[derive(Debug, Serialize)]
+pub struct WaAutoConfigDto {
+    pub configured: bool,
+    pub phone_number_id: String,
+    /// Whether an access token is stored (never returned to the UI).
+    pub token_set: bool,
+    pub templates: std::collections::BTreeMap<String, String>,
+}
+
+/// Read the wa_auto setup (Principal). The access token is **never** returned — only
+/// whether one is stored — so it can't leak to the frontend or logs.
+pub fn get_wa_auto_config_logic(conn: &mut Connection, actor_s: &SessionStaff) -> CmdResult<WaAutoConfigDto> {
+    let actor = actor_from(conn, actor_s)?;
+    require_allow(&actor, Action::Settings, &Target { kind: TargetKind::School, ..Default::default() })?;
+    let raw: Option<String> = conn.query_row("SELECT settings_json FROM school LIMIT 1", [], |r| r.get(0)).optional()?;
+    let v: serde_json::Value = raw.and_then(|s| serde_json::from_str(&s).ok()).unwrap_or(serde_json::Value::Null);
+    let w = v.get("wa_auto");
+    let phone_number_id = w.and_then(|x| x.get("phone_number_id")).and_then(|x| x.as_str()).unwrap_or("").to_string();
+    let token_set = w.and_then(|x| x.get("token")).and_then(|x| x.as_str()).map(|t| !t.is_empty()).unwrap_or(false);
+    let mut templates = std::collections::BTreeMap::new();
+    if let Some(map) = w.and_then(|x| x.get("templates")).and_then(|x| x.as_object()) {
+        for (k, val) in map {
+            if let Some(name) = val.as_str() { templates.insert(k.clone(), name.to_string()); }
+        }
+    }
+    Ok(WaAutoConfigDto { configured: !phone_number_id.is_empty() && token_set, phone_number_id, token_set, templates })
+}
+
+#[derive(Debug, Deserialize)]
+pub struct WaAutoConfigInput {
+    pub phone_number_id: String,
+    /// Empty / absent keeps the existing token (so the UI need not re-enter it).
+    pub token: Option<String>,
+    pub templates: std::collections::BTreeMap<String, String>,
+}
+
+/// Save the wa_auto setup (Principal, `wa_auto` module). Merges into
+/// `school.settings_json.wa_auto`, keeping the existing token when none is given.
+/// Audited (the token is never written to the audit).
+pub fn set_wa_auto_config_logic(conn: &mut Connection, actor_s: &SessionStaff, input: &WaAutoConfigInput) -> CmdResult<()> {
+    let actor = actor_from(conn, actor_s)?;
+    require_allow(&actor, Action::Settings, &Target { kind: TargetKind::School, ..Default::default() })?;
+    vidya_core::modules::require_enabled(&crate::modules::enabled_set(conn)?, vidya_core::modules::Module::WaAuto)?;
+    let (school_id, raw): (String, Option<String>) = conn
+        .query_row("SELECT id, settings_json FROM school LIMIT 1", [], |r| Ok((r.get(0)?, r.get(1)?)))
+        .optional()?
+        .ok_or_else(CmdError::not_found)?;
+    let mut settings: serde_json::Value = raw.and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_else(|| serde_json::json!({}));
+    let existing_token = settings.get("wa_auto").and_then(|w| w.get("token")).and_then(|t| t.as_str()).unwrap_or("").to_string();
+    let token = match input.token.as_deref().map(str::trim).filter(|t| !t.is_empty()) {
+        Some(t) => t.to_string(),
+        None => existing_token,
+    };
+    let templates: serde_json::Map<String, serde_json::Value> = input.templates.iter().map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone()))).collect();
+    settings["wa_auto"] = serde_json::json!({
+        "phone_number_id": input.phone_number_id.trim(),
+        "token": token,
+        "templates": templates,
+    });
+    let now = now_iso();
+    let tx = conn.transaction()?;
+    tx.execute("UPDATE school SET settings_json=?1, updated_at=?2 WHERE id=?3", params![settings.to_string(), now, school_id])?;
+    crate::security::audit::append(&tx, &AuditEntry {
+        at: now.clone(), staff_id: Some(actor_s.id.clone()), action: "set_wa_auto_config".into(),
+        table: Some("school".into()), record_id: Some(school_id.clone()),
+        // Token deliberately excluded from the audit.
+        after_json: Some(serde_json::json!({ "phone_number_id_set": !input.phone_number_id.trim().is_empty(), "token_set": !token.is_empty(), "template_count": input.templates.len() }).to_string()),
+        ..Default::default()
+    })?;
+    tx.commit()?;
+    Ok(())
+}
+
 // ============================================================= messages ======
 
 /// A message-outbox row for the UI (share status, absence/reminder lists, logs).
@@ -4229,6 +4304,11 @@ pub fn record_message_logic(
 
     let channel = vidya_core::messages::Channel::parse(&input.channel)
         .ok_or_else(|| CmdError::validation("channel", "unknown"))?;
+    // An automatic-WhatsApp send requires the optional `wa_auto` module (off by
+    // default). email / wa_tap / app are Core.
+    if channel == vidya_core::messages::Channel::WaAuto {
+        vidya_core::modules::require_enabled(&crate::modules::enabled_set(conn)?, vidya_core::modules::Module::WaAuto)?;
+    }
     let status = initial_status_for(channel);
     if !matches!(input.language.as_str(), "en" | "hi" | "te") {
         return Err(CmdError::validation("language", "unknown"));
@@ -5953,6 +6033,44 @@ mod tests {
         set_module_logic(&mut c, &principal(), "circulars", false).unwrap();
         assert_eq!(save_circular_logic(&mut c, &principal(), None, DeviceMode::Server, &circular_input()).unwrap_err().code, "MODULE_OFF");
         assert_eq!(list_circulars_logic(&mut c, &principal()).unwrap_err().code, "MODULE_OFF");
+    }
+
+    // ---- Phase 14 Step 7: automatic WhatsApp config -----------------------
+    fn wa_cfg(pn: &str, token: Option<&str>) -> WaAutoConfigInput {
+        let mut templates = std::collections::BTreeMap::new();
+        templates.insert("fee_reminder.en".to_string(), "tpl_fr".to_string());
+        WaAutoConfigInput { phone_number_id: pn.into(), token: token.map(str::to_string), templates }
+    }
+
+    #[test]
+    fn wa_auto_config_save_read_and_token_never_leaks() {
+        let mut c = seeded();
+        set_module_logic(&mut c, &principal(), "wa_auto", true).unwrap();
+        set_wa_auto_config_logic(&mut c, &principal(), &wa_cfg("111", Some("SECRETTOKEN"))).unwrap();
+        let dto = get_wa_auto_config_logic(&mut c, &principal()).unwrap();
+        assert!(dto.configured && dto.token_set);
+        assert_eq!(dto.phone_number_id, "111");
+        // The token never appears in the audit log.
+        let leaked: bool = c.query_row("SELECT EXISTS(SELECT 1 FROM audit_log WHERE after_json LIKE '%SECRETTOKEN%')", [], |r| r.get(0)).unwrap();
+        assert!(!leaked, "token must not be written to the audit");
+        // Saving without a token keeps the stored one.
+        set_wa_auto_config_logic(&mut c, &principal(), &wa_cfg("222", None)).unwrap();
+        let dto2 = get_wa_auto_config_logic(&mut c, &principal()).unwrap();
+        assert!(dto2.token_set && dto2.phone_number_id == "222");
+    }
+
+    #[test]
+    fn wa_auto_config_and_channel_require_the_module() {
+        let mut c = seeded();
+        // Off by default → config is MODULE_OFF; accountant is FORBIDDEN even when on.
+        assert_eq!(set_wa_auto_config_logic(&mut c, &principal(), &wa_cfg("1", Some("t"))).unwrap_err().code, "MODULE_OFF");
+        set_module_logic(&mut c, &principal(), "wa_auto", true).unwrap();
+        assert_eq!(set_wa_auto_config_logic(&mut c, &accountant(), &wa_cfg("1", Some("t"))).unwrap_err().code, "FORBIDDEN");
+        // A wa_auto message queues only while the module is on.
+        let wa_msg = RecordMessageInput { channel: "wa_auto".into(), kind: "fee_reminder".into(), language: "en".into(), to_guardian_id: None, to_staff_id: None, to_address: Some("9876543210".into()), subject: None, body: Some("x".into()), related_table: None, related_id: None };
+        assert!(record_message_logic(&mut c, &accountant(), None, DeviceMode::Server, &wa_msg).is_ok());
+        set_module_logic(&mut c, &principal(), "wa_auto", false).unwrap();
+        assert_eq!(record_message_logic(&mut c, &accountant(), None, DeviceMode::Server, &wa_msg).unwrap_err().code, "MODULE_OFF");
     }
 
     #[test]
