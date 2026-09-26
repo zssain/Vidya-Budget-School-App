@@ -34,6 +34,7 @@ import AccountantHomeScreen from '@/screens/desktop/AccountantHomeScreen'
 import SessionScreen from '@/screens/desktop/SessionScreen'
 import GlobalSearch from '@/screens/desktop/GlobalSearch'
 import MarksScreen from '@/screens/desktop/MarksScreen'
+import ReportRemarksScreen from '@/screens/desktop/ReportRemarksScreen'
 import GradeScaleScreen from '@/screens/desktop/GradeScaleScreen'
 import ReportsScreen from '@/screens/desktop/ReportsScreen'
 import SettingsScreen from '@/screens/desktop/SettingsScreen'
@@ -214,6 +215,7 @@ function desktopRoute(base: string, role: Role): { active: string; node: ReactNo
     return { active: 'students', node: <StudentsScreen role={role} /> }
   if (base === '/principal/attendance') return { active: 'attendance', node: <AttendanceRegisterScreen /> }
   if (base === '/principal/marks') return { active: 'marks', node: <MarksScreen /> }
+  if (base === '/principal/remarks') return { active: 'marks', node: <ReportRemarksScreen /> }
   if (base === '/principal/timetable') return { active: 'timetable', node: <TimetableScreen /> }
   if (base === '/principal/grade-scale') return { active: 'settings', node: <GradeScaleScreen /> }
   if (base === '/principal/settings') return { active: 'settings', node: <SettingsScreen /> }

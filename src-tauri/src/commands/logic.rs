@@ -6027,6 +6027,8 @@ pub struct ReportCardDto {
     pub grade: Option<String>,
     pub incomplete: bool,
     pub attendance: AttendanceSummaryDto,
+    /// The class-teacher's remark for this exam (P16 Step 4), if entered.
+    pub remark: Option<String>,
 }
 
 #[allow(clippy::type_complexity)]
@@ -6092,6 +6094,10 @@ pub fn get_report_card_logic(conn: &mut Connection, actor_s: &SessionStaff, toda
 
     // Attendance for the current term (reuse the profile helper's approach).
     let profile = get_student_profile_logic(conn, today, student_id)?;
+    let remark: Option<String> = conn
+        .query_row("SELECT text FROM report_remark WHERE exam_id=?1 AND student_id=?2", params![exam_id, student_id], |r| r.get(0))
+        .optional()?
+        .filter(|s: &String| !s.is_empty());
 
     Ok(ReportCardDto {
         student_id: student_id.to_string(),
@@ -6108,7 +6114,194 @@ pub fn get_report_card_logic(conn: &mut Connection, actor_s: &SessionStaff, toda
         grade,
         incomplete,
         attendance: profile.attendance,
+        remark,
     })
+}
+
+// ---- Report-card remarks (P16 Step 4, §10.4) --------------------------------
+
+#[derive(Debug, Serialize)]
+pub struct ReportTemplateDto {
+    pub key: String,
+    pub text: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ReportRemarkRowDto {
+    pub student_id: String,
+    pub name: String,
+    pub roll_no: Option<i64>,
+    pub remark: Option<String>,
+    pub template_key: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ReportRemarksDto {
+    pub exam_id: String,
+    pub class_id: String,
+    pub class_display: Option<String>,
+    pub locked: bool,
+    pub students: Vec<ReportRemarkRowDto>,
+    pub templates: Vec<ReportTemplateDto>,
+}
+
+/// Neutral remark suggestions in `language` (falls back to English per key).
+fn load_report_templates(conn: &Connection, language: &str) -> rusqlite::Result<Vec<ReportTemplateDto>> {
+    let mut stmt = conn.prepare(
+        "SELECT key, COALESCE((SELECT text FROM report_template WHERE key=t.key AND language=?1), t.text) \
+         FROM report_template t WHERE t.language='en' ORDER BY t.key",
+    )?;
+    let rows = stmt
+        .query_map(params![language], |r| Ok(ReportTemplateDto { key: r.get(0)?, text: r.get(1)? }))?
+        .collect::<rusqlite::Result<Vec<ReportTemplateDto>>>()?;
+    Ok(rows)
+}
+
+/// The language for report-card suggestions: the school's chosen language
+/// (`settings_json.language`), else English. Per-staff UI language is client-side.
+fn report_template_language(conn: &Connection) -> String {
+    conn.query_row("SELECT COALESCE(json_extract(settings_json,'$.language'),'en') FROM school LIMIT 1", [], |r| r.get::<_, String>(0))
+        .optional()
+        .ok()
+        .flatten()
+        .unwrap_or_else(|| "en".into())
+}
+
+fn exam_is_final(conn: &Connection, exam_id: &str) -> rusqlite::Result<bool> {
+    Ok(conn.query_row("SELECT 1 FROM report_lock WHERE exam_id=?1", params![exam_id], |_| Ok(())).optional()?.is_some())
+}
+
+/// The remarks-entry list for a class in an exam (class teacher / Principal).
+pub fn get_report_remarks_logic(conn: &mut Connection, actor_s: &SessionStaff, exam_id: &str, class_id: &str) -> CmdResult<ReportRemarksDto> {
+    let actor = actor_from(conn, actor_s)?;
+    require_allow(&actor, Action::EnterReportRemark, &Target { kind: TargetKind::Marks, class_id: Some(class_id.to_string()), ..Default::default() })?;
+    require_module_enabled(conn, vidya_core::modules::Module::Classroom)?;
+    let class_display: Option<String> = conn.query_row("SELECT display FROM class WHERE id=?1", params![class_id], |r| r.get(0)).optional()?;
+    // Suggestions in the school's default language (per-staff UI language is
+    // client-side, not stored on `staff`); the teacher may edit freely.
+    let language = report_template_language(conn);
+    let students: Vec<ReportRemarkRowDto> = {
+        let mut stmt = conn.prepare(
+            "SELECT s.id, s.name, e.roll_no, r.text, r.template_key FROM enrollment e \
+             JOIN student s ON s.id=e.student_id \
+             LEFT JOIN report_remark r ON r.student_id=s.id AND r.exam_id=?1 \
+             WHERE e.class_id=?2 AND e.to_date IS NULL ORDER BY e.roll_no",
+        )?;
+        let rows = stmt.query_map(params![exam_id, class_id], |r| {
+            let remark: Option<String> = r.get(3)?;
+            Ok(ReportRemarkRowDto { student_id: r.get(0)?, name: r.get(1)?, roll_no: r.get(2)?, remark, template_key: r.get(4)? })
+        })?
+        .collect::<rusqlite::Result<Vec<ReportRemarkRowDto>>>()?;
+        rows
+    };
+    Ok(ReportRemarksDto {
+        exam_id: exam_id.to_string(),
+        class_id: class_id.to_string(),
+        class_display,
+        locked: exam_is_final(conn, exam_id)?,
+        students,
+        templates: load_report_templates(conn, &language)?,
+    })
+}
+
+/// List the remark templates in the actor's language (Settings → Report cards).
+pub fn list_report_templates_logic(conn: &mut Connection, _actor_s: &SessionStaff) -> CmdResult<Vec<ReportTemplateDto>> {
+    let language = report_template_language(conn);
+    Ok(load_report_templates(conn, &language)?)
+}
+
+#[derive(Debug, Deserialize)]
+pub struct ReportRemarkInput {
+    pub exam_id: String,
+    pub student_id: String,
+    pub text: String,
+    pub template_key: Option<String>,
+}
+
+/// Enter or edit a report-card remark (class teacher; Principal). Locked once the
+/// exam's report cards are final: a teacher is refused; the Principal may still
+/// edit directly (audited), the same lock pattern as marks.
+pub fn save_report_remark_logic(conn: &mut Connection, actor_s: &SessionStaff, device_id: Option<&str>, device_mode: DeviceMode, input: &ReportRemarkInput) -> CmdResult<()> {
+    let actor = actor_from(conn, actor_s)?;
+    // The student's current class decides ownership.
+    let class_id: String = conn
+        .query_row("SELECT class_id FROM enrollment WHERE student_id=?1 AND to_date IS NULL LIMIT 1", params![input.student_id], |r| r.get(0))
+        .optional()?
+        .ok_or_else(CmdError::not_found)?;
+    require_allow(&actor, Action::EnterReportRemark, &Target { kind: TargetKind::Marks, class_id: Some(class_id.clone()), ..Default::default() })?;
+    require_module_enabled(conn, vidya_core::modules::Module::Classroom)?;
+    vidya_core::report::validate_remark(&input.text)?;
+    if exam_is_final(conn, &input.exam_id)? && actor.role != Role::Principal {
+        return Err(CoreError::SheetLocked.into());
+    }
+    let now = now_iso();
+    let school_id = single_school_id(conn)?;
+    let id = new_id("rmk");
+    let sync_state = if device_mode == DeviceMode::Server { "confirmed" } else { "on_device" };
+    let ctx = WriteCtx { mode: device_mode };
+    let dev = device_id.map(str::to_string);
+    let exam_id = input.exam_id.clone();
+    let student_id = input.student_id.clone();
+    let text = input.text.trim().to_string();
+    let template_key = input.template_key.clone();
+    let class_id2 = class_id.clone();
+
+    with_write(conn, &ctx, move |tx| {
+        // One remark per (exam, student): update if present, else insert.
+        let rid: Option<String> = tx
+            .query_row("SELECT id FROM report_remark WHERE exam_id=?1 AND student_id=?2", params![exam_id, student_id], |r| r.get(0))
+            .optional()?;
+        let record_id = match rid {
+            Some(existing) => {
+                tx.execute(
+                    "UPDATE report_remark SET text=?1, template_key=?2, author=?3, updated_at=?4, updated_by_staff=?3, updated_by_device=?5, sync_state=?6 WHERE id=?7",
+                    params![text, template_key, actor_s.id, now, dev, sync_state, existing],
+                )?;
+                existing
+            }
+            None => {
+                tx.execute(
+                    "INSERT INTO report_remark(id,exam_id,student_id,text,template_key,author,school_id,created_at,updated_at,updated_by_staff,updated_by_device,sync_state) \
+                     VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?8,?6,?9,?10)",
+                    params![id, exam_id, student_id, text, template_key, actor_s.id, school_id, now, dev, sync_state],
+                )?;
+                id.clone()
+            }
+        };
+        let audit = AuditEntry {
+            at: now.clone(), staff_id: Some(actor_s.id.clone()), action: "save_report_remark".into(),
+            table: Some("report_remark".into()), record_id: Some(record_id.clone()),
+            after_json: Some(serde_json::json!({ "exam_id": exam_id, "student_id": student_id }).to_string()),
+            ..Default::default()
+        };
+        let op = Op {
+            op_id: new_id("op"), hlc: now.clone(), device_id: dev.clone().unwrap_or_default(), staff_id: actor_s.id.clone(),
+            audience: format!("class:{class_id2}"), table: "report_remark".into(), record_id, kind: "insert".into(),
+            payload: serde_json::json!({ "class_id": class_id2, "student_id": student_id }).to_string(),
+            base_version: None, server_epoch: 1,
+        };
+        Ok(Effect { value: (), audit, op })
+    })?;
+    Ok(())
+}
+
+/// Make an exam's report cards final — locks its remarks (Principal only).
+pub fn finalize_report_cards_logic(conn: &mut Connection, actor_s: &SessionStaff, exam_id: &str) -> CmdResult<()> {
+    let actor = actor_from(conn, actor_s)?;
+    require_allow(&actor, Action::FinalizeReportCards, &Target::of(TargetKind::School))?;
+    require_module_enabled(conn, vidya_core::modules::Module::Classroom)?;
+    let now = now_iso();
+    let school_id = single_school_id(conn)?;
+    conn.execute(
+        "INSERT INTO report_lock(exam_id,finalised_by,finalised_at,school_id,created_at,updated_at,sync_state) \
+         VALUES (?1,?2,?3,?4,?3,?3,'confirmed') ON CONFLICT(exam_id) DO NOTHING",
+        params![exam_id, actor_s.id, now, school_id],
+    )?;
+    audit_action(conn, AuditEntry {
+        at: now, staff_id: Some(actor_s.id.clone()), action: "finalize_report_cards".into(),
+        table: Some("report_lock".into()), record_id: Some(exam_id.to_string()), ..Default::default()
+    })?;
+    Ok(())
 }
 
 // ============================================================= reports ========
@@ -9726,6 +9919,49 @@ mod tests {
         assert!(delete_homework_note_logic(&mut c, &teacher_anita(), &note.id).is_err());
         assert!(delete_homework_note_logic(&mut c, &meena(), &note.id).is_ok());
         assert!(list_homework_notes_logic(&mut c, &meena(), "cls-5a").unwrap().is_empty());
+    }
+
+    // ---- Classroom: report-card remarks (P16 Step 4) ---------------------
+
+    #[test]
+    fn report_remark_enter_lock_and_appears_on_the_card() {
+        let mut c = seeded();
+        // Anita is the class teacher of VI-B (cls-6b), which sits the seeded exam.
+        let sid: String = c.query_row("SELECT student_id FROM enrollment WHERE class_id='cls-6b' AND to_date IS NULL ORDER BY roll_no LIMIT 1", [], |r| r.get(0)).unwrap();
+        // Templates are seeded (10 × en).
+        let tpls = list_report_templates_logic(&mut c, &teacher_anita()).unwrap();
+        assert_eq!(tpls.len(), 10);
+        // The class teacher enters a remark.
+        save_report_remark_logic(&mut c, &teacher_anita(), None, DeviceMode::Server, &ReportRemarkInput {
+            exam_id: "exam-hy".into(), student_id: sid.clone(), text: "Kavya asks good questions.".into(), template_key: None,
+        }).unwrap();
+        // It appears on the report card.
+        let card = get_report_card_logic(&mut c, &principal(), "2026-09-23", &sid, "exam-hy").unwrap();
+        assert_eq!(card.remark.as_deref(), Some("Kavya asks good questions."));
+        // It shows in the remarks list, not yet locked.
+        let list = get_report_remarks_logic(&mut c, &teacher_anita(), "exam-hy", "cls-6b").unwrap();
+        assert!(!list.locked);
+        assert!(list.students.iter().any(|s| s.student_id == sid && s.remark.is_some()));
+        // Principal makes the cards final → locked.
+        finalize_report_cards_logic(&mut c, &principal(), "exam-hy").unwrap();
+        // A teacher can no longer edit a locked exam's remark…
+        assert!(save_report_remark_logic(&mut c, &teacher_anita(), None, DeviceMode::Server, &ReportRemarkInput {
+            exam_id: "exam-hy".into(), student_id: sid.clone(), text: "changed".into(), template_key: None,
+        }).is_err());
+        // …but the Principal still may (direct edit, audited).
+        assert!(save_report_remark_logic(&mut c, &principal(), None, DeviceMode::Server, &ReportRemarkInput {
+            exam_id: "exam-hy".into(), student_id: sid, text: "Principal note.".into(), template_key: None,
+        }).is_ok());
+    }
+
+    #[test]
+    fn a_teacher_cannot_remark_for_another_class() {
+        let mut c = seeded();
+        // A VI-B student, but Meena (V-A/VII-B class teacher) is not the class teacher of VI-B.
+        let sid: String = c.query_row("SELECT student_id FROM enrollment WHERE class_id='cls-6b' AND to_date IS NULL LIMIT 1", [], |r| r.get(0)).unwrap();
+        assert!(save_report_remark_logic(&mut c, &meena(), None, DeviceMode::Server, &ReportRemarkInput {
+            exam_id: "exam-hy".into(), student_id: sid, text: "x".into(), template_key: None,
+        }).is_err());
     }
 
     #[test]

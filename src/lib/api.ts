@@ -446,6 +446,7 @@ export interface ReportCardDto {
   grade: string | null
   incomplete: boolean
   attendance: AttendanceSummaryDto
+  remark: string | null
 }
 
 export interface AuditRowDto {
@@ -1190,6 +1191,38 @@ export const save_homework_note = (input: HomeworkNoteInput) =>
   invoke<HomeworkNoteDto>('save_homework_note', { input })
 export const delete_homework_note = (id: string) => invoke<void>('delete_homework_note', { id })
 export const email_homework_note = (id: string) => invoke<NoteShareResult>('email_homework_note', { id })
+
+// ---- Phase 16: Classroom — report-card remarks ----------------------------
+export interface ReportTemplateDto {
+  key: string
+  text: string
+}
+export interface ReportRemarkRowDto {
+  student_id: string
+  name: string
+  roll_no: number | null
+  remark: string | null
+  template_key: string | null
+}
+export interface ReportRemarksDto {
+  exam_id: string
+  class_id: string
+  class_display: string | null
+  locked: boolean
+  students: ReportRemarkRowDto[]
+  templates: ReportTemplateDto[]
+}
+export interface ReportRemarkInput {
+  exam_id: string
+  student_id: string
+  text: string
+  template_key?: string | null
+}
+export const get_report_remarks = (examId: string, classId: string) =>
+  invoke<ReportRemarksDto>('get_report_remarks', { examId, classId })
+export const list_report_templates = () => invoke<ReportTemplateDto[]>('list_report_templates')
+export const save_report_remark = (input: ReportRemarkInput) => invoke<void>('save_report_remark', { input })
+export const finalize_report_cards = (examId: string) => invoke<void>('finalize_report_cards', { examId })
 
 export const update_fee_head = (id: string, input: FeeHeadInput) =>
   invoke<FeeHeadDto>('update_fee_head', { id, input })

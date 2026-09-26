@@ -121,7 +121,8 @@ pub fn audience_for(table: &str, class_id: Option<&str>) -> CoreResult<Audience>
         // Classroom (P16): school-wide period bell times, Principal-managed
         // substitutions and exam rooms/seats/schedule (hall tickets print on the
         // server PC). Every role reads them via the server snapshot.
-        | "period" | "substitution" | "exam_room" | "exam_seat" | "exam_schedule" => {
+        | "period" | "substitution" | "exam_room" | "exam_seat" | "exam_schedule"
+        | "report_lock" | "report_template" => {
             Ok(Audience::Admin)
         }
         // ---- request: audience follows the requester's own domain ----------

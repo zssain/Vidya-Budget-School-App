@@ -34,7 +34,7 @@ function Card({ card, school }: { card: ReportCardDto; school: SchoolDto | null 
         <div><b>{card.student_name}</b></div>
         <div style={{ textAlign: 'right' }}>{card.class_display ?? ''}{card.roll_no != null ? ` · ${t('rc.subject')}—${card.roll_no}` : ''}</div>
         <div style={{ color: 'var(--muted)' }}>{adm}</div>
-        <div style={{ textAlign: 'right', color: 'var(--muted)' }}>{t('rc.attendance')}: {att.marked > 0 ? `${(att.pct_tenths / 10).toFixed(1)}%` : '—'}{att.from_date ? ` (${att.from_date} → ${att.to_date})` : ''}</div>
+        <div style={{ textAlign: 'right', color: 'var(--muted)' }}>{t('rc.attendance')}: {att.marked > 0 ? `${att.present} / ${att.marked} ${t('rc.days')} · ${(att.pct_tenths / 10).toFixed(1)}%` : '—'}</div>
       </div>
 
       <table style={{ width: '100%', borderCollapse: 'collapse', marginTop: '8px' }}>
@@ -70,15 +70,21 @@ function Card({ card, school }: { card: ReportCardDto; school: SchoolDto | null 
         </div>
       )}
 
-      <div style={{ marginTop: '28px', display: 'flex', flexDirection: 'column', gap: '4px' }}>
-        <div style={{ fontSize: '11px', color: 'var(--muted)' }}>{t('rc.remark')}</div>
-        <div style={{ borderBottom: '1px solid var(--line-strong)', height: '28px' }} />
-      </div>
-
-      <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: '40px' }}>
-        <div style={{ textAlign: 'center', fontSize: '12px' }}>
-          <div style={{ borderTop: '1px solid var(--ink)', width: '160px', paddingTop: '4px' }}>{t('rc.principal')}</div>
+      {card.remark ? (
+        <div data-hl="remarks" style={{ marginTop: '20px', borderRadius: '8px', background: 'var(--accent-6)', border: '1px solid var(--accent-12)', padding: '12px 14px', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+          <div style={{ fontSize: '11px', color: 'var(--muted)' }}>{t('rc.remark')}</div>
+          <div style={{ fontFamily: "'Newsreader', Georgia, serif", fontStyle: 'italic', fontSize: '15px', lineHeight: 1.4 }}>{card.remark}</div>
         </div>
+      ) : (
+        <div style={{ marginTop: '28px', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+          <div style={{ fontSize: '11px', color: 'var(--muted)' }}>{t('rc.remark')}</div>
+          <div style={{ borderBottom: '1px solid var(--line-strong)', height: '28px' }} />
+        </div>
+      )}
+
+      <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '40px', fontSize: '12px', color: 'var(--muted)' }}>
+        <div style={{ borderTop: '1px solid var(--ink)', width: '150px', paddingTop: '4px', color: 'var(--ink)' }}>{t('rc.classTeacher')}</div>
+        <div style={{ borderTop: '1px solid var(--ink)', width: '150px', paddingTop: '4px', textAlign: 'right', color: 'var(--ink)' }}>{t('rc.principal')}</div>
       </div>
     </div>
   )

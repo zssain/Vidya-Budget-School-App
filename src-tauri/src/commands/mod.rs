@@ -90,6 +90,10 @@ pub const COMMANDS: &[&str] = &[
     "save_homework_note",
     "delete_homework_note",
     "email_homework_note",
+    "get_report_remarks",
+    "list_report_templates",
+    "save_report_remark",
+    "finalize_report_cards",
     "get_receipt",
     "search_receipts",
     "reverse_payment",
@@ -658,6 +662,32 @@ pub fn email_homework_note(state: State<RtCtx>, id: String) -> CmdResult<NoteSha
     let device_id = state.device_id.lock().map_err(|_| crate::error::CmdError::internal("lock"))?.clone();
     let mode = state.device_mode;
     state.with_db(|conn| email_homework_note_logic(conn, &actor, device_id.as_deref(), mode, &id))
+}
+
+#[tauri::command]
+pub fn get_report_remarks(state: State<RtCtx>, exam_id: String, class_id: String) -> CmdResult<ReportRemarksDto> {
+    let actor = state.require_session()?;
+    state.with_db(|conn| get_report_remarks_logic(conn, &actor, &exam_id, &class_id))
+}
+
+#[tauri::command]
+pub fn list_report_templates(state: State<RtCtx>) -> CmdResult<Vec<ReportTemplateDto>> {
+    let actor = state.require_session()?;
+    state.with_db(|conn| list_report_templates_logic(conn, &actor))
+}
+
+#[tauri::command]
+pub fn save_report_remark(state: State<RtCtx>, input: ReportRemarkInput) -> CmdResult<()> {
+    let actor = state.require_session()?;
+    let device_id = state.device_id.lock().map_err(|_| crate::error::CmdError::internal("lock"))?.clone();
+    let mode = state.device_mode;
+    state.with_db(|conn| save_report_remark_logic(conn, &actor, device_id.as_deref(), mode, &input))
+}
+
+#[tauri::command]
+pub fn finalize_report_cards(state: State<RtCtx>, exam_id: String) -> CmdResult<()> {
+    let actor = state.require_session()?;
+    state.with_db(|conn| finalize_report_cards_logic(conn, &actor, &exam_id))
 }
 
 // -------------------------------------------------------------- receipts ------

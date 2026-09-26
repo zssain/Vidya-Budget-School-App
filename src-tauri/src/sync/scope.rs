@@ -91,7 +91,7 @@ pub fn module_of_table(table: &str) -> Option<&'static str> {
         // Classroom (P16): timetable, substitutes, notes, report remarks, exam
         // seating — off → never synced to a device.
         "period" | "timetable_slot" | "substitution" | "homework_note" | "report_remark"
-        | "exam_room" | "exam_seat" | "exam_schedule" => Some("classroom"),
+        | "report_lock" | "report_template" | "exam_room" | "exam_seat" | "exam_schedule" => Some("classroom"),
         _ => None,
     }
 }
@@ -132,8 +132,9 @@ pub fn visible_row(conn: &Connection, actor: &Actor, table: &str, id: &str) -> r
     if table == "school_week" || table == "calendar_event" {
         return Ok(mk(row, None));
     }
-    // Period bell times (P16) are school-wide config every role reads.
-    if table == "period" {
+    // Period bell times + report-card templates (P16) are school-wide reference
+    // data every role reads.
+    if table == "period" || table == "report_template" {
         return Ok(mk(row, None));
     }
     // Message templates (P14) are Core reference data every role reads to compose.
@@ -240,6 +241,12 @@ pub fn visible_row(conn: &Connection, actor: &Actor, table: &str, id: &str) -> r
                     let cid: Option<String> = conn.query_row("SELECT class_id FROM homework_note WHERE id=?1", [id], |r| r.get(0)).optional()?;
                     Ok(if cid.map(|c| classes.contains(&c)).unwrap_or(false) { mk(row, None) } else { None })
                 }
+                "report_remark" => {
+                    let cid: Option<String> = conn
+                        .query_row("SELECT e.class_id FROM report_remark r JOIN enrollment e ON e.student_id=r.student_id AND e.to_date IS NULL WHERE r.id=?1 LIMIT 1", [id], |r| r.get(0))
+                        .optional()?;
+                    Ok(if cid.map(|c| classes.contains(&c)).unwrap_or(false) { mk(row, None) } else { None })
+                }
                 "guardian" => {
                     // Guardian of one of the teacher's students → name+mobile only.
                     if guardian_visible_to_teacher(conn, &classes, id)? {
@@ -293,6 +300,8 @@ pub fn snapshot(conn: &Connection, actor: &Actor) -> rusqlite::Result<Vec<Change
     // Period bell times (P16, `classroom` module): school-wide, every role reads
     // them to render the timetable grid. `push` skips them when the module is off.
     for id in ids_of(conn, "SELECT id FROM period", &[])? { push(conn, "period", &id, None)?; }
+    // Report-card remark templates (P16, `classroom`): reference data every role reads.
+    for id in ids_of(conn, "SELECT id FROM report_template", &[])? { push(conn, "report_template", &id, None)?; }
 
     // Staff — names only for non-Principal.
     let staff_filter = |row: &mut serde_json::Value| {
@@ -338,7 +347,7 @@ pub fn snapshot(conn: &Connection, actor: &Actor) -> rusqlite::Result<Vec<Change
                       "ledger_account", "voucher", "ledger_entry", "expense", "expense_reversal",
                       "salary_structure", "staff_advance", "salary_run", "salary_line",
                       "store_item", "store_sale", "stock_move",
-                      "timetable_slot", "substitution", "homework_note",
+                      "timetable_slot", "substitution", "homework_note", "report_remark",
                       "marks_sheet", "mark_entry", "exam", "exam_subject"] {
                 for id in ids_of(conn, &format!("SELECT id FROM {t}"), &[])? {
                     push(conn, t, &id, None)?;
@@ -432,6 +441,12 @@ pub fn snapshot(conn: &Connection, actor: &Actor) -> rusqlite::Result<Vec<Change
             // Homework & notes history for the teacher's classes.
             for id in ids_of(conn, &format!("SELECT id FROM homework_note WHERE class_id IN ({ph})"), cargs.as_slice())? {
                 push(conn, "homework_note", &id, None)?;
+            }
+            // Report-card remarks for students in the teacher's classes.
+            for id in ids_of(conn, &format!(
+                "SELECT r.id FROM report_remark r JOIN enrollment e ON e.student_id=r.student_id AND e.to_date IS NULL WHERE e.class_id IN ({ph})"
+            ), cargs.as_slice())? {
+                push(conn, "report_remark", &id, None)?;
             }
         }
     }

@@ -32,6 +32,7 @@ pub mod notes;
 pub mod numbering;
 pub mod permissions;
 pub mod receipts;
+pub mod report;
 pub mod requests;
 pub mod restore;
 pub mod salary;
