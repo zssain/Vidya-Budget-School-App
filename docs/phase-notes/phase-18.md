@@ -135,29 +135,32 @@ OK (no dev routes/seed/fixtures/keys in the built frontend).
   `module_on_op_passes_the_module_gate` (a `store_item` op — an un-mapped table — is rejected while
   store is off, applied when on).
 
-**Confirmed findings to fix before wide release (documented, not fixed here — each touches a
-sensitive path and warrants its own tested pass rather than rushed pre-release churn):**
-- **[HIGH] Server permission re-check gap (Rule 7).** The same `action_for`-only structure means the
-  server does **not** re-validate *permission* for ops on the un-mapped tables above — it defends
-  against a compromised/malicious authenticated device only for the mapped tables. (Legitimate
-  devices are unaffected: the command layer already gates op creation by permission.) **Fix:** map
-  every synced table+kind to its Action in `action_for` (mirroring the command layer) so `can()`
-  runs for every op; the few genuinely role-open tables (`circular_read`, `report_template`,
-  `fee_due`) stay module-gated-only. Needs per-table care + a sync-path FORBIDDEN test; the
-  module-off half is already closed above.
-- **[MEDIUM · DPDP] Erase leaves personal data in message/notification caches.** The FTS search
-  index **is** correctly scrubbed on erase (the `student` UPDATE fires the `student_au` trigger, so
-  the erased name is no longer searchable — the headline concern is clean). But erase touches only
-  `student`/`guardian`/`custom_value` + bookkeeping; `message.body`/`subject`/`to_address` (rendered
-  text with the student's name/contact baked in) and `notification.vars_json` are **not** scrubbed.
-  **Fix:** on erase, scrub the erased student's `message` and `notification` rows; add a
-  `student_fts MATCH oldname → 0 hits` regression test. *(Latent: if a future migration re-points
-  FTS at the `guardian` table, erase would stop refreshing FTS — re-audit then.)*
-- **[MEDIUM] Server-side consent gap.** `queue_fee_reminders` and `email_homework_note` check
-  `messages` consent (and the email drain re-checks at send), but `record_message_logic` (the entry
-  for `wa_tap`/`absence_alert`/`wa_auto`) relies on the UI for consent, and `send_queued_wa_auto`
-  does not re-check. **Fix:** call `messages_consent` in `record_message_logic` for guardian-directed
-  rows and/or re-check in the wa_auto drain.
+**Also fixed this phase (the security-review follow-ups — commit — WORK 3):**
+- **[HIGH] Server permission re-check gap (Rule 7) — FIXED.** The same `action_for`-only structure
+  meant the server did **not** re-validate *permission* for ops on the un-mapped module tables. Now
+  `action_for` maps `expense`→RecordExpense, `expense_reversal`→ReverseExpense,
+  `salary_*`/`staff_advance`→ManageSalary, `store_item`/`stock_move`→ManageStore,
+  `store_sale`→RecordStoreSale, `circular`→ManageCirculars, `period`/`timetable_slot`→ManageTimetable,
+  `substitution`→ManageSubstitutes, `exam_*`→ManageExamSeating — each with the same target the
+  command layer uses (updated `target_for`), so legitimate ops from the right role pass and forged
+  ops from the wrong role are rejected. Tests: a teacher's forged `expense` op and the accountant's
+  forged `salary_structure` op are both `Rejected` with `FORBIDDEN`; the Principal's `store_item` op
+  still applies. Left intentionally un-mapped (module-gated only, or Core reference/server-generated,
+  lower risk): `circular_read` (any staff marks read), `report_template`/`report_lock`, `fee_due`,
+  `guardian`/`student_guardian`, `consent`, `message`/`message_template` — noted in `apply.rs`.
+- **[DPDP] Erase message/notification cache — FIXED (and FTS confirmed clean).** Verified the FTS
+  search index **is** correctly refreshed on erase (the `student` UPDATE fires `student_au`; the
+  erased student drops out of search — other same-name students are unaffected; the review was
+  right). Added: erase now tombstones the erased student's `message` rows (`subject`/`to_address`
+  NULL, `body`=`(erased)`) and clears `notification.vars_json` for notifications deep-linking the
+  student. Regression test asserts the message is scrubbed and the erased student is no longer
+  searchable by id.
+- **[MEDIUM] Server-side consent gap — FIXED.** `record_message_logic` now rejects a student-linked
+  guardian message (`related_table='student'`) without the student's active `messages` consent
+  (mirrors `email::row_consented`, now `pub(crate)` and reused), and `send_queued_wa_auto` re-checks
+  consent at send time like the email drain. Tests updated/added.
+
+**Remaining (documented, low priority):**
 - **[LOW] Defense-in-depth:** add a release-binary `strings` scan (or port a `no_key_leak` test into
   the app workspace) so licence-maker isolation doesn't rest solely on the Cargo `exclude` +
   `build.rs` dev-key rejection. No leak was found.

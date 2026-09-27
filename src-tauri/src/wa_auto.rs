@@ -176,6 +176,18 @@ pub fn send_queued_wa_auto(
             Some(m) => m,
             None => { mark_failed(conn, &id, "no_mobile", now)?; report.skipped_no_email += 1; continue; }
         };
+        // DPDP consent (§9): don't send a student-linked message to a guardian whose
+        // `messages` consent was withdrawn after the row was queued. Mirrors the
+        // email drain's check (record_message also gates at queue time).
+        let (rel_tbl, rel_id): (Option<String>, Option<String>) = conn
+            .query_row("SELECT related_table, related_id FROM message WHERE id=?1", params![id], |r| Ok((r.get(0)?, r.get(1)?)))
+            .optional()?
+            .unwrap_or((None, None));
+        if !crate::email::row_consented(conn, rel_tbl.as_deref(), rel_id.as_deref()) {
+            mark_failed(conn, &id, "consent_withdrawn", now)?;
+            report.skipped_no_consent += 1;
+            continue;
+        }
         let purpose = kind.as_deref().unwrap_or("");
         let template = match cfg.template_for(purpose, &lang) {
             Some(t) => t.to_string(),

@@ -199,7 +199,7 @@ pub struct SendReport {
 /// True if the student still has active `messages` consent (P13). A row whose
 /// `related_table='student'` carries the student id; other rows are treated as
 /// consented (they came from an authorised flow).
-fn row_consented(conn: &Connection, related_table: Option<&str>, related_id: Option<&str>) -> bool {
+pub(crate) fn row_consented(conn: &Connection, related_table: Option<&str>, related_id: Option<&str>) -> bool {
     match (related_table, related_id) {
         (Some("student"), Some(sid)) => crate::commands::logic::messages_consent_logic(conn, sid).unwrap_or(false),
         _ => true,

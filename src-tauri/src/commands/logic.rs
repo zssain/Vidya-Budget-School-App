@@ -8231,6 +8231,20 @@ pub fn record_message_logic(
     };
     require_allow(&actor, action, &target)?;
 
+    // DPDP consent (§9): a message about a student is never queued to a guardian
+    // without the student's active `messages` consent. This mirrors the send-time
+    // check in the email and wa_auto drains, so a row can't be queued that could
+    // never be sent. Rows not linked to a student (e.g. a receipt share keyed to a
+    // payment, or a staff-directed message) come from an authorised flow and are
+    // not consent-gated here — the same rule as `email::row_consented`.
+    if input.related_table.as_deref() == Some("student") {
+        if let Some(sid) = input.related_id.as_deref() {
+            if !messages_consent_logic(conn, sid)? {
+                return Err(CmdError::forbidden("messages_consent"));
+            }
+        }
+    }
+
     let channel = vidya_core::messages::Channel::parse(&input.channel)
         .ok_or_else(|| CmdError::validation("channel", "unknown"))?;
     // An automatic-WhatsApp send requires the optional `wa_auto` module (off by
@@ -9642,6 +9656,21 @@ pub fn erase_student_logic(
         tx.execute("UPDATE guardian SET name=?2, mobile=NULL, email=NULL, updated_at=?3, version=version+1 WHERE id=?1", params![gid, ERASED, now])?;
     }
     tx.execute("DELETE FROM custom_value WHERE entity_id=?1", params![student_id])?;
+    // DPDP (§9): scrub personal data cached in the outbox for this student — a
+    // message body/subject carries the student's name and `to_address` a guardian's
+    // contact. Keep the row (operational status/audit) but tombstone its personal
+    // content. `message` has no append-only trigger, so UPDATE is allowed.
+    tx.execute(
+        "UPDATE message SET subject=NULL, body=?2, to_address=NULL, updated_at=?3 WHERE related_table='student' AND related_id=?1",
+        params![student_id, ERASED, now],
+    )?;
+    // Best-effort: notifications have no student column, so scrub the interpolation
+    // vars (which may hold the name) of any notification whose deep-link targets this
+    // student. The id is a unique UUID, so the LIKE can't false-match another row.
+    tx.execute(
+        "UPDATE notification SET vars_json=NULL WHERE link LIKE '%' || ?1 || '%'",
+        params![student_id],
+    )?;
     crate::security::audit::append(&tx, &AuditEntry {
         at: now.clone(), staff_id: Some(actor_s.id.clone()), action: "erase_student".into(),
         table: Some("student".into()), record_id: Some(student_id.to_string()),
@@ -10142,11 +10171,28 @@ mod tests {
     fn absence_alert_only_for_own_class_students() {
         let mut c = seeded();
         let mine = list_absent_logic(&mut c, &meena(), "cls-5a", "2026-09-23").unwrap().students[0].student_id.clone();
+        // A student-linked guardian message needs the student's `messages` consent (§9).
+        record_consent_logic(&mut c, &accountant(), None, DeviceMode::Server, &mine, None, "messages", "in_person").unwrap();
         // Meena may alert an absentee in her own class.
         assert!(record_message_logic(&mut c, &meena(), None, DeviceMode::Server, &absence_input(&mine)).is_ok());
         // But NOT a student in a class she does not class-teach (cls-2a).
         let other: String = c.query_row("SELECT student_id FROM enrollment WHERE class_id='cls-2a' AND to_date IS NULL LIMIT 1", [], |r| r.get(0)).unwrap();
         assert_eq!(record_message_logic(&mut c, &meena(), None, DeviceMode::Server, &absence_input(&other)).unwrap_err().code, "FORBIDDEN");
+    }
+
+    #[test]
+    fn guardian_message_needs_messages_consent() {
+        // DPDP (§9): a student-linked guardian message is rejected server-side
+        // without the student's active `messages` consent — even for the class
+        // teacher (record_message previously relied only on the UI). P18 fix.
+        let mut c = seeded();
+        let mine = list_absent_logic(&mut c, &meena(), "cls-5a", "2026-09-23").unwrap().students[0].student_id.clone();
+        let err = record_message_logic(&mut c, &meena(), None, DeviceMode::Server, &absence_input(&mine)).unwrap_err();
+        assert_eq!(err.code, "FORBIDDEN");
+        assert_eq!(err.vars.get("reason").and_then(|v| v.as_str()), Some("messages_consent"));
+        // Once consent is on file the same alert is allowed.
+        record_consent_logic(&mut c, &accountant(), None, DeviceMode::Server, &mine, None, "messages", "in_person").unwrap();
+        assert!(record_message_logic(&mut c, &meena(), None, DeviceMode::Server, &absence_input(&mine)).is_ok());
     }
 
     // ---- Phase 14 Step 6: circulars ---------------------------------------
@@ -10469,6 +10515,37 @@ mod tests {
         // Both actions logged.
         let actions: i64 = c.query_row("SELECT COUNT(*) FROM privacy_action WHERE student_id=?1", params![STU], |r| r.get(0)).unwrap();
         assert_eq!(actions, 2);
+    }
+
+    #[test]
+    fn erase_scrubs_the_message_cache_and_search_index() {
+        // DPDP (§9): erase must leave no personal data in the message outbox or the
+        // FTS search index (P18 security review follow-up).
+        let mut c = seeded();
+        // A guardian message about the student — its body carries the name.
+        c.execute(
+            "INSERT INTO message(id,kind,channel,to_address,subject,body,status,related_table,related_id,created_by) \
+             VALUES ('msg-erase-test','absence_alert','wa_tap','9876543210','Absent: Kavya','Dear parent, Kavya Singh was marked absent.','tapped','student',?1,'stf-priya')",
+            params![STU],
+        ).unwrap();
+        // The student is searchable by name before erase (the seed has several
+        // "Kavya"s, so search the erased student by id in the results).
+        let found_before = search_students_logic(&mut c, "Kavya").unwrap().iter().any(|s| s.id == STU);
+        assert!(found_before, "erased student is searchable before erase");
+
+        erase_student_logic(&mut c, &principal(), None, DeviceMode::Server, STU).unwrap();
+
+        // The cached message no longer carries personal content.
+        let (subj, body, addr): (Option<String>, Option<String>, Option<String>) = c
+            .query_row("SELECT subject, body, to_address FROM message WHERE id='msg-erase-test'", [], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .unwrap();
+        assert_eq!(subj, None);
+        assert_eq!(addr, None);
+        assert_eq!(body.as_deref(), Some("(erased)"), "message body tombstoned");
+        // The erased student is gone from the FTS index (the student UPDATE fires the
+        // student_au trigger). Other "Kavya"s in the seed are unaffected.
+        let found_after = search_students_logic(&mut c, "Kavya").unwrap().iter().any(|s| s.id == STU);
+        assert!(!found_after, "erased student is no longer searchable by the old name");
     }
 
     #[test]

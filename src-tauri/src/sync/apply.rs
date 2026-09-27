@@ -75,13 +75,35 @@ fn action_for(table: &str, kind: &str) -> Option<Action> {
         ("payment", _) => Some(Action::RecordPayment),
         ("attendance_sheet", _) | ("attendance_mark", _) => Some(Action::TakeAttendance),
         ("mark_entry", _) | ("marks_sheet", _) => Some(Action::EnterMarks),
-        // Classroom (P16): a teacher's homework/notes and report-card remarks.
+        // School accounts (P15) — each maps to the SAME Action + target the command
+        // layer uses, so the server re-validates permission for these ops too
+        // (previously they were un-mapped and skipped the check — P18 security fix).
+        ("expense", _) => Some(Action::RecordExpense),
+        ("expense_reversal", _) => Some(Action::ReverseExpense),
+        ("salary_structure", _) | ("salary_run", _) | ("salary_line", _) | ("staff_advance", _) => Some(Action::ManageSalary),
+        // School store (P15).
+        ("store_item", _) | ("stock_move", _) => Some(Action::ManageStore),
+        ("store_sale", _) => Some(Action::RecordStoreSale),
+        // Communication (P14): circular create/edit is Principal-managed (the teacher
+        // class-notice flow goes through a request, not a direct circular op).
+        ("circular", _) => Some(Action::ManageCirculars),
+        // Classroom (P16): a teacher's homework/notes and report-card remarks…
         ("homework_note", _) => Some(Action::ManageNotes),
         ("report_remark", _) => Some(Action::EnterReportRemark),
+        // …and the Principal-managed classroom config.
+        ("period", _) | ("timetable_slot", _) => Some(Action::ManageTimetable),
+        ("substitution", _) => Some(Action::ManageSubstitutes),
+        ("exam_room", _) | ("exam_seat", _) | ("exam_schedule", _) => Some(Action::ManageExamSeating),
         // Staff HR (P17): leave types / leave records are Principal-managed.
         ("leave_type", _) | ("leave_record", _) => Some(Action::ManageStaffHr),
         // `staff_attendance` is decided per-row in `apply_op` (own = StaffCheckIn,
         // another staff's row = ManageStaffHr), so it is not mapped here.
+        //
+        // Left intentionally un-mapped (module-gated only, or Core): `circular_read`
+        // (any staff marks a circular read), `report_template`/`report_lock`
+        // (reference / server-authoritative, not device ops), `fee_due`, `guardian`,
+        // `student_guardian`, `consent`, `message`/`message_template`. Adding a
+        // precise Action for these is tracked in docs/phase-notes/phase-18.md.
         _ => None,
     }
 }
@@ -94,6 +116,13 @@ fn target_for(table: &str, payload: &serde_json::Value) -> Target {
         "payment" | "fee_due" => TargetKind::Fee,
         "attendance_sheet" | "attendance_mark" | "homework_note" => TargetKind::Attendance,
         "mark_entry" | "marks_sheet" | "report_remark" => TargetKind::Marks,
+        // Match the command layer's target for these (accounts/store → Fee;
+        // timetable/substitutes/exams/circular → School) so the server re-check
+        // agrees with how the op was authorised on the device.
+        "expense" | "expense_reversal" | "salary_structure" | "salary_run" | "salary_line"
+        | "staff_advance" | "store_item" | "store_sale" | "stock_move" => TargetKind::Fee,
+        "period" | "timetable_slot" | "substitution" | "exam_room" | "exam_seat"
+        | "exam_schedule" | "circular" => TargetKind::School,
         _ => TargetKind::Own,
     };
     Target { kind, class_id, class_subject_id, ..Default::default() }
@@ -750,10 +779,56 @@ mod tests {
 
     #[test]
     fn module_on_op_passes_the_module_gate() {
-        // With the module ON the same op is no longer module-gated (it is applied).
+        // With the module ON the same op is no longer module-gated, and the Principal
+        // (who holds ManageStore) passes the permission re-check too, so it applies.
         let mut c = seeded();
         c.execute("UPDATE module_setting SET enabled=1 WHERE key='store'", []).unwrap();
         let res = apply_op(&mut c, &store_item_op()).unwrap();
         assert_ne!(res.reason_code.as_deref(), Some(codes::MODULE_OFF), "module on → not module-gated");
+    }
+
+    /// An op on a P15/P16 module table authored by `author`. `accounts` is ON by
+    /// default, so these reach the permission re-check.
+    fn op_on(table: &str, record_id: &str, author: &str, payload: serde_json::Value) -> Op {
+        Op {
+            op_id: format!("op-{table}-{author}"),
+            hlc: Hlc::new(AFTER_CUTOVER_MS, 0, "dev-a1").to_string_form(),
+            device_id: "dev-a1".into(),
+            staff_id: author.into(),
+            audience: "finance".into(),
+            table: table.into(),
+            record_id: record_id.into(),
+            kind: "insert".into(),
+            payload,
+            base_version: None,
+            server_epoch: 1,
+        }
+    }
+
+    #[test]
+    fn expense_op_from_a_teacher_is_rejected_by_the_server() {
+        // A teacher cannot RecordExpense. Before the P18 fix `expense` was un-mapped
+        // by `action_for`, so a forged expense op skipped the permission re-check and
+        // was written. Now the server rejects it (Rule 7 — re-validate every op).
+        let mut c = seeded();
+        let op = op_on("expense", "exp-forge", "stf-meena",
+            serde_json::json!({ "id": "exp-forge", "amount_paise": 5000, "paid_via": "cash", "category_account_id": "5002", "spent_on": "2026-09-23" }));
+        let res = apply_op(&mut c, &op).unwrap();
+        assert_eq!(res.status, OpStatus::Rejected);
+        assert_eq!(res.reason_code.as_deref(), Some(codes::FORBIDDEN));
+        let n: i64 = c.query_row("SELECT COUNT(*) FROM expense WHERE id='exp-forge'", [], |r| r.get(0)).unwrap();
+        assert_eq!(n, 0, "rejected → nothing written");
+    }
+
+    #[test]
+    fn salary_op_from_the_accountant_is_rejected_by_the_server() {
+        // ManageSalary is Principal-only, so even the accountant's forged salary op is
+        // rejected server-side (previously `salary_structure` skipped the re-check).
+        let mut c = seeded();
+        let op = op_on("salary_structure", "sal-forge", "stf-suresh",
+            serde_json::json!({ "id": "sal-forge", "staff_id": "stf-meena", "monthly_paise": 2_000_000, "effective_from": "2026-04-01" }));
+        let res = apply_op(&mut c, &op).unwrap();
+        assert_eq!(res.status, OpStatus::Rejected);
+        assert_eq!(res.reason_code.as_deref(), Some(codes::FORBIDDEN));
     }
 }

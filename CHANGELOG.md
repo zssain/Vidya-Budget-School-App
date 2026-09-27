@@ -81,6 +81,12 @@ in v2 depends on a company server.
 - v1→v2 upgrade no longer fails on a database that holds an applied payment
   reversal: the migration runner defers foreign-key enforcement across the
   `request`-table rebuild (migration 0012) and re-checks integrity afterward.
+- Server-side enforcement hardening (security review): the school server now
+  rejects a sync op for a disabled module, and re-validates the author's
+  permission, for **every** module table (accounts, store, classroom, circulars,
+  staff HR) — previously several of these tables skipped those checks. Guardian
+  messages are refused server-side without the student's messages consent, and an
+  erased student's name is scrubbed from the message outbox and search index.
 
 ## [1.0.0] - 2026-09-24
 
