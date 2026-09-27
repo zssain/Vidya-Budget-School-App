@@ -28,3 +28,10 @@ base64 = "0.22"              # §13; test-only, to encode a sample relay session
 
 # Release size tuning lives at the workspace root [profile.release] (lto, opt-level="s",
 # strip) — a crate-level profile is ignored in a workspace, so none is set here.
+
+# Skip wasm-pack's post-build `wasm-opt` (binaryen) pass: it is unreliable across
+# environments and not required — the rustc `opt-level="s"` + strip already produce a
+# compact module well within the ≤ 6 MB PWA budget. An optional manual `wasm-opt`
+# pass can shrink it further at release (documented in web-pwa/README.md).
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = false
