@@ -5,6 +5,83 @@ All notable changes to Vidya Budget School are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0] - Unreleased (draft — tag `v2.0.0` to publish)
+
+Vidya v2: the same offline-first record, now **zero monthly cost to run**, with a
+third language (Telugu) and a full year of school workflows — fees & accounts,
+the classroom, communication and staff HR — added as switchable modules. Nothing
+in v2 depends on a company server.
+
+> **Build state (honest — read before releasing).** The desktop app (Windows/
+> macOS) runs the full single-PC record with every module. Three things that need
+> the owner's own accounts/hardware are **built and tested against fakes but not
+> yet wired to the live services**, so they are not functional in this build:
+> (1) the live **Google Drive** internet-sync client + its sign-in UI (the LAN
+> sync route works; the Drive route is gated on the one-time Google `drive.file`
+> spike — see `docs/phase-notes/phase-12-spike.md`); (2) the **Android** app
+> build and its native share/camera/keystore/sign-in plugin (no Android toolchain
+> in the build environment); (3) live **Gmail send** and **automatic WhatsApp**
+> (Testing-mode Gmail + owner's Meta setup). Until those are completed on the
+> owner's machine, treat v2.0.0 as a **single-PC desktop** release. iPhone support
+> (an installable web app) is Phase 19.
+
+### Added
+
+- **Telugu**, alongside English and Hindi, across the UI, receipts, report cards
+  and messages (Noto Sans Telugu; amount-in-words). Hindi/Telugu sample strings
+  await a native-speaker review.
+- **Zero-cost platform.** Google Drive is the internet sync route (a school
+  **sync account** for encrypted changes + a **backup account** for backups); the
+  Vidya relay becomes an optional, off-by-default "Instant sync" add-on; a static
+  website (`site/`) replaces the checkout server.
+- **Offline licence files.** One-time perpetual licence verified offline from a
+  machine code — a licence **key** or `.vlic` file signed on the owner's laptop
+  (`tools/licence-maker`). No online activation, no expiry, no remote check.
+- **Switchable modules** (`module_setting`): School accounts, Classroom, Staff HR
+  and Circulars on by default; Automatic WhatsApp, School store and Instant sync
+  off. A disabled module hides its screens, rejects its commands and server ops,
+  and does not sync its tables.
+- **Foundations:** school calendar (`is_working_day`), a `guardian` table,
+  a balanced general ledger (a voucher per money movement), a numbering engine,
+  an approval registry, a messaging engine, a shared print engine, custom fields,
+  roles-as-data, and `school_id` on every table.
+- **Communication:** per-student UPI QR on receipts and reminders; free email via
+  the sync account's Gmail; tap-to-WhatsApp; optional automatic WhatsApp (school
+  pays Meta); absence alerts; fee reminders; circulars & notices.
+- **Fees:** per-fee-head instalments with per-instalment dues.
+- **School accounts:** expenses (append-only + reversal), cash book, profit
+  summary, salary register (unpaid-leave deduction), and an optional School store.
+- **Classroom:** timetable (clash-checked), substitutes & attendance duty,
+  homework & notes with attachments, report-card remarks, exam seating & hall
+  tickets, and a calendar screen.
+- **Staff HR:** staff check-in/out (LAN = "at school", else "away" for approval),
+  leave types & quotas, leave approval, and salary/substitute links.
+- **Privacy (DPDP):** per-student consent, one-student export, erase-on-request
+  (money/audit kept, personal fields tombstoned), a retention setting and an
+  incident log.
+
+### Changed
+
+- **Attendance is Present/Absent only.** The Leave (L) button, count and bar are
+  gone from new sheets; `% = P ÷ (P + A)`. Legacy `L` marks are kept and shown as
+  "Leave (old)". There is **no attendance cut-off time** and no low-attendance
+  threshold.
+- Roles are stored as data (`role` + `role_permission`) so more templates can be
+  added later; the exhaustive permission matrix is unchanged.
+- The licence is perpetual and verified offline (no 30-day online recheck).
+
+### Removed
+
+- The **online licence server**, activation API and payment webhooks (replaced by
+  offline licence files + a static UPI-QR website).
+- Per-staff Google-account folder sharing (replaced by the single sync account).
+
+### Fixed
+
+- v1→v2 upgrade no longer fails on a database that holds an applied payment
+  reversal: the migration runner defers foreign-key enforcement across the
+  `request`-table rebuild (migration 0012) and re-checks integrity afterward.
+
 ## [1.0.0] - 2026-09-24
 
 First public release of Vidya Budget School — offline-first school-management

@@ -25,6 +25,7 @@ answered (or the default is the confirmed choice).
 | 13 | **Google verification for `gmail.send`** (if required for production) | **Run the OAuth app in Testing mode now** (no verification; ≤100 whitelisted accounts, 7-day token expiry); build + wire the sender for it. Publish + sensitive-scope verification before general release. | Communication module (P14, Step 3) | **decided (interim)** | Owner chose Testing mode for now. P14 Step 0 confirmed (Google docs) `gmail.send` is a **Sensitive** scope: publishing needs OAuth app verification (3–5 business days; live homepage + privacy policy + Search Console domain ownership + per-scope justification + demo video), but **not** the restricted-scope security audit. Free-Gmail cap ~500 recipients/day (default 400 safe). Verification still needed before distributing to many schools. |
 | 14 | **Code signing** (Windows cert, Apple Developer ID, Android keystore) | unsigned release; `signed_by: null` disclosed on the download page | release workflow, `docs/ANDROID-SIGNING.md`, `RELEASE.md` | **open** | — |
 | 15 | **GST / invoice** requirements on buyer bills | simple bill, no GST line (owner to verify with a CA) | site/receipt copy (P12/P14) | **open** | — |
+| 16 | **Dropping the deprecated columns** (`staff.google_email`, `student.guardian_name`/`guardian_mobile`) at v2.0.0 | Keep them as harmless read-only dead weight (the data lives fully in the `guardian` table; staff Google accounts are unused in v2) | `src-tauri/src/db/migrations/0001_init.sql` (columns); readers in `commands/logic.rs`, `commands/p04.rs`, the `student_fts` index and the join protocol | **decided (P18)** | **Defer the physical drop** to a post-2.0 cleanup. Doing it at release would mean refactoring ~8 read/write sites through the guardian table, rebuilding `student_fts` + its 3 triggers, and touching the join wire protocol — churn the "no new features, safety-only" release phase should avoid. The columns are dead weight, not a correctness/security issue. |
 
 ## Notes
 - **No public release has happened** (repo has no git tags; release infra is present but unused),
@@ -37,4 +38,12 @@ answered (or the default is the confirmed choice).
 - Decisions retired by v2: the P10 online payment-provider/webhook and the licence backend/API-
   shape questions are superseded by manual UPI + offline licence files (see `02-V2-CHANGES §2/§7`
   and `docs/phase-notes/phase-10.md`).
+- **Phase 18** added #16 (defer the deprecated-column drop). Still **open** and therefore listed
+  as known limitations for the v2.0.0 release notes: #1 app identifier, #2 price, #6 Telugu logo,
+  #7 salary formula (default built), #8 leave quotas (default built), #9 remote check-in (default
+  built), #10 retention, #11 UPI QR image, #12 native Hindi/Telugu review, #13 gmail.send
+  production verification, #14 code signing, #15 GST. P18 also confirmed the **release is a
+  single-PC desktop build** until the live Google Drive client, the Android app + native plugin,
+  and live Gmail/WhatsApp are completed on the owner's machine (they were specced-not-built since
+  P12/P14 and cannot be built or verified in the CI/dev sandbox — see `docs/phase-notes/phase-18.md`).
 </content>
