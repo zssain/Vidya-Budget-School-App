@@ -5437,6 +5437,44 @@ pub fn decide_request_logic(
         None
     };
 
+    // v2 (P17): approving a `leave` request writes the leave record, marks the
+    // staff-attendance days as `leave`, and notifies the requester. Pre-read the
+    // payload + the working-day date list here (conn is free before the write tx).
+    // Only a well-formed payload (from `request_leave`) applies — a bare
+    // `create_request` leave with no leave fields is approved but writes no record.
+    struct LeaveApply {
+        leave_type_id: String,
+        from: String,
+        to: String,
+        days: i64,
+        paid_days: i64,
+        unpaid_days: i64,
+        type_name: String,
+        dates: Vec<String>,
+    }
+    let leave_apply: Option<LeaveApply> = if kind == "leave" {
+        let v: serde_json::Value = req.after_json.as_deref().and_then(|s| serde_json::from_str(s).ok()).unwrap_or_else(|| serde_json::json!({}));
+        let leave_type_id = v.get("leave_type_id").and_then(|x| x.as_str()).unwrap_or_default().to_string();
+        let from = v.get("from").and_then(|x| x.as_str()).unwrap_or_default().to_string();
+        let to = v.get("to").and_then(|x| x.as_str()).unwrap_or_default().to_string();
+        if leave_type_id.is_empty() || from.is_empty() || to.is_empty() {
+            None
+        } else {
+            Some(LeaveApply {
+                leave_type_id,
+                days: v.get("days").and_then(|x| x.as_i64()).unwrap_or(0),
+                paid_days: v.get("paid_days").and_then(|x| x.as_i64()).unwrap_or(0),
+                unpaid_days: v.get("unpaid_days").and_then(|x| x.as_i64()).unwrap_or(0),
+                type_name: v.get("type_name").and_then(|x| x.as_str()).unwrap_or_default().to_string(),
+                dates: working_day_list(conn, &from, &to)?,
+                from,
+                to,
+            })
+        }
+    } else {
+        None
+    };
+
     with_write(conn, &ctx, move |tx| {
         let apply_state = if applied { "applied" } else { "not_applied" };
         let applied_at = if applied { Some(now.clone()) } else { None };
@@ -5462,6 +5500,31 @@ pub fn decide_request_logic(
                     crate::ledger::post_reversal_voucher(
                         tx, &rev_id, receipt_no, *mode, *amount, &now,
                         Some(actor_id.as_str()), school_id.as_deref(), &now, "confirmed",
+                    )?;
+                }
+            }
+            "leave" => {
+                // Write the leave record, mark each working day as leave (note = the
+                // type name), and notify the requester. Substitutes are arranged next
+                // (the Approvals success panel opens the Substitutes sheet, P16).
+                if let Some(la) = &leave_apply {
+                    let lv_id = new_id("lv");
+                    tx.execute(
+                        "INSERT INTO leave_record(id,staff_id,leave_type_id,from_date,to_date,days,paid_days,unpaid_days,request_id,approved_by,school_id,created_at,updated_at,sync_state) \
+                         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?12,'confirmed')",
+                        params![lv_id, target_id, la.leave_type_id, la.from, la.to, la.days, la.paid_days, la.unpaid_days, req_id, actor_id, school_id, now],
+                    )?;
+                    for d in &la.dates {
+                        tx.execute(
+                            "INSERT INTO staff_attendance(id,staff_id,date,status,note,school_id,created_at,updated_at,updated_by_staff,sync_state) \
+                             VALUES (?1,?2,?3,'leave',?4,?5,?6,?6,?7,'confirmed') \
+                             ON CONFLICT(staff_id,date) DO UPDATE SET status='leave', note=excluded.note, updated_at=excluded.updated_at, version=staff_attendance.version+1",
+                            params![new_id("sat"), target_id, d, la.type_name, school_id, now, actor_id],
+                        )?;
+                    }
+                    tx.execute(
+                        "INSERT INTO notification(id,staff_id,kind,title_key,vars_json,link) VALUES (?1,?2,'leave_approved','notif.leave_approved',?3,'/teacher/checkin')",
+                        params![new_id("ntf"), target_id, serde_json::json!({ "from": la.from, "to": la.to }).to_string()],
                     )?;
                 }
             }
@@ -7263,6 +7326,8 @@ pub struct StaffDayDto {
     pub month_leave: i64,
     pub month_late: i64,
     pub recent: Vec<StaffDayRecentDto>,
+    /// Leave balances for the Apply-for-leave form (P17 Step 3).
+    pub leave_balances: Vec<LeaveBalanceDto>,
 }
 
 /// The staff member's own attendance day (prototype `staffday` state 1): today's
@@ -7307,6 +7372,7 @@ pub fn my_staff_day_logic(conn: &mut Connection, actor_s: &SessionStaff, today: 
             .collect::<rusqlite::Result<Vec<_>>>()?;
         v
     };
+    let leave_balances = leave_balances_for(conn, &actor_s.id)?;
     Ok(StaffDayDto {
         date: today.to_string(),
         start_time: vidya_core::hr::fmt_hhmm(settings.start_min),
@@ -7315,6 +7381,7 @@ pub fn my_staff_day_logic(conn: &mut Connection, actor_s: &SessionStaff, today: 
         month_leave: leave,
         month_late: late,
         recent,
+        leave_balances,
     })
 }
 
@@ -7572,6 +7639,201 @@ pub fn mark_staff_attendance_logic(conn: &mut Connection, actor_s: &SessionStaff
         Ok(Effect { value: (), audit, op })
     })?;
     Ok(())
+}
+
+// ============================================================= leave (P17) ===
+
+/// Current academic session bounds (`starts_on`, `ends_on`) for leave balances.
+fn current_session_bounds(conn: &Connection) -> rusqlite::Result<Option<(String, String)>> {
+    conn.query_row("SELECT starts_on, ends_on FROM academic_session WHERE is_current=1 LIMIT 1", [], |r| Ok((r.get(0)?, r.get(1)?)))
+        .optional()
+}
+
+/// Approved leave days of a type for a staff member in the current session.
+fn leave_approved_days(conn: &Connection, staff_id: &str, leave_type_id: &str, bounds: &Option<(String, String)>) -> rusqlite::Result<i64> {
+    match bounds {
+        Some((s, e)) => conn.query_row(
+            "SELECT COALESCE(SUM(days),0) FROM leave_record WHERE staff_id=?1 AND leave_type_id=?2 AND from_date>=?3 AND from_date<=?4",
+            params![staff_id, leave_type_id, s, e],
+            |r| r.get(0),
+        ),
+        None => conn.query_row(
+            "SELECT COALESCE(SUM(days),0) FROM leave_record WHERE staff_id=?1 AND leave_type_id=?2",
+            params![staff_id, leave_type_id],
+            |r| r.get(0),
+        ),
+    }
+}
+
+/// The list of working-day dates (YYYY-MM-DD) in `[from, to]` inclusive.
+fn working_day_list(conn: &Connection, from: &str, to: &str) -> CmdResult<Vec<String>> {
+    let from_d = vidya_core::calendar::parse_date(from).ok_or_else(|| CmdError::validation("from", "format"))?;
+    let to_d = vidya_core::calendar::parse_date(to).ok_or_else(|| CmdError::validation("to", "format"))?;
+    let week = crate::calendar::load_week(conn)?;
+    let events = crate::calendar::load_events(conn)?;
+    let ymd = time::macros::format_description!("[year]-[month]-[day]");
+    let mut out = Vec::new();
+    let mut day = from_d;
+    loop {
+        if vidya_core::calendar::is_working_day(day, &week, &events) {
+            out.push(day.format(&ymd).unwrap_or_default());
+        }
+        if day == to_d {
+            break;
+        }
+        match day.next_day() {
+            Some(n) => day = n,
+            None => break,
+        }
+    }
+    Ok(out)
+}
+
+/// "Classes to cover" for a leave (Approvals detail): the teacher's class-teacher
+/// classes (attendance) + the number of timetable periods across the leave dates.
+fn leave_classes_to_cover(conn: &Connection, staff_id: &str, from: &str, to: &str) -> CmdResult<serde_json::Value> {
+    let classes: Vec<String> = {
+        let mut stmt = conn.prepare("SELECT display FROM class WHERE class_teacher_id=?1 ORDER BY sort_order")?;
+        let v = stmt.query_map(params![staff_id], |r| r.get::<_, String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
+        v
+    };
+    let mut periods = 0i64;
+    for d in working_day_list(conn, from, to)? {
+        if let Some(date) = vidya_core::calendar::parse_date(&d) {
+            let wd = vidya_core::calendar::weekday_iso(date.weekday()) as i64;
+            let n: i64 = conn.query_row(
+                "SELECT COUNT(*) FROM timetable_slot WHERE teacher_id=?1 AND weekday=?2 AND effective_to IS NULL",
+                params![staff_id, wd],
+                |r| r.get(0),
+            )?;
+            periods += n;
+        }
+    }
+    Ok(serde_json::json!({ "classes": classes, "periods": periods }))
+}
+
+#[derive(Debug, Serialize)]
+pub struct LeaveBalanceDto {
+    pub leave_type_id: String,
+    pub name: String,
+    pub name_hi: Option<String>,
+    pub name_te: Option<String>,
+    pub yearly_quota: Option<i64>,
+    pub approved: i64,
+    /// `quota − approved`; `None` for an unlimited (Unpaid) type.
+    pub balance: Option<i64>,
+    pub paid: bool,
+}
+
+/// Leave balances for a staff member this session (the Apply-for-leave form).
+fn leave_balances_for(conn: &Connection, staff_id: &str) -> CmdResult<Vec<LeaveBalanceDto>> {
+    let bounds = current_session_bounds(conn)?;
+    // First read the active types (approved/balance filled in a second pass so the
+    // per-type `leave_approved_days` query doesn't borrow `conn` inside query_map).
+    let mut out: Vec<LeaveBalanceDto> = {
+        let mut stmt = conn.prepare("SELECT id, name, name_hi, name_te, yearly_quota, paid FROM leave_type WHERE active=1 ORDER BY sort_order, name")?;
+        let v = stmt
+            .query_map([], |r| {
+                Ok(LeaveBalanceDto {
+                    leave_type_id: r.get(0)?,
+                    name: r.get(1)?,
+                    name_hi: r.get(2)?,
+                    name_te: r.get(3)?,
+                    yearly_quota: r.get(4)?,
+                    paid: r.get::<_, i64>(5)? != 0,
+                    approved: 0,
+                    balance: None,
+                })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        v
+    };
+    for b in out.iter_mut() {
+        b.approved = leave_approved_days(conn, staff_id, &b.leave_type_id, &bounds)?;
+        b.balance = vidya_core::hr::leave_balance(b.yearly_quota.map(|q| q as u32), b.approved as u32);
+    }
+    Ok(out)
+}
+
+#[derive(Debug, Deserialize)]
+pub struct LeaveRequestInput {
+    pub leave_type_id: String,
+    pub from: String,
+    pub to: String,
+    pub reason: String,
+}
+
+/// Apply for leave on the phone (prototype `staffday` states 2–3) → a `leave`
+/// request in the P13 registry. Validates working-day count, overlap and the
+/// unpaid spill-over, and stores the balance + classes-to-cover snapshot in the
+/// request payload for the Approvals detail. Any active staff; module `hr`.
+pub fn request_leave_logic(conn: &mut Connection, actor_s: &SessionStaff, input: &LeaveRequestInput) -> CmdResult<RequestDto> {
+    require_module_enabled(conn, vidya_core::modules::Module::Hr)?;
+    let role = role_from(&actor_s.role)?;
+    if !vidya_core::requests::can_raise(vidya_core::types::RequestType::Leave, role) {
+        return Err(CmdError::forbidden("cannot_raise"));
+    }
+    let (type_name, paid, quota): (String, bool, Option<i64>) = conn
+        .query_row(
+            "SELECT name, paid, yearly_quota FROM leave_type WHERE id=?1 AND active=1",
+            params![input.leave_type_id],
+            |r| Ok((r.get(0)?, r.get::<_, i64>(1)? != 0, r.get(2)?)),
+        )
+        .optional()?
+        .ok_or_else(|| CmdError::validation("leave_type", "unknown"))?;
+    vidya_core::hr::validate_leave_dates(&input.from, &input.to)?;
+    let reason = input.reason.trim().to_string();
+    if reason.is_empty() {
+        return Err(CmdError::validation("reason", "required"));
+    }
+    let dates = working_day_list(conn, &input.from, &input.to)?;
+    let days = dates.len() as i64;
+    if days == 0 {
+        return Err(CmdError::validation("dates", "no_working_days"));
+    }
+    // Overlap against existing leave records for this staff member.
+    let existing: Vec<(String, String)> = {
+        let mut stmt = conn.prepare("SELECT from_date, to_date FROM leave_record WHERE staff_id=?1")?;
+        let v = stmt.query_map(params![actor_s.id], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?.collect::<rusqlite::Result<Vec<_>>>()?;
+        v
+    };
+    if vidya_core::hr::overlaps_any(&existing, &input.from, &input.to) {
+        return Err(CmdError::validation("dates", "overlap"));
+    }
+    // One pending leave request per staff member.
+    let pending: bool = conn
+        .query_row("SELECT 1 FROM request WHERE target_table='staff' AND target_id=?1 AND type='leave' AND status='pending' LIMIT 1", params![actor_s.id], |_| Ok(()))
+        .optional()?
+        .is_some();
+    if pending {
+        return Err(CoreError::RequestAlreadyPending.into());
+    }
+    let bounds = current_session_bounds(conn)?;
+    let approved = leave_approved_days(conn, &actor_s.id, &input.leave_type_id, &bounds)?;
+    let balance = vidya_core::hr::leave_balance(quota.map(|q| q as u32), approved as u32);
+    let split = vidya_core::hr::split_leave_days(days as u32, paid, balance);
+    let classes = leave_classes_to_cover(conn, &actor_s.id, &input.from, &input.to)?;
+    let after = serde_json::json!({
+        "leave_type_id": input.leave_type_id,
+        "type_name": type_name,
+        "from": input.from,
+        "to": input.to,
+        "days": days,
+        "paid_days": split.paid_days,
+        "unpaid_days": split.unpaid_days,
+        "balance_left": balance,
+        "classes_to_cover": classes,
+    })
+    .to_string();
+    let now = now_iso();
+    let id = new_id("req");
+    let school_id = single_school_id(conn)?;
+    conn.execute(
+        "INSERT INTO request(id,type,target_table,target_id,base_version,before_json,after_json,reason,requested_by,revision,status,apply_state,school_id,created_at,updated_at,sync_state) \
+         VALUES (?1,'leave','staff',?2,0,NULL,?3,?4,?2,1,'pending','not_applied',?5,?6,?6,'confirmed')",
+        params![id, actor_s.id, after, reason, school_id, now],
+    )?;
+    get_request_logic(conn, &id)
 }
 
 // ============================================================= payments (UPI) =
@@ -9530,6 +9792,64 @@ mod tests {
         assert!(mark_staff_attendance_logic(&mut c, &teacher("stf-meena"), None, DeviceMode::Server, &MarkStaffAttendanceInput { staff_id: "stf-nair".into(), date: "2026-09-23".into(), status: "present".into(), note: None }).is_err());
     }
 
+    // ---- Phase 17: Staff HR — leave -----------------------------------------
+    fn leave_input(type_id: &str, from: &str, to: &str) -> LeaveRequestInput {
+        LeaveRequestInput { leave_type_id: type_id.into(), from: from.into(), to: to.into(), reason: "Family function.".into() }
+    }
+
+    #[test]
+    fn request_leave_computes_days_balance_and_stores_payload() {
+        let mut c = seeded();
+        // Meena requests Casual leave Thu 24 – Fri 25 Sep (2 working days).
+        let r = request_leave_logic(&mut c, &teacher("stf-meena"), &leave_input("lt-casual", "2026-09-24", "2026-09-25")).unwrap();
+        assert_eq!(r.kind, "leave");
+        assert_eq!(r.status, "pending");
+        let after: serde_json::Value = serde_json::from_str(r.after_json.as_deref().unwrap()).unwrap();
+        assert_eq!(after["days"].as_i64(), Some(2));
+        assert_eq!(after["paid_days"].as_i64(), Some(2)); // within the 12-day balance
+        assert_eq!(after["unpaid_days"].as_i64(), Some(0));
+    }
+
+    #[test]
+    fn approving_leave_writes_record_marks_attendance_and_reduces_balance() {
+        let mut c = seeded();
+        let r = request_leave_logic(&mut c, &teacher("stf-meena"), &leave_input("lt-casual", "2026-09-24", "2026-09-25")).unwrap();
+        decide_request_logic(&mut c, &principal(), DeviceMode::Server, &r.id, "approve", None).unwrap();
+        // Leave record written with the 2 paid days.
+        let (days, paid): (i64, i64) = c.query_row("SELECT days, paid_days FROM leave_record WHERE staff_id='stf-meena'", [], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
+        assert_eq!((days, paid), (2, 2));
+        // Both working days marked 'leave' in staff attendance.
+        let n: i64 = c.query_row("SELECT COUNT(*) FROM staff_attendance WHERE staff_id='stf-meena' AND status='leave' AND date IN ('2026-09-24','2026-09-25')", [], |r| r.get(0)).unwrap();
+        assert_eq!(n, 2);
+        // The casual balance drops 12 → 10 for the current session.
+        let day = my_staff_day_logic(&mut c, &teacher("stf-meena"), "2026-09-23").unwrap();
+        assert_eq!(day.leave_balances.iter().find(|b| b.leave_type_id == "lt-casual").unwrap().balance, Some(10));
+        // The requester was notified.
+        let notif: i64 = c.query_row("SELECT COUNT(*) FROM notification WHERE staff_id='stf-meena' AND kind='leave_approved'", [], |r| r.get(0)).unwrap();
+        assert_eq!(notif, 1);
+    }
+
+    #[test]
+    fn overlapping_leave_is_rejected() {
+        let mut c = seeded();
+        let r = request_leave_logic(&mut c, &teacher("stf-nair"), &leave_input("lt-casual", "2026-09-24", "2026-09-25")).unwrap();
+        decide_request_logic(&mut c, &principal(), DeviceMode::Server, &r.id, "approve", None).unwrap();
+        // A new request overlapping the approved leave is rejected.
+        assert!(request_leave_logic(&mut c, &teacher("stf-nair"), &leave_input("lt-sick", "2026-09-25", "2026-09-28")).is_err());
+    }
+
+    #[test]
+    fn unpaid_spills_over_when_over_balance() {
+        let mut c = seeded();
+        // Shrink the casual quota to 1 so a 2-day request spills 1 day to unpaid.
+        save_leave_type_logic(&mut c, &principal(), &LeaveTypeInput { id: Some("lt-casual".into()), name: "Casual leave".into(), name_hi: None, name_te: None, yearly_quota: Some(1), paid: true, active: true }).unwrap();
+        let r = request_leave_logic(&mut c, &teacher("stf-anita"), &leave_input("lt-casual", "2026-09-24", "2026-09-25")).unwrap();
+        let after: serde_json::Value = serde_json::from_str(r.after_json.as_deref().unwrap()).unwrap();
+        assert_eq!(after["days"].as_i64(), Some(2));
+        assert_eq!(after["paid_days"].as_i64(), Some(1));
+        assert_eq!(after["unpaid_days"].as_i64(), Some(1));
+    }
+
     // ---- Phase 13: calendar ------------------------------------------------
     #[test]
     fn calendar_defaults_then_weekly_offs_edit() {
@@ -9935,11 +10255,13 @@ mod tests {
         let dto = create_request_logic(&mut c, &teacher, &req_input("leave", "stf-meena")).unwrap();
         assert_eq!(dto.kind, "leave");
         assert_eq!(dto.status, "pending");
-        // Approving it does NOT auto-apply (apply function lands in P17).
+        // Changed in P17 (Rule 11): a leave request now AUTO-APPLIES on approval.
+        // This request has the bare P13 payload ("{}"), so no leave record is
+        // written, but the request is marked approved + applied.
         let decided = decide_request_logic(&mut c, &principal(), DeviceMode::Server, &dto.id, "approve", Some("ok")).unwrap();
         assert_eq!(decided.status, "approved");
         let apply_state: String = c.query_row("SELECT apply_state FROM request WHERE id=?1", params![dto.id], |r| r.get(0)).unwrap();
-        assert_eq!(apply_state, "not_applied");
+        assert_eq!(apply_state, "applied");
     }
 
     #[test]

@@ -147,10 +147,11 @@ pub fn visible_row(conn: &Connection, actor: &Actor, table: &str, id: &str) -> r
     if table == "leave_type" {
         return Ok(mk(row, None));
     }
-    // Staff attendance (P17): the Principal sees all; other staff see only their OWN.
-    if table == "staff_attendance" && actor.role != Role::Principal {
+    // Staff attendance + leave records (P17): the Principal sees all; other staff
+    // see only their OWN.
+    if (table == "staff_attendance" || table == "leave_record") && actor.role != Role::Principal {
         let who: Option<String> = conn
-            .query_row("SELECT staff_id FROM staff_attendance WHERE id=?1", [id], |r| r.get(0))
+            .query_row(&format!("SELECT staff_id FROM {table} WHERE id=?1"), [id], |r| r.get(0))
             .optional()?;
         return Ok(if who.as_deref() == Some(actor.staff_id.as_str()) { mk(row, None) } else { None });
     }
@@ -364,7 +365,7 @@ pub fn snapshot(conn: &Connection, actor: &Actor) -> rusqlite::Result<Vec<Change
                       "store_item", "store_sale", "stock_move",
                       "timetable_slot", "substitution", "homework_note", "report_remark",
                       "exam_room", "exam_seat", "exam_schedule",
-                      "staff_attendance",
+                      "staff_attendance", "leave_record",
                       "marks_sheet", "mark_entry", "exam", "exam_subject"] {
                 for id in ids_of(conn, &format!("SELECT id FROM {t}"), &[])? {
                     push(conn, t, &id, None)?;
@@ -381,9 +382,12 @@ pub fn snapshot(conn: &Connection, actor: &Actor) -> rusqlite::Result<Vec<Change
             for id in ids_of(conn, "SELECT id FROM request WHERE requested_by=?1", &[&actor.staff_id])? {
                 push(conn, "request", &id, None)?;
             }
-            // Own staff attendance (P17): the accountant checks in like any staff.
+            // Own staff attendance + leave (P17): the accountant checks in like any staff.
             for id in ids_of(conn, "SELECT id FROM staff_attendance WHERE staff_id=?1", &[&actor.staff_id])? {
                 push(conn, "staff_attendance", &id, None)?;
+            }
+            for id in ids_of(conn, "SELECT id FROM leave_record WHERE staff_id=?1", &[&actor.staff_id])? {
+                push(conn, "leave_record", &id, None)?;
             }
         }
         Role::Teacher => {
@@ -448,8 +452,9 @@ pub fn snapshot(conn: &Connection, actor: &Actor) -> rusqlite::Result<Vec<Change
                 }
             }
             for id in ids_of(conn, "SELECT id FROM request WHERE requested_by=?1", &[&actor.staff_id])? { push(conn, "request", &id, None)?; }
-            // Own staff attendance (P17): the teacher's own check-ins / leave days.
+            // Own staff attendance + leave records (P17): own check-ins / leave days.
             for id in ids_of(conn, "SELECT id FROM staff_attendance WHERE staff_id=?1", &[&actor.staff_id])? { push(conn, "staff_attendance", &id, None)?; }
+            for id in ids_of(conn, "SELECT id FROM leave_record WHERE staff_id=?1", &[&actor.staff_id])? { push(conn, "leave_record", &id, None)?; }
             // Classroom (P16): the timetable slots of the teacher's classes (covers
             // both their class-teacher class and any subject they teach in it), so
             // "My timetable" and the class grid render on the phone.

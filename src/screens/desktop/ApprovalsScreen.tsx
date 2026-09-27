@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { CSSProperties } from 'react'
 import { Icon } from '@/components/Icon'
 import { t } from '@/lib/i18n'
+import { navigate } from '@/lib/router'
 import * as api from '@/lib/api'
 import type { RequestDto } from '@/lib/api'
 
@@ -13,10 +14,11 @@ import type { RequestDto } from '@/lib/api'
 
 // --- Tabs → RequestDto.kind -----------------------------------------------
 
-type Tab = 'all' | 'marks' | 'payment' | 'attendance' | 'details' | 'access'
+type Tab = 'all' | 'leave' | 'marks' | 'payment' | 'attendance' | 'details' | 'access'
 
 const TABS: { id: Tab; labelKey: string }[] = [
   { id: 'all', labelKey: 'approvals.tab.all' },
+  { id: 'leave', labelKey: 'approvals.tab.leave' },
   { id: 'marks', labelKey: 'approvals.tab.marks' },
   { id: 'payment', labelKey: 'approvals.tab.payment' },
   { id: 'attendance', labelKey: 'approvals.tab.attendance' },
@@ -26,6 +28,8 @@ const TABS: { id: Tab; labelKey: string }[] = [
 
 function kindForTab(tab: Tab): string | undefined {
   switch (tab) {
+    case 'leave':
+      return 'leave'
     case 'marks':
       return 'marks_correction'
     case 'payment':
@@ -74,9 +78,39 @@ function badgeFor(kind: string): Badge {
       return { bg: '#F4ECDC', fg: '#6B5220' }
     case 'attendance_correction':
       return { bg: 'var(--accent-12)', fg: 'var(--accent)' }
+    case 'leave':
+      return { bg: 'var(--accent-12)', fg: 'var(--accent)' }
     default:
       return { bg: 'var(--panel)', fg: 'var(--muted)' }
   }
+}
+
+// The leave request payload (request.after_json) written by request_leave (P17).
+interface LeavePayload {
+  type_name?: string
+  from?: string
+  to?: string
+  days?: number
+  paid_days?: number
+  unpaid_days?: number
+  balance_left?: number | null
+  classes_to_cover?: { classes?: string[]; periods?: number }
+}
+function parseLeave(raw: string | null): LeavePayload {
+  if (!raw) return {}
+  try {
+    return JSON.parse(raw) as LeavePayload
+  } catch {
+    return {}
+  }
+}
+function coverText(cover: LeavePayload['classes_to_cover']): string {
+  const classes = cover?.classes ?? []
+  const periods = cover?.periods ?? 0
+  const parts: string[] = []
+  if (classes.length > 0) parts.push(t('staffhr.approve.attendanceCover', { classes: classes.join(', ') }))
+  if (periods > 0) parts.push(t('staffhr.approve.periodsCover', { n: periods }))
+  return parts.length > 0 ? parts.join(' · ') : t('staffhr.approve.nothingToCover')
 }
 
 // Parse a JSON string into a flat record of string values; empty on failure.
@@ -298,6 +332,61 @@ function DetailPanel({
   )
 }
 
+// Leave-request detail (P17, prototype `leave` state 1): type, dates, days,
+// reason, balance left, classes to cover, then Approve / Return / Reject.
+function LeaveDetailPanel({ req, note, onNote, onDecide }: { req: RequestDto; note: string; onNote: (v: string) => void; onDecide: (d: string) => void }) {
+  const p = parseLeave(req.after_json)
+  const box: CSSProperties = { padding: '12px 14px', borderRadius: 10, background: 'var(--panel)' }
+  const bal = p.balance_left == null ? '∞' : String(Math.max(0, p.balance_left))
+  return (
+    <div style={{ background: 'var(--surface)', borderRadius: 20, border: '1px solid var(--line)', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+      <div style={{ padding: '22px 24px 16px', display: 'flex', flexDirection: 'column', gap: 10, borderBottom: '1px solid var(--track)' }}>
+        <span style={{ display: 'inline-flex', alignSelf: 'flex-start', alignItems: 'center', padding: '3px 10px', borderRadius: 4, fontSize: 12, fontWeight: 500, background: 'var(--accent-12)', color: 'var(--accent)' }}>{t('staffhr.approve.pill')}</span>
+        <span style={{ ...SERIF, fontSize: 28 }}>{req.requester_name} · {t('staffhr.approve.days', { n: p.days ?? 0 })}</span>
+        <span style={{ fontSize: 13, color: 'var(--muted)' }}>{p.type_name} · {p.from} – {p.to}</span>
+      </div>
+      <div style={{ padding: '18px 24px', display: 'flex', flexDirection: 'column', gap: 14 }}>
+        {req.reason ? (
+          <div><div style={EYEBROW}>{t('staffhr.approve.reason')}</div><p style={{ margin: '6px 0 0', fontSize: 15, lineHeight: 1.5 }}>{req.reason}</p></div>
+        ) : null}
+        <div data-hl="balance" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+          <div style={box}><div style={EYEBROW}>{t('staffhr.approve.balanceLeft', { name: p.type_name ?? '' })}</div><div style={{ ...SERIF, fontSize: 20, marginTop: 4 }}>{bal}</div></div>
+          <div style={box}><div style={EYEBROW}>{t('staffhr.approve.classesToCover')}</div><div style={{ ...SERIF, fontSize: 18, marginTop: 4 }}>{coverText(p.classes_to_cover)}</div></div>
+        </div>
+        {(p.unpaid_days ?? 0) > 0 ? (
+          <div style={{ fontSize: 13, color: 'var(--pill-unpaid-fg)' }}>{t('staffhr.approve.unpaidNote', { n: p.unpaid_days ?? 0 })}</div>
+        ) : null}
+        <div style={{ borderRadius: 10, background: 'var(--accent-6)', padding: '12px 14px', fontSize: 13, color: 'var(--accent)' }}>{t('staffhr.approve.suggestNote')}</div>
+        <input value={note} onChange={(e) => onNote(e.target.value)} aria-label={t('approvals.title')} style={{ width: '100%', boxSizing: 'border-box', padding: '9px 12px', borderRadius: 8, border: '1px solid var(--line)', background: 'var(--bg)', color: 'var(--ink)', fontSize: 13, fontFamily: 'inherit' }} />
+      </div>
+      <div style={{ background: 'var(--panel)', padding: '14px 24px', display: 'flex', gap: 10, justifyContent: 'flex-end' }}>
+        <button type="button" style={secondaryBtnStyle()} onClick={() => onDecide('reject')}>{t('approvals.reject')}</button>
+        <button type="button" style={secondaryBtnStyle()} onClick={() => onDecide('return')}>{t('approvals.return')}</button>
+        <button type="button" style={primaryBtnStyle()} onClick={() => onDecide('approve')}>{t('staffhr.approve.approve')}</button>
+      </div>
+    </div>
+  )
+}
+
+// Success panel after approving leave (prototype `leave` state 2): "Leave approved.
+// Substitutes next." with a button that opens the Substitutes sheet prefilled.
+function LeaveSuccessPanel({ info, onArrange }: { info: { name: string; from: string; to: string }; onArrange: () => void }) {
+  return (
+    <div style={{ borderRadius: 20, background: 'radial-gradient(120% 70% at 50% 0%, #1A3560 0%, #0C1B38 60%)', color: 'var(--white)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 16, padding: 40, textAlign: 'center' }}>
+      <div style={{ width: 76, height: 76, borderRadius: 38, border: '1px solid rgba(197,171,122,0.5)', color: 'var(--gold)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        <Icon name="check" size={34} strokeWidth={1.8} />
+      </div>
+      <div style={{ ...SERIF, fontSize: 40, color: 'var(--white)', lineHeight: 1.1 }}>
+        {t('staffhr.approve.doneTitle')} <span style={{ fontStyle: 'italic', color: 'var(--gold)' }}>{t('staffhr.approve.doneSub')}</span>
+      </div>
+      <span style={{ fontSize: 14, color: 'var(--on-navy)' }}>{t('staffhr.approve.doneNote', { name: `${info.name} · ${info.from}–${info.to}`, name2: info.name })}</span>
+      <button type="button" onClick={onArrange} style={{ marginTop: 8, height: 46, padding: '0 22px', borderRadius: 23, border: '1px solid var(--gold)', background: 'var(--gold)', color: 'var(--navy)', fontSize: 14, fontWeight: 600, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8 }}>
+        {t('staffhr.approve.arrangeSubs')} <Icon name="arrowUpRight" size={18} />
+      </button>
+    </div>
+  )
+}
+
 // --- Screen -----------------------------------------------------------------
 
 export default function ApprovalsScreen() {
@@ -306,6 +395,8 @@ export default function ApprovalsScreen() {
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [note, setNote] = useState<string>('')
+  // After approving a leave: the success panel + "Arrange substitutes" (P17).
+  const [approvedLeave, setApprovedLeave] = useState<{ name: string; staffId: string; from: string; to: string } | null>(null)
 
   const refetch = useCallback((forTab: Tab) => {
     api
@@ -323,6 +414,7 @@ export default function ApprovalsScreen() {
   useEffect(() => {
     setSelectedId(null)
     setNote('')
+    setApprovedLeave(null)
     refetch(tab)
   }, [tab, refetch])
 
@@ -334,9 +426,15 @@ export default function ApprovalsScreen() {
   const decide = useCallback(
     (decision: string) => {
       if (selectedId == null) return
+      const req = requests.find((r) => r.id === selectedId) ?? null
       api
         .decide_request(selectedId, decision, note || undefined)
         .then(() => {
+          // Approving a leave → show the success panel + "Arrange substitutes".
+          if (req && req.kind === 'leave' && decision === 'approve') {
+            const p = parseLeave(req.after_json)
+            setApprovedLeave({ name: req.requester_name, staffId: req.target_id, from: p.from ?? '', to: p.to ?? '' })
+          }
           setSelectedId(null)
           setNote('')
           refetch(tab)
@@ -345,7 +443,7 @@ export default function ApprovalsScreen() {
           setError(t('approvals.empty'))
         })
     },
-    [selectedId, note, tab, refetch],
+    [selectedId, note, tab, refetch, requests],
   )
 
   // Keyboard: J/K move the selection, A approves, R returns.
@@ -469,6 +567,7 @@ export default function ApprovalsScreen() {
                   onClick={() => {
                     setSelectedId(req.id)
                     setNote('')
+                    setApprovedLeave(null)
                   }}
                   style={{
                     display: 'flex',
@@ -523,8 +622,14 @@ export default function ApprovalsScreen() {
         </div>
 
         <div style={{ flex: '1 1 0', minWidth: 0 }}>
-          {selected != null ? (
-            <DetailPanel req={selected} note={note} onNote={setNote} onDecide={decide} />
+          {approvedLeave != null ? (
+            <LeaveSuccessPanel info={approvedLeave} onArrange={() => navigate(`/principal/timetable?sub=${approvedLeave.staffId}&date=${approvedLeave.from}`)} />
+          ) : selected != null ? (
+            selected.kind === 'leave' ? (
+              <LeaveDetailPanel req={selected} note={note} onNote={setNote} onDecide={decide} />
+            ) : (
+              <DetailPanel req={selected} note={note} onNote={setNote} onDecide={decide} />
+            )
           ) : (
             <div
               style={{

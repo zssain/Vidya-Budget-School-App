@@ -36,6 +36,7 @@ pub const MIGRATIONS: &[(i64, &str)] = &[
     (27, include_str!("migrations/0027_v2_exam_seating.sql")),
     (28, include_str!("migrations/0028_v2_staff_hr_leave_types.sql")),
     (29, include_str!("migrations/0029_v2_staff_attendance.sql")),
+    (30, include_str!("migrations/0030_v2_leave_records.sql")),
 ];
 
 // A per-thread frozen clock for deterministic tests. Compiled ONLY in debug

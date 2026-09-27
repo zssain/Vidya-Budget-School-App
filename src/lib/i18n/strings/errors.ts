@@ -89,6 +89,7 @@ const errors: Bundle = {
     // Approvals.
     'approvals.title': 'Approvals',
     'approvals.tab.all': 'All',
+    'approvals.tab.leave': 'Leave',
     'approvals.tab.marks': 'Marks',
     'approvals.tab.payment': 'Payment reversal',
     'approvals.tab.attendance': 'Attendance',
@@ -193,6 +194,7 @@ errors.hi = {
   // Approvals.
   'approvals.title': 'स्वीकृतियाँ',
   'approvals.tab.all': 'सभी',
+  'approvals.tab.leave': 'अवकाश',
   'approvals.tab.marks': 'अंक',
   'approvals.tab.payment': 'भुगतान वापसी',
   'approvals.tab.attendance': 'उपस्थिति',

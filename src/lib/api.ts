@@ -603,6 +603,16 @@ export interface StaffDayRecent {
   check_out_min: number | null
   note: string | null
 }
+export interface LeaveBalance {
+  leave_type_id: string
+  name: string
+  name_hi: string | null
+  name_te: string | null
+  yearly_quota: number | null
+  approved: number
+  balance: number | null // null = unlimited (Unpaid)
+  paid: boolean
+}
 export interface StaffDayDto {
   date: string
   start_time: string
@@ -611,6 +621,13 @@ export interface StaffDayDto {
   month_leave: number
   month_late: number
   recent: StaffDayRecent[]
+  leave_balances: LeaveBalance[]
+}
+export interface LeaveRequestInput {
+  leave_type_id: string
+  from: string // YYYY-MM-DD
+  to: string
+  reason: string
 }
 export interface StaffAttnRow {
   id: string | null
@@ -1431,6 +1448,7 @@ export const staff_attendance_month = (month: string) => invoke<StaffAttnMonthDt
 export const accept_away_checkin = (id: string) => invoke<void>('accept_away_checkin', { id })
 export const reject_away_checkin = (id: string) => invoke<void>('reject_away_checkin', { id })
 export const mark_staff_attendance = (input: MarkStaffAttendanceInput) => invoke<void>('mark_staff_attendance', { input })
+export const request_leave = (input: LeaveRequestInput) => invoke<RequestDto>('request_leave', { input })
 export const get_payment_settings = () => invoke<PaymentSettings>('get_payment_settings')
 export const set_payment_settings = (input: PaymentSettingsInput) => invoke<void>('set_payment_settings', { input })
 export const qr_svg = (data: string) => invoke<string>('qr_svg', { data })

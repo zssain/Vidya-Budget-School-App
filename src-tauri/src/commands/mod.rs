@@ -150,6 +150,7 @@ pub const COMMANDS: &[&str] = &[
     "accept_away_checkin",
     "reject_away_checkin",
     "mark_staff_attendance",
+    "request_leave",
     "get_payment_settings",
     "set_payment_settings",
     "qr_svg",
@@ -909,6 +910,12 @@ pub fn mark_staff_attendance(state: State<RtCtx>, input: MarkStaffAttendanceInpu
     let device_id = state.device_id.lock().map_err(|_| crate::error::CmdError::internal("lock"))?.clone();
     let mode = state.device_mode;
     state.with_db(|conn| mark_staff_attendance_logic(conn, &actor, device_id.as_deref(), mode, &input))
+}
+
+#[tauri::command]
+pub fn request_leave(state: State<RtCtx>, input: LeaveRequestInput) -> CmdResult<RequestDto> {
+    let actor = state.require_session()?;
+    state.with_db(|conn| request_leave_logic(conn, &actor, &input))
 }
 
 // --------------------------------------------------------------- payments -----

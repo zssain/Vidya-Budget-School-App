@@ -43,6 +43,18 @@ export default function TimetableScreen() {
   const [flash, setFlash] = useState<string | null>(null)
   const [copyOpen, setCopyOpen] = useState(false)
   const [subsOpen, setSubsOpen] = useState(false)
+  // Prefill the Substitutes sheet from an approved leave (P17): the Approvals
+  // success panel navigates here with ?sub=<teacherId>&date=<leaveDate>.
+  const [subsInit, setSubsInit] = useState<{ absentId: string; date: string } | undefined>(undefined)
+  useEffect(() => {
+    const hash = typeof window !== 'undefined' ? window.location.hash : ''
+    const q = new URLSearchParams(hash.split('?')[1] ?? '')
+    const sub = q.get('sub')
+    if (sub) {
+      setSubsInit({ absentId: sub, date: q.get('date') ?? '' })
+      setSubsOpen(true)
+    }
+  }, [])
   const today = todayIso()
 
   useEffect(() => {
@@ -156,18 +168,21 @@ export default function TimetableScreen() {
 
       {subsOpen && (
         <SubstitutesSheet
-          onClose={() => setSubsOpen(false)}
-          onDone={(msg) => { setSubsOpen(false); setFlash(msg); load() }}
+          initialAbsentId={subsInit?.absentId}
+          initialDate={subsInit?.date || undefined}
+          onClose={() => { setSubsOpen(false); setSubsInit(undefined) }}
+          onDone={(msg) => { setSubsOpen(false); setSubsInit(undefined); setFlash(msg); load() }}
         />
       )}
     </div>
   )
 }
 
-function SubstitutesSheet({ onClose, onDone }: { onClose: () => void; onDone: (msg: string) => void }) {
-  const today = new Date().toISOString().slice(0, 10)
+function SubstitutesSheet({ onClose, onDone, initialAbsentId, initialDate }: { onClose: () => void; onDone: (msg: string) => void; initialAbsentId?: string; initialDate?: string }) {
+  // Prefilled from an approved leave (P17): the absent teacher + the leave date.
+  const today = initialDate || new Date().toISOString().slice(0, 10)
   const [teachers, setTeachers] = useState<StaffDto[]>([])
-  const [absentId, setAbsentId] = useState('')
+  const [absentId, setAbsentId] = useState(initialAbsentId ?? '')
   const [plan, setPlan] = useState<SubstitutePlanDto | null>(null)
   const [chosen, setChosen] = useState('')
   const [busy, setBusy] = useState(false)

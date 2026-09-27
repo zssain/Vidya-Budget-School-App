@@ -71,7 +71,7 @@ pub fn spec(request_type: RequestType) -> RequestSpec {
         AccessChange => (ANY_STAFF, false, false),
         DeviceReplacement => (ANY_STAFF, false, false),
         // v2 additions — validate & store now; apply in their phases.
-        Leave => (ANY_STAFF, false, false),        // P17
+        Leave => (ANY_STAFF, true, false),          // P17: approval writes the leave record + marks attendance
         AttendanceDuty => (TEACHER, false, false),  // P16/P17
         ClassNotice => (TEACHER, false, false),     // P14 (teacher-drafted notices)
     };
@@ -678,10 +678,10 @@ mod tests {
 
     #[test]
     fn apply_available_matches_current_behaviour() {
-        // Today only attendance corrections and payment reversals auto-apply on
-        // approval; everything else (incl. the new v2 types) is approved-only.
+        // Attendance corrections, payment reversals and (P17) leave requests
+        // auto-apply on approval; the rest are approved-only.
         for rt in RequestType::ALL {
-            let expected = matches!(rt, RequestType::AttendanceCorrection | RequestType::PaymentReversal);
+            let expected = matches!(rt, RequestType::AttendanceCorrection | RequestType::PaymentReversal | RequestType::Leave);
             assert_eq!(spec(rt).apply_available, expected, "{:?}", rt);
         }
     }

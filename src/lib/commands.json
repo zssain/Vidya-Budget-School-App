@@ -126,6 +126,7 @@
     "accept_away_checkin",
     "reject_away_checkin",
     "mark_staff_attendance",
+    "request_leave",
     "get_payment_settings",
     "set_payment_settings",
     "qr_svg",
