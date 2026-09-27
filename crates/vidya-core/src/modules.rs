@@ -73,6 +73,8 @@ pub fn module_for(action: Action) -> Module {
         // remarks, exam seating & hall tickets.
         ManageTimetable | ViewTimetable | ManageSubstitutes | ManageNotes | ViewNotes
         | EnterReportRemark | FinalizeReportCards | ManageExamSeating => Module::Classroom,
+        // Staff HR (P17): self check-in + Principal HR management.
+        StaffCheckIn | ManageStaffHr => Module::Hr,
         // Every action built through Phase 11 is Core (always on). Future phases
         // move their new actions to Accounts / Classroom / Hr / Circulars / Store.
         CreateStudent | EnrollStudent | TransferSection | MarkStudentLeft

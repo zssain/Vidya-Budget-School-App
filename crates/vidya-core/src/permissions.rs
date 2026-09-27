@@ -283,6 +283,15 @@ pub enum Action {
     /// Principal only. (Module `classroom`.)
     ManageExamSeating,
 
+    // ---- Staff HR (module `hr`, P17) ----
+    /// Mark one's own staff attendance (check-in / check-out). Any active staff,
+    /// for themselves. (Module `hr`.)
+    StaffCheckIn,
+    /// Manage staff HR: the staff-attendance register, manual entry / correction,
+    /// accepting or rejecting away check-ins, and the leave types / HR settings.
+    /// Principal only. (Module `hr`.)
+    ManageStaffHr,
+
     // ---- Staff & access (Principal only) ----
     /// Manage staff & access (umbrella). Principal only.
     ManageStaff,
@@ -408,7 +417,11 @@ fn everyone(action: Action, _target: &Target) -> Option<Decision> {
         | Action::ChangeLanguage
         | Action::ViewOwnRequests
         | Action::ViewInbox
-        | Action::ViewSync => Some(Decision::allow()),
+        | Action::ViewSync
+        // Every active staff member marks their OWN attendance (§10.5). The
+        // command / server force the row to the actor's own staff id; the `hr`
+        // module gate applies separately.
+        | Action::StaffCheckIn => Some(Decision::allow()),
         _ => None,
     }
 }
@@ -503,15 +516,18 @@ fn accountant(action: Action, _target: &Target) -> Decision {
         | Action::Backups
         | Action::Restore
         | Action::SessionRollover
-        | Action::ApproveRequest => Decision::deny("accountant_no_admin"),
+        | Action::ApproveRequest
+        // Staff HR (P17): managing the register / leave types is Principal-only.
+        | Action::ManageStaffHr => Decision::deny("accountant_no_admin"),
 
-        // Everyone-actions are handled before we get here.
+        // Everyone-actions (incl. StaffCheckIn) are handled before we get here.
         Action::EditOwnProfile
         | Action::ChangeOwnPin
         | Action::ChangeLanguage
         | Action::ViewOwnRequests
         | Action::ViewInbox
-        | Action::ViewSync => Decision::allow(),
+        | Action::ViewSync
+        | Action::StaffCheckIn => Decision::allow(),
     }
 }
 
@@ -660,15 +676,18 @@ fn teacher(actor: &Actor, action: Action, target: &Target) -> Decision {
         | Action::Backups
         | Action::Restore
         | Action::SessionRollover
-        | Action::ApproveRequest => Decision::deny("teacher_no_admin"),
+        | Action::ApproveRequest
+        // Staff HR (P17): managing the register / leave types is Principal-only.
+        | Action::ManageStaffHr => Decision::deny("teacher_no_admin"),
 
-        // Everyone-actions are handled before we get here.
+        // Everyone-actions (incl. StaffCheckIn) are handled before we get here.
         Action::EditOwnProfile
         | Action::ChangeOwnPin
         | Action::ChangeLanguage
         | Action::ViewOwnRequests
         | Action::ViewInbox
-        | Action::ViewSync => Decision::allow(),
+        | Action::ViewSync
+        | Action::StaffCheckIn => Decision::allow(),
     }
 }
 
@@ -749,7 +768,7 @@ pub fn may_take_attendance(actor: &Actor, class_id: &str, date: &str, grants: &[
 
 impl Action {
     /// Every action variant (for the matrix-as-data seed and exhaustive checks).
-    pub const ALL: [Action; 60] = [
+    pub const ALL: [Action; 62] = [
         Action::CreateStudent, Action::EnrollStudent, Action::TransferSection, Action::MarkStudentLeft,
         Action::EditStudentDetails, Action::ViewStudent, Action::ViewGuardianAddress,
         Action::StudentCsvImport, Action::StudentCsvExport,
@@ -759,6 +778,7 @@ impl Action {
         Action::OpeningBalance, Action::ManageSalary, Action::ManageStore, Action::RecordStoreSale,
         Action::ManageTimetable, Action::ViewTimetable, Action::ManageSubstitutes, Action::ManageNotes,
         Action::ViewNotes, Action::EnterReportRemark, Action::FinalizeReportCards, Action::ManageExamSeating,
+        Action::StaffCheckIn, Action::ManageStaffHr,
         Action::TakeAttendance, Action::EditSubmittedAttendance, Action::ViewAttendance, Action::SendAbsenceAlert,
         Action::EnterMarks, Action::EditSubmittedMarks, Action::ViewMarks, Action::ViewReportCard,
         Action::ManageCirculars, Action::DraftClassNotice,
@@ -820,6 +840,9 @@ fn target_kind_for(action: Action) -> TargetKind {
         ViewTimetable | ManageNotes | ViewNotes => TargetKind::Attendance,
         EnterReportRemark => TargetKind::Marks,
         ManageTimetable | ManageSubstitutes | FinalizeReportCards | ManageExamSeating => TargetKind::School,
+        // Staff HR (P17): self check-in is `Own`; managing HR is staff administration.
+        StaffCheckIn => TargetKind::Own,
+        ManageStaffHr => TargetKind::Staff,
         ManageCirculars => TargetKind::School,
         DraftClassNotice => TargetKind::Own,
         ManageStaff | InviteStaff | SuspendStaff | RemoveStaff | ManageDevices => TargetKind::Staff,
@@ -1524,7 +1547,7 @@ mod tests {
 
     #[test]
     fn action_all_covers_every_variant_and_keys_round_trip() {
-        assert_eq!(Action::ALL.len(), 60); // P16 added ManageTimetable, ViewTimetable, ManageSubstitutes, ManageNotes, ViewNotes, EnterReportRemark, FinalizeReportCards, ManageExamSeating
+        assert_eq!(Action::ALL.len(), 62); // P17 added StaffCheckIn, ManageStaffHr (module `hr`)
 
         for a in Action::ALL {
             assert_eq!(Action::from_key(&a.as_key()), Some(a), "{a:?}");

@@ -22,6 +22,7 @@ pub mod fees;
 pub mod grades;
 pub mod guardians;
 pub mod hlc;
+pub mod hr;
 pub mod lease;
 pub mod ledger;
 pub mod licence;

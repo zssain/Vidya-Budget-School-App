@@ -14,6 +14,7 @@ import { useStore } from '@/lib/store'
 import CustomFieldsSettings from './CustomFieldsSettings'
 import PaymentsSettings from './PaymentsSettings'
 import PrivacySettings from './PrivacySettings'
+import StaffHrSettings from './StaffHrSettings'
 
 declare const __APP_VERSION__: string
 
@@ -179,6 +180,9 @@ export default function SettingsScreen() {
             )
           })}
         </div>
+
+        {/* Staff HR (P17): check-in policy + leave types — only when the module is on. */}
+        {modules.find((m) => m.key === 'hr')?.enabled ? <StaffHrSettings /> : null}
 
         {/* Custom fields (P13): Principal-defined student/staff fields. */}
         <CustomFieldsSettings />

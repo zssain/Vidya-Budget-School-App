@@ -6871,6 +6871,184 @@ pub fn set_module_logic(conn: &mut Connection, actor_s: &SessionStaff, key: &str
     Ok(())
 }
 
+// ============================================================= staff HR (P17) =
+
+/// Read the school's Staff-HR settings from `school.settings_json.hr`, defaulting
+/// to the **[OWNER defaults]** (start 09:00, grace 0, away check-in not allowed).
+fn read_hr_settings(conn: &Connection) -> rusqlite::Result<vidya_core::hr::HrSettings> {
+    let raw: Option<String> = conn.query_row("SELECT settings_json FROM school LIMIT 1", [], |r| r.get(0)).optional()?;
+    let v: serde_json::Value = raw.and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_else(|| serde_json::json!({}));
+    let hr = v.get("hr");
+    let start_min = hr
+        .and_then(|h| h.get("start_time"))
+        .and_then(|x| x.as_str())
+        .and_then(vidya_core::hr::parse_hhmm)
+        .unwrap_or(vidya_core::hr::DEFAULT_START_MIN);
+    let grace_min = hr.and_then(|h| h.get("grace_min")).and_then(|x| x.as_u64()).unwrap_or(0).min(u16::MAX as u64) as u16;
+    let allow_away = hr.and_then(|h| h.get("allow_away")).and_then(|x| x.as_bool()).unwrap_or(false);
+    Ok(vidya_core::hr::HrSettings { start_min, grace_min, allow_away })
+}
+
+#[derive(Debug, Serialize)]
+pub struct HrSettingsDto {
+    /// School start time as `HH:MM` (24-hour), default `09:00`.
+    pub start_time: String,
+    pub grace_min: i64,
+    pub allow_away: bool,
+}
+
+/// Read the Staff-HR settings (Settings → Staff HR; the phone check-in card shows
+/// the start time). Any signed-in staff may read this non-sensitive config.
+pub fn get_hr_settings_logic(conn: &mut Connection) -> CmdResult<HrSettingsDto> {
+    let s = read_hr_settings(conn)?;
+    Ok(HrSettingsDto {
+        start_time: vidya_core::hr::fmt_hhmm(s.start_min),
+        grace_min: s.grace_min as i64,
+        allow_away: s.allow_away,
+    })
+}
+
+#[derive(Debug, Deserialize)]
+pub struct HrSettingsInput {
+    pub start_time: String,
+    pub grace_min: i64,
+    pub allow_away: bool,
+}
+
+/// Save the Staff-HR settings (Principal only, module `hr`, §10.5). Merges into
+/// `school.settings_json.hr` (keeping every other key), validates, and audits.
+pub fn set_hr_settings_logic(conn: &mut Connection, actor_s: &SessionStaff, input: &HrSettingsInput) -> CmdResult<()> {
+    let actor = actor_from(conn, actor_s)?;
+    require_allow(&actor, Action::ManageStaffHr, &Target::of(TargetKind::Staff))?;
+    require_module_enabled(conn, vidya_core::modules::Module::Hr)?;
+
+    let start_min = vidya_core::hr::parse_hhmm(input.start_time.trim())
+        .ok_or_else(|| CmdError::validation("start_time", "format"))?;
+    let grace_min = input.grace_min.max(0).min(u16::MAX as i64) as u16;
+    vidya_core::hr::validate_hr_settings(start_min, grace_min)?;
+
+    let (school_id, raw): (String, Option<String>) = conn
+        .query_row("SELECT id, settings_json FROM school LIMIT 1", [], |r| Ok((r.get(0)?, r.get(1)?)))
+        .optional()?
+        .ok_or_else(CmdError::not_found)?;
+    let mut settings: serde_json::Value = raw.and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_else(|| serde_json::json!({}));
+    settings["hr"] = serde_json::json!({
+        "start_time": vidya_core::hr::fmt_hhmm(start_min),
+        "grace_min": grace_min,
+        "allow_away": input.allow_away,
+    });
+
+    let now = now_iso();
+    let tx = conn.transaction()?;
+    tx.execute("UPDATE school SET settings_json=?1, updated_at=?2 WHERE id=?3", params![settings.to_string(), now, school_id])?;
+    crate::security::audit::append(&tx, &AuditEntry {
+        at: now.clone(),
+        staff_id: Some(actor_s.id.clone()),
+        action: "set_hr_settings".into(),
+        table: Some("school".into()),
+        record_id: Some(school_id.clone()),
+        after_json: Some(serde_json::json!({ "start_time": vidya_core::hr::fmt_hhmm(start_min), "grace_min": grace_min, "allow_away": input.allow_away }).to_string()),
+        ..Default::default()
+    })?;
+    tx.commit()?;
+    Ok(())
+}
+
+#[derive(Debug, Serialize)]
+pub struct LeaveTypeDto {
+    pub id: String,
+    pub name: String,
+    pub name_hi: Option<String>,
+    pub name_te: Option<String>,
+    /// Yearly quota in working days; `None` = unlimited (an Unpaid type).
+    pub yearly_quota: Option<i64>,
+    pub paid: bool,
+    pub active: bool,
+    pub sort_order: i64,
+}
+
+fn map_leave_type(r: &rusqlite::Row) -> rusqlite::Result<LeaveTypeDto> {
+    Ok(LeaveTypeDto {
+        id: r.get(0)?,
+        name: r.get(1)?,
+        name_hi: r.get(2)?,
+        name_te: r.get(3)?,
+        yearly_quota: r.get(4)?,
+        paid: r.get::<_, i64>(5)? != 0,
+        active: r.get::<_, i64>(6)? != 0,
+        sort_order: r.get(7)?,
+    })
+}
+
+/// List the leave types (Settings → Staff HR + the Apply-for-leave form). Any
+/// signed-in staff may read them (reference data); module `hr`.
+pub fn list_leave_types_logic(conn: &mut Connection) -> CmdResult<Vec<LeaveTypeDto>> {
+    require_module_enabled(conn, vidya_core::modules::Module::Hr)?;
+    let mut stmt = conn.prepare(
+        "SELECT id, name, name_hi, name_te, yearly_quota, paid, active, sort_order FROM leave_type ORDER BY sort_order, name",
+    )?;
+    let rows = stmt.query_map([], map_leave_type)?.collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows)
+}
+
+#[derive(Debug, Deserialize)]
+pub struct LeaveTypeInput {
+    /// Present = update that type; absent = create a new one.
+    pub id: Option<String>,
+    pub name: String,
+    pub name_hi: Option<String>,
+    pub name_te: Option<String>,
+    pub yearly_quota: Option<i64>,
+    pub paid: bool,
+    pub active: bool,
+}
+
+/// Create or update a leave type (Principal only, module `hr`, §10.5). Audited.
+pub fn save_leave_type_logic(conn: &mut Connection, actor_s: &SessionStaff, input: &LeaveTypeInput) -> CmdResult<LeaveTypeDto> {
+    let actor = actor_from(conn, actor_s)?;
+    require_allow(&actor, Action::ManageStaffHr, &Target::of(TargetKind::Staff))?;
+    require_module_enabled(conn, vidya_core::modules::Module::Hr)?;
+
+    let name = input.name.trim();
+    if name.is_empty() {
+        return Err(CmdError::validation("name", "required"));
+    }
+    if let Some(q) = input.yearly_quota {
+        if q < 0 {
+            return Err(CmdError::validation("yearly_quota", "range"));
+        }
+    }
+    let now = now_iso();
+    let school_id = single_school_id(conn)?;
+    let id = input.id.clone().unwrap_or_else(|| new_id("lt"));
+    let tx = conn.transaction()?;
+    tx.execute(
+        "INSERT INTO leave_type(id,name,name_hi,name_te,yearly_quota,paid,active,sort_order,school_id,created_at,updated_at,updated_by_staff,sync_state) \
+         VALUES (?1,?2,?3,?4,?5,?6,?7,COALESCE((SELECT sort_order FROM leave_type WHERE id=?1),(SELECT COALESCE(MAX(sort_order)+1,0) FROM leave_type)),?8,?9,?9,?10,'confirmed') \
+         ON CONFLICT(id) DO UPDATE SET name=excluded.name, name_hi=excluded.name_hi, name_te=excluded.name_te, \
+           yearly_quota=excluded.yearly_quota, paid=excluded.paid, active=excluded.active, updated_at=excluded.updated_at, \
+           updated_by_staff=excluded.updated_by_staff, version=leave_type.version+1",
+        params![id, name, input.name_hi, input.name_te, input.yearly_quota, input.paid as i64, input.active as i64, school_id, now, actor_s.id],
+    )?;
+    crate::security::audit::append(&tx, &AuditEntry {
+        at: now.clone(),
+        staff_id: Some(actor_s.id.clone()),
+        action: "save_leave_type".into(),
+        table: Some("leave_type".into()),
+        record_id: Some(id.clone()),
+        after_json: Some(serde_json::json!({ "name": name, "yearly_quota": input.yearly_quota, "paid": input.paid, "active": input.active }).to_string()),
+        ..Default::default()
+    })?;
+    tx.commit()?;
+    conn.query_row(
+        "SELECT id, name, name_hi, name_te, yearly_quota, paid, active, sort_order FROM leave_type WHERE id=?1",
+        params![id],
+        map_leave_type,
+    )
+    .optional()?
+    .ok_or_else(CmdError::not_found)
+}
+
 // ============================================================= payments (UPI) =
 
 /// Read the school's UPI settings (Settings → Payments, the reminder sheet, the

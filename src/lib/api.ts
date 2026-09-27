@@ -548,6 +548,37 @@ export interface ModuleRow {
   enabled: boolean
 }
 
+// Staff HR (P17, §10.5).
+export interface HrSettingsDto {
+  start_time: string // "HH:MM" (24-hour), default "09:00"
+  grace_min: number
+  allow_away: boolean
+}
+export interface HrSettingsInput {
+  start_time: string
+  grace_min: number
+  allow_away: boolean
+}
+export interface LeaveTypeDto {
+  id: string
+  name: string
+  name_hi: string | null
+  name_te: string | null
+  yearly_quota: number | null // null = unlimited (Unpaid)
+  paid: boolean
+  active: boolean
+  sort_order: number
+}
+export interface LeaveTypeInput {
+  id?: string
+  name: string
+  name_hi?: string | null
+  name_te?: string | null
+  yearly_quota?: number | null
+  paid: boolean
+  active: boolean
+}
+
 export interface PrincipalDashboard {
   attendance_pct_tenths: number
   attendance_marked: number
@@ -1321,6 +1352,10 @@ export const dashboard_teacher = () => invoke<TeacherDashboard>('dashboard_teach
 export const set_accent = (hex: string) => invoke<void>('set_accent', { hex })
 export const list_modules = () => invoke<ModuleRow[]>('list_modules')
 export const set_module = (key: string, enabled: boolean) => invoke<void>('set_module', { key, enabled })
+export const get_hr_settings = () => invoke<HrSettingsDto>('get_hr_settings')
+export const set_hr_settings = (input: HrSettingsInput) => invoke<void>('set_hr_settings', { input })
+export const list_leave_types = () => invoke<LeaveTypeDto[]>('list_leave_types')
+export const save_leave_type = (input: LeaveTypeInput) => invoke<LeaveTypeDto>('save_leave_type', { input })
 export const get_payment_settings = () => invoke<PaymentSettings>('get_payment_settings')
 export const set_payment_settings = (input: PaymentSettingsInput) => invoke<void>('set_payment_settings', { input })
 export const qr_svg = (data: string) => invoke<string>('qr_svg', { data })

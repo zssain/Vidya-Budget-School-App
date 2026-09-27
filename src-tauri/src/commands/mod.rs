@@ -138,6 +138,10 @@ pub const COMMANDS: &[&str] = &[
     "set_accent",
     "list_modules",
     "set_module",
+    "get_hr_settings",
+    "set_hr_settings",
+    "list_leave_types",
+    "save_leave_type",
     "get_payment_settings",
     "set_payment_settings",
     "qr_svg",
@@ -813,6 +817,32 @@ pub fn list_modules(state: State<RtCtx>) -> CmdResult<Vec<ModuleDto>> {
 pub fn set_module(state: State<RtCtx>, key: String, enabled: bool) -> CmdResult<()> {
     let actor = state.require_session()?;
     state.with_db(|conn| set_module_logic(conn, &actor, &key, enabled))
+}
+
+// --------------------------------------------------------------- staff HR -----
+
+#[tauri::command]
+pub fn get_hr_settings(state: State<RtCtx>) -> CmdResult<HrSettingsDto> {
+    state.require_session()?;
+    state.with_db(get_hr_settings_logic)
+}
+
+#[tauri::command]
+pub fn set_hr_settings(state: State<RtCtx>, input: HrSettingsInput) -> CmdResult<()> {
+    let actor = state.require_session()?;
+    state.with_db(|conn| set_hr_settings_logic(conn, &actor, &input))
+}
+
+#[tauri::command]
+pub fn list_leave_types(state: State<RtCtx>) -> CmdResult<Vec<LeaveTypeDto>> {
+    state.require_session()?;
+    state.with_db(list_leave_types_logic)
+}
+
+#[tauri::command]
+pub fn save_leave_type(state: State<RtCtx>, input: LeaveTypeInput) -> CmdResult<LeaveTypeDto> {
+    let actor = state.require_session()?;
+    state.with_db(|conn| save_leave_type_logic(conn, &actor, &input))
 }
 
 // --------------------------------------------------------------- payments -----
