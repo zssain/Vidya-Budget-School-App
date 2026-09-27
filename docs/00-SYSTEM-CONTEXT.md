@@ -527,4 +527,40 @@ Module = a switchable feature area. Machine code = the offline-licence bind for 
 ## 17. Open owner decisions
 Tracked in **`docs/OWNER-DECISIONS.md`** (decision · default in use · where the default lives ·
 status · owner's answer). Build the stated default; list every open decision in each handoff.
+
+## 18. iPhone web app (PWA) — Phase 19 (binding decisions)
+
+Apple charges $99/year for App Store distribution; the owner wants iPhone support at **₹0**, so
+Vidya ships iPhone support as an **installable web app (PWA)** that staff add from Safari →
+Share → **Add to Home Screen**. (It also runs in desktop Chrome/Edge, but that is not a supported
+target.)
+
+- **Scope — staff client only.** The PWA has the same **phone** screens as Android (Teacher Home,
+  attendance, absence alerts, marks, homework & notes, report-card view, My classes, My timetable,
+  requests, inbox/circulars, staff check-in, leave, profile, sync status) **plus** the Accountant's
+  phone-sized collect-fee flow. **Never** the school server, setup, restore, backups or licences —
+  those commands return `NOT_AVAILABLE_ON_WEB` and the UI hides them.
+- **Hosting.** Static files only, on free hosting (GitHub Pages or Cloudflare Pages) at
+  `app.vidya.zuhairhussain.com` **[OWNER confirms subdomain]**. The host never sees school data.
+- **Sync route — Drive only, never LAN.** A browser can't trust the school PC's self-signed
+  certificate, so the PWA **never uses the LAN route**. It syncs through the **school sync account's
+  Google Drive** (≈1–2 minutes), and through the relay only if the optional Instant-sync module is on
+  (the relay has a normal TLS certificate). Status copy: "iPhone syncs through Google Drive".
+- **Same rules, same encryption.** `vidya-core` and the sealing code are compiled to **WebAssembly**
+  (`crates/vidya-wasm`, wasm-bindgen), so every rule and every sealed bundle is identical to Android.
+- **Local storage.** IndexedDB, records encrypted by an AES-GCM key created by WebCrypto as
+  **non-extractable** and stored in IndexedDB; the PIN unlocks the app (same Argon2id parameters via
+  WASM). Auto-lock after 5 min hidden. Lease (30 days) and epoch rules identical.
+  `navigator.storage.persist()` requested after PIN creation.
+- **Join without LAN.** Joining uses a sealed **join request** file in `exchange/joins/` that the
+  school PC processes on its next Drive check and answers with a sealed join response (device token,
+  series, audience keys, session key). The invitation QR gains an HTTPS form
+  `https://app.vidya.zuhairhussain.com/join#d=<same payload>` (fragment, so the host never receives
+  it); one QR works for Android (app link) and iPhone (web).
+- **Honest limits (Profile → About this iPhone app + INSTALL.md):** no background sync (changes send
+  when the app is open); Safari can clear website data if the web app is unused for a long time
+  **[VERIFY current WebKit policy for Home Screen web apps]**; notifications only if web push is added
+  later (not in this phase); photos come from the camera/gallery picker.
+- **New build-time tools only:** `wasm-bindgen-cli` / `wasm-pack` (tools, not runtime deps). Any new
+  runtime JS dependency → STOP and ask.
 </content>
