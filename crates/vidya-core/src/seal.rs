@@ -22,7 +22,7 @@ use base64::Engine;
 use chacha20poly1305::aead::{Aead, KeyInit, Payload};
 use chacha20poly1305::{ChaCha20Poly1305, Key, Nonce};
 use hmac::{Hmac, Mac};
-use sha2::Sha256;
+use sha2::{Digest, Sha256};
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -87,6 +87,26 @@ pub fn associated_data(method: &str, path: &str, device_id: &str, server_epoch: 
 /// version fails the open, so a bundle cannot be relabelled to another folder.
 pub fn bundle_aad(audience: &str, key_version: i64) -> Vec<u8> {
     format!("vidya/vop/v1\n{audience}\n{key_version}").into_bytes()
+}
+
+/// Derive the symmetric key that seals a Drive **join** request/response from the
+/// single-use invite code both sides share (join-without-LAN, §18). SHA-256 of a
+/// domain label ‖ the code — identical on the school PC and the PWA, so the PC can
+/// seal the join response (device token, series, audience keys, session key) and only
+/// the joining device (which holds the code) can open it.
+pub fn join_key(invite_code: &str) -> [u8; 32] {
+    let mut h = Sha256::new();
+    h.update(b"vidya/join/v1\n");
+    h.update(invite_code.as_bytes());
+    let mut k = [0u8; 32];
+    k.copy_from_slice(&h.finalize());
+    k
+}
+
+/// Associated data binding a join response to its request (so a response can't be
+/// replayed against a different request id).
+pub fn join_aad(request_id: &str) -> Vec<u8> {
+    format!("vidya/join-resp/v1\n{request_id}").into_bytes()
 }
 
 /// Seal `plaintext` under `key` with `aad` and a CALLER-SUPPLIED 12-byte `nonce` →
@@ -225,5 +245,20 @@ mod tests {
         let k = derive_keys(&key_b64()).unwrap();
         assert_eq!(seal_with_nonce(&k.c2s, b"", &[0u8; 8], b"x"), Err(SealError::BadNonce));
         assert_eq!(open(&k.c2s, b"aad", &[0u8; 10]), Err(SealError::TooShort));
+    }
+
+    #[test]
+    fn join_key_derives_deterministically_and_seals_a_response() {
+        // Same code → same key (PC and PWA); a different code → a different key.
+        let k1 = join_key("7KQ2-M9XD-4TRA");
+        assert_eq!(k1, join_key("7KQ2-M9XD-4TRA"));
+        assert_ne!(k1, join_key("OTHER-CODE-XXXX"));
+        // The PC seals a join response the joining device (same code) can open, bound
+        // to the request id; a wrong code or request id cannot open it.
+        let aad = join_aad("req-1");
+        let sealed = seal_with_nonce(&k1, &aad, &NONCE, br#"{"device_token":"t"}"#).unwrap();
+        assert_eq!(open(&k1, &aad, &sealed).unwrap(), br#"{"device_token":"t"}"#);
+        assert_eq!(open(&join_key("OTHER-CODE-XXXX"), &aad, &sealed), Err(SealError::Aead));
+        assert_eq!(open(&k1, &join_aad("req-2"), &sealed), Err(SealError::Aead));
     }
 }

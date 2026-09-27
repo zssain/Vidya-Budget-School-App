@@ -45,6 +45,9 @@ export function deriveDirectionKeys(sessionKeyB64: string): { c2s: Uint8Array; s
   const both = w.derive_direction_keys(sessionKeyB64)
   return { c2s: both.slice(0, 32), s2c: both.slice(32, 64) }
 }
+// Join-without-LAN: the key + AAD that seal the Drive join response (§18).
+export const joinKey = (inviteCode: string): Uint8Array => w.join_key(inviteCode)
+export const joinAad = (requestId: string): Uint8Array => w.join_aad(requestId)
 
 // ---- PIN (the browser supplies the 16-byte salt) ----
 export const pinHash = (pin: string): string => w.pin_hash_with_salt(pin, randomBytes(16))

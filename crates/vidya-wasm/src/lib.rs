@@ -131,6 +131,19 @@ pub fn derive_direction_keys(session_key_b64: &str) -> Result<Vec<u8>, String> {
     Ok(out)
 }
 
+/// The 32-byte symmetric key that seals a Drive join response, derived from the
+/// single-use invite code the PWA scanned (identical to the school PC's key).
+#[wasm_bindgen]
+pub fn join_key(invite_code: &str) -> Vec<u8> {
+    seal::join_key(invite_code).to_vec()
+}
+
+/// Associated data binding a join response to its request id.
+#[wasm_bindgen]
+pub fn join_aad(request_id: &str) -> Vec<u8> {
+    seal::join_aad(request_id)
+}
+
 // ---- PIN (Argon2id, identical parameters as the app) --------------------------
 
 /// Hash a PIN with a caller-supplied 16-byte random salt → a PHC string. Throws on
