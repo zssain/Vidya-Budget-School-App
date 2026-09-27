@@ -14,3 +14,8 @@ uuid = { version = "1", features = ["serde"] }
 sha2 = "0.10"
 base64 = "0.22"
 ed25519-dalek = "2"
+# Sealing primitives shared with the PWA (§18): pure AEAD + HKDF. No `rand` here —
+# the caller supplies the nonce (OsRng native / WebCrypto in the browser), so
+# vidya-core stays IO-free and compiles to wasm32.
+chacha20poly1305 = "0.10"
+hmac = "0.12"

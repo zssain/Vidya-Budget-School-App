@@ -5357,7 +5357,9 @@ name = "vidya-core"
 version = "2.0.0"
 dependencies = [
  "base64 0.22.1",
+ "chacha20poly1305",
  "ed25519-dalek",
+ "hmac",
  "serde",
  "serde_json",
  "sha2",

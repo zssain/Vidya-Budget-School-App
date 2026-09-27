@@ -37,6 +37,7 @@ pub mod report;
 pub mod requests;
 pub mod restore;
 pub mod salary;
+pub mod seal;
 pub mod seating;
 pub mod session;
 pub mod store;

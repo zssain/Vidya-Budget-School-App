@@ -40,11 +40,11 @@ pub enum BundleError {
     MixedAudience,
 }
 
-/// Associated data bound into the bundle AEAD. A change to the audience or key
+/// Associated data bound into the bundle AEAD (audience + key version). Shared with
+/// the PWA via `vidya_core::seal::bundle_aad` (re-exported through `sync::seal`) so
+/// both platforms seal/open a `.vop` bundle identically. A change to the audience or
 /// version fails the open.
-pub fn bundle_aad(audience: &str, key_version: i64) -> Vec<u8> {
-    format!("vidya/vop/v1\n{audience}\n{key_version}").into_bytes()
-}
+pub use crate::sync::seal::bundle_aad;
 
 /// The §11 filename for a bundle.
 pub fn bundle_filename(hlc: &str, audience: &str, key_version: i64) -> String {
