@@ -7049,6 +7049,531 @@ pub fn save_leave_type_logic(conn: &mut Connection, actor_s: &SessionStaff, inpu
     .ok_or_else(CmdError::not_found)
 }
 
+// ==================================================== staff attendance (P17) =
+
+/// Server epoch time (ms) from `now_iso` — respects the debug frozen clock.
+fn now_epoch_ms() -> i64 {
+    time::OffsetDateTime::parse(&now_iso(), &time::format_description::well_known::Rfc3339)
+        .map(|t| (t.unix_timestamp_nanos() / 1_000_000) as i64)
+        .unwrap_or(0)
+}
+
+/// Is `date` (YYYY-MM-DD) a working day for the school?
+fn hr_working_day(conn: &Connection, date: &str) -> rusqlite::Result<bool> {
+    let d = match vidya_core::calendar::parse_date(date) {
+        Some(d) => d,
+        None => return Ok(false),
+    };
+    let week = crate::calendar::load_week(conn)?;
+    let events = crate::calendar::load_events(conn)?;
+    Ok(vidya_core::calendar::is_working_day(d, &week, &events))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct CheckInInput {
+    /// Route the check-in reached the school by: `lan` (school Wi-Fi) or `drive`.
+    pub route: String,
+    /// Device-local date `YYYY-MM-DD`.
+    pub date: String,
+    /// Device-local minutes since midnight (the late rule uses this).
+    pub minute: i64,
+    /// Device epoch millis (for the > 10 min clock-skew flag).
+    pub device_ms: i64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct CheckInResult {
+    pub status: String,
+    pub check_in_min: i64,
+    pub clock_warning: bool,
+}
+
+/// Staff check-in on the phone (prototype `staffday` state 1). Any active staff,
+/// for themselves; one per working day. Away check-ins wait for the Principal
+/// unless "allow away" is on (§10.5). Records the device time + HLC and flags a
+/// clock difference > 10 min for the Principal.
+pub fn staff_check_in_logic(
+    conn: &mut Connection,
+    actor_s: &SessionStaff,
+    device_id: Option<&str>,
+    device_mode: DeviceMode,
+    input: &CheckInInput,
+) -> CmdResult<CheckInResult> {
+    let actor = actor_from(conn, actor_s)?;
+    require_allow(&actor, Action::StaffCheckIn, &Target::of(TargetKind::Own))?;
+    require_module_enabled(conn, vidya_core::modules::Module::Hr)?;
+    let route = match input.route.as_str() {
+        "lan" => vidya_core::hr::Route::Lan,
+        "drive" => vidya_core::hr::Route::Drive,
+        _ => return Err(CmdError::validation("route", "invalid")),
+    };
+    if !(0..=1439).contains(&input.minute) {
+        return Err(CmdError::validation("minute", "range"));
+    }
+    if !hr_working_day(conn, &input.date)? {
+        return Err(CmdError::validation("date", "not_working_day"));
+    }
+    if let Some((existing_status, has_checkin)) = conn
+        .query_row(
+            "SELECT status, check_in_at IS NOT NULL FROM staff_attendance WHERE staff_id=?1 AND date=?2",
+            params![actor_s.id, input.date],
+            |r| Ok((r.get::<_, String>(0)?, r.get::<_, bool>(1)?)),
+        )
+        .optional()?
+    {
+        if existing_status == "leave" {
+            return Err(CmdError::validation("check_in", "on_leave"));
+        }
+        if has_checkin {
+            return Err(CmdError::validation("check_in", "already"));
+        }
+    }
+    let settings = read_hr_settings(conn)?;
+    let status = vidya_core::hr::check_in_status(input.minute as u16, &settings, route);
+    let clock_warning = vidya_core::hr::clock_warning(input.device_ms, now_epoch_ms());
+    let now = now_iso();
+    let id = new_id("sat");
+    let school_id = single_school_id(conn)?;
+    let sync_state = if device_mode == DeviceMode::Server { "confirmed" } else { "on_device" };
+    let dev = device_id.map(str::to_string);
+    let staff_id = actor_s.id.clone();
+    let date = input.date.clone();
+    let minute = input.minute;
+    let route_key = route.as_key();
+    let status_key = status.as_key();
+    with_write(conn, &WriteCtx { mode: device_mode }, move |tx| {
+        tx.execute(
+            "INSERT INTO staff_attendance(id,staff_id,date,check_in_at,check_in_min,route,status,clock_warning,school_id,created_at,updated_at,updated_by_staff,updated_by_device,sync_state) \
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?10,?2,?11,?12) \
+             ON CONFLICT(staff_id,date) DO UPDATE SET check_in_at=excluded.check_in_at, check_in_min=excluded.check_in_min, route=excluded.route, status=excluded.status, clock_warning=excluded.clock_warning, updated_at=excluded.updated_at, version=staff_attendance.version+1",
+            params![id, staff_id, date, now, minute, route_key, status_key, clock_warning as i64, school_id, now, dev, sync_state],
+        )?;
+        let audit = AuditEntry {
+            at: now.clone(),
+            staff_id: Some(staff_id.clone()),
+            action: "staff_check_in".into(),
+            table: Some("staff_attendance".into()),
+            record_id: Some(id.clone()),
+            after_json: Some(serde_json::json!({ "date": date, "status": status_key, "route": route_key, "clock_warning": clock_warning }).to_string()),
+            ..Default::default()
+        };
+        let op = Op {
+            op_id: new_id("op"),
+            hlc: now.clone(),
+            device_id: dev.clone().unwrap_or_default(),
+            staff_id: staff_id.clone(),
+            audience: "admin".into(),
+            table: "staff_attendance".into(),
+            record_id: id.clone(),
+            kind: "insert".into(),
+            payload: serde_json::json!({ "staff_id": staff_id, "date": date, "status": status_key }).to_string(),
+            base_version: None,
+            server_epoch: 1,
+        };
+        Ok(Effect { value: (), audit, op })
+    })?;
+    Ok(CheckInResult { status: status_key.to_string(), check_in_min: minute, clock_warning })
+}
+
+/// Staff check-out on the phone: records the leaving time on today's row. Requires
+/// a check-in first; one check-out per day.
+pub fn staff_check_out_logic(
+    conn: &mut Connection,
+    actor_s: &SessionStaff,
+    device_id: Option<&str>,
+    device_mode: DeviceMode,
+    date: &str,
+    minute: i64,
+) -> CmdResult<()> {
+    let actor = actor_from(conn, actor_s)?;
+    require_allow(&actor, Action::StaffCheckIn, &Target::of(TargetKind::Own))?;
+    require_module_enabled(conn, vidya_core::modules::Module::Hr)?;
+    if !(0..=1439).contains(&minute) {
+        return Err(CmdError::validation("minute", "range"));
+    }
+    let row: Option<(String, bool)> = conn
+        .query_row(
+            "SELECT id, check_out_at IS NOT NULL FROM staff_attendance WHERE staff_id=?1 AND date=?2 AND check_in_at IS NOT NULL",
+            params![actor_s.id, date],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()?;
+    let (rid, done) = row.ok_or_else(|| CmdError::validation("check_out", "no_check_in"))?;
+    if done {
+        return Err(CmdError::validation("check_out", "already"));
+    }
+    let now = now_iso();
+    let dev = device_id.map(str::to_string);
+    let staff_id = actor_s.id.clone();
+    with_write(conn, &WriteCtx { mode: device_mode }, move |tx| {
+        tx.execute(
+            "UPDATE staff_attendance SET check_out_at=?1, check_out_min=?2, updated_at=?1, updated_by_device=?3, version=version+1 WHERE id=?4",
+            params![now, minute, dev, rid],
+        )?;
+        let audit = AuditEntry {
+            at: now.clone(),
+            staff_id: Some(staff_id.clone()),
+            action: "staff_check_out".into(),
+            table: Some("staff_attendance".into()),
+            record_id: Some(rid.clone()),
+            ..Default::default()
+        };
+        let op = Op {
+            op_id: new_id("op"),
+            hlc: now.clone(),
+            device_id: dev.clone().unwrap_or_default(),
+            staff_id: staff_id.clone(),
+            audience: "admin".into(),
+            table: "staff_attendance".into(),
+            record_id: rid.clone(),
+            kind: "update".into(),
+            payload: serde_json::json!({ "staff_id": staff_id, "date": date }).to_string(),
+            base_version: None,
+            server_epoch: 1,
+        };
+        Ok(Effect { value: (), audit, op })
+    })?;
+    Ok(())
+}
+
+#[derive(Debug, Serialize)]
+pub struct StaffDayTodayDto {
+    pub status: String,
+    pub check_in_min: Option<i64>,
+    pub check_out_min: Option<i64>,
+    pub route: Option<String>,
+    pub clock_warning: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct StaffDayRecentDto {
+    pub date: String,
+    pub status: String,
+    pub check_in_min: Option<i64>,
+    pub check_out_min: Option<i64>,
+    pub note: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct StaffDayDto {
+    pub date: String,
+    pub start_time: String,
+    pub today: Option<StaffDayTodayDto>,
+    pub month_present: i64,
+    pub month_leave: i64,
+    pub month_late: i64,
+    pub recent: Vec<StaffDayRecentDto>,
+}
+
+/// The staff member's own attendance day (prototype `staffday` state 1): today's
+/// check-in card, this month's counts, and recent days. `today` is the device's
+/// local `YYYY-MM-DD`.
+pub fn my_staff_day_logic(conn: &mut Connection, actor_s: &SessionStaff, today: &str) -> CmdResult<StaffDayDto> {
+    require_module_enabled(conn, vidya_core::modules::Module::Hr)?;
+    let settings = read_hr_settings(conn)?;
+    let month = today.get(..7).unwrap_or(today);
+    let today_row = conn
+        .query_row(
+            "SELECT status, check_in_min, check_out_min, route, clock_warning FROM staff_attendance WHERE staff_id=?1 AND date=?2",
+            params![actor_s.id, today],
+            |r| {
+                Ok(StaffDayTodayDto {
+                    status: r.get(0)?,
+                    check_in_min: r.get(1)?,
+                    check_out_min: r.get(2)?,
+                    route: r.get(3)?,
+                    clock_warning: r.get::<_, i64>(4)? != 0,
+                })
+            },
+        )
+        .optional()?;
+    let (present, leave, late): (i64, i64, i64) = conn.query_row(
+        "SELECT \
+           SUM(CASE WHEN status IN ('present','late','half_day') THEN 1 ELSE 0 END), \
+           SUM(CASE WHEN status='leave' THEN 1 ELSE 0 END), \
+           SUM(CASE WHEN status='late' THEN 1 ELSE 0 END) \
+         FROM staff_attendance WHERE staff_id=?1 AND date LIKE ?2||'%'",
+        params![actor_s.id, month],
+        |r| Ok((r.get::<_, Option<i64>>(0)?.unwrap_or(0), r.get::<_, Option<i64>>(1)?.unwrap_or(0), r.get::<_, Option<i64>>(2)?.unwrap_or(0))),
+    )?;
+    let recent = {
+        let mut stmt = conn.prepare(
+            "SELECT date, status, check_in_min, check_out_min, note FROM staff_attendance WHERE staff_id=?1 ORDER BY date DESC LIMIT 8",
+        )?;
+        let v = stmt
+            .query_map(params![actor_s.id], |r| {
+                Ok(StaffDayRecentDto { date: r.get(0)?, status: r.get(1)?, check_in_min: r.get(2)?, check_out_min: r.get(3)?, note: r.get(4)? })
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        v
+    };
+    Ok(StaffDayDto {
+        date: today.to_string(),
+        start_time: vidya_core::hr::fmt_hhmm(settings.start_min),
+        today: today_row,
+        month_present: present,
+        month_leave: leave,
+        month_late: late,
+        recent,
+    })
+}
+
+#[derive(Debug, Serialize)]
+pub struct StaffAttnRowDto {
+    pub id: Option<String>,
+    pub staff_id: String,
+    pub name: String,
+    pub role: String,
+    /// `None` = not marked yet today.
+    pub status: Option<String>,
+    pub check_in_min: Option<i64>,
+    pub check_out_min: Option<i64>,
+    pub route: Option<String>,
+    pub clock_warning: bool,
+    pub note: Option<String>,
+}
+
+/// The staff-attendance day register for the Principal (Staff & access → Staff
+/// attendance). Every active staff member with today's row (or none). Principal only.
+pub fn staff_attendance_day_logic(conn: &mut Connection, actor_s: &SessionStaff, date: &str) -> CmdResult<Vec<StaffAttnRowDto>> {
+    let actor = actor_from(conn, actor_s)?;
+    require_allow(&actor, Action::ManageStaffHr, &Target::of(TargetKind::Staff))?;
+    require_module_enabled(conn, vidya_core::modules::Module::Hr)?;
+    let mut stmt = conn.prepare(
+        "SELECT a.id, s.id, s.name, s.role, a.status, a.check_in_min, a.check_out_min, a.route, a.clock_warning, a.note \
+         FROM staff s LEFT JOIN staff_attendance a ON a.staff_id=s.id AND a.date=?1 \
+         WHERE s.state='active' ORDER BY s.name",
+    )?;
+    let rows = stmt
+        .query_map(params![date], |r| {
+            Ok(StaffAttnRowDto {
+                id: r.get(0)?,
+                staff_id: r.get(1)?,
+                name: r.get(2)?,
+                role: r.get(3)?,
+                status: r.get(4)?,
+                check_in_min: r.get(5)?,
+                check_out_min: r.get(6)?,
+                route: r.get(7)?,
+                clock_warning: r.get::<_, Option<i64>>(8)?.unwrap_or(0) != 0,
+                note: r.get(9)?,
+            })
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows)
+}
+
+#[derive(Debug, Serialize)]
+pub struct StaffAttnMonthRowDto {
+    pub staff_id: String,
+    pub name: String,
+    pub role: String,
+    pub present: i64,
+    pub late: i64,
+    pub leave: i64,
+    pub absent: i64,
+    pub away_pending: i64,
+}
+
+#[derive(Debug, Serialize)]
+pub struct StaffAttnMonthDto {
+    pub month: String,
+    pub working_days: i64,
+    pub rows: Vec<StaffAttnMonthRowDto>,
+}
+
+/// The month grid of staff attendance (Principal only).
+pub fn staff_attendance_month_logic(conn: &mut Connection, actor_s: &SessionStaff, month: &str) -> CmdResult<StaffAttnMonthDto> {
+    let actor = actor_from(conn, actor_s)?;
+    require_allow(&actor, Action::ManageStaffHr, &Target::of(TargetKind::Staff))?;
+    require_module_enabled(conn, vidya_core::modules::Module::Hr)?;
+    let working_days = working_days_in_month(conn, month)?;
+    let mut stmt = conn.prepare(
+        "SELECT s.id, s.name, s.role, \
+           SUM(CASE WHEN a.status IN ('present','late','half_day') THEN 1 ELSE 0 END), \
+           SUM(CASE WHEN a.status='late' THEN 1 ELSE 0 END), \
+           SUM(CASE WHEN a.status='leave' THEN 1 ELSE 0 END), \
+           SUM(CASE WHEN a.status='absent' THEN 1 ELSE 0 END), \
+           SUM(CASE WHEN a.status='away_pending' THEN 1 ELSE 0 END) \
+         FROM staff s LEFT JOIN staff_attendance a ON a.staff_id=s.id AND a.date LIKE ?1||'%' \
+         WHERE s.state='active' GROUP BY s.id ORDER BY s.name",
+    )?;
+    let rows = stmt
+        .query_map(params![month], |r| {
+            Ok(StaffAttnMonthRowDto {
+                staff_id: r.get(0)?,
+                name: r.get(1)?,
+                role: r.get(2)?,
+                present: r.get::<_, Option<i64>>(3)?.unwrap_or(0),
+                late: r.get::<_, Option<i64>>(4)?.unwrap_or(0),
+                leave: r.get::<_, Option<i64>>(5)?.unwrap_or(0),
+                absent: r.get::<_, Option<i64>>(6)?.unwrap_or(0),
+                away_pending: r.get::<_, Option<i64>>(7)?.unwrap_or(0),
+            })
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(StaffAttnMonthDto { month: month.to_string(), working_days: working_days as i64, rows })
+}
+
+/// Shared Principal write to a `staff_attendance` row (accept/reject away, manual
+/// entry/correction): one transaction, audited, with an op so devices sync it.
+#[allow(clippy::too_many_arguments)]
+fn principal_attn_write(
+    conn: &mut Connection,
+    actor_s: &SessionStaff,
+    device_id: Option<&str>,
+    device_mode: DeviceMode,
+    action: &'static str,
+    row_id: &str,
+    staff_id: &str,
+    date: &str,
+    status: &str,
+    sql: &str,
+    audit_extra: serde_json::Value,
+) -> CmdResult<()> {
+    let now = now_iso();
+    let dev = device_id.map(str::to_string);
+    let rid = row_id.to_string();
+    let staff = staff_id.to_string();
+    let date = date.to_string();
+    let status = status.to_string();
+    let sql = sql.to_string();
+    let actor_id = actor_s.id.clone();
+    with_write(conn, &WriteCtx { mode: device_mode }, move |tx| {
+        tx.execute(&sql, params![rid, actor_id, now])?;
+        let audit = AuditEntry {
+            at: now.clone(),
+            staff_id: Some(actor_id.clone()),
+            action: action.into(),
+            table: Some("staff_attendance".into()),
+            record_id: Some(rid.clone()),
+            after_json: Some(audit_extra.to_string()),
+            ..Default::default()
+        };
+        let op = Op {
+            op_id: new_id("op"),
+            hlc: now.clone(),
+            device_id: dev.clone().unwrap_or_default(),
+            staff_id: actor_id.clone(),
+            audience: "admin".into(),
+            table: "staff_attendance".into(),
+            record_id: rid.clone(),
+            kind: "update".into(),
+            payload: serde_json::json!({ "staff_id": staff, "date": date, "status": status }).to_string(),
+            base_version: None,
+            server_epoch: 1,
+        };
+        Ok(Effect { value: (), audit, op })
+    })?;
+    Ok(())
+}
+
+/// Accept an away check-in (`away_pending` → present/late by the time rule).
+pub fn accept_away_checkin_logic(conn: &mut Connection, actor_s: &SessionStaff, device_id: Option<&str>, device_mode: DeviceMode, id: &str) -> CmdResult<()> {
+    let actor = actor_from(conn, actor_s)?;
+    require_allow(&actor, Action::ManageStaffHr, &Target::of(TargetKind::Staff))?;
+    require_module_enabled(conn, vidya_core::modules::Module::Hr)?;
+    let (staff_id, date, status, check_in_min): (String, String, String, Option<i64>) = conn
+        .query_row("SELECT staff_id, date, status, check_in_min FROM staff_attendance WHERE id=?1", params![id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
+        .optional()?
+        .ok_or_else(CmdError::not_found)?;
+    if status != "away_pending" {
+        return Err(CmdError::validation("status", "not_away_pending"));
+    }
+    let settings = read_hr_settings(conn)?;
+    let new_status = vidya_core::hr::accepted_away_status(check_in_min.unwrap_or(0) as u16, &settings).as_key();
+    principal_attn_write(
+        conn, actor_s, device_id, device_mode, "accept_away_checkin", id, &staff_id, &date, new_status,
+        "UPDATE staff_attendance SET status='PLACEHOLDER', accepted_by=?2, updated_at=?3, version=version+1 WHERE id=?1".replace("PLACEHOLDER", new_status).as_str(),
+        serde_json::json!({ "status": new_status }),
+    )
+}
+
+/// Reject an away check-in → marks the day absent.
+pub fn reject_away_checkin_logic(conn: &mut Connection, actor_s: &SessionStaff, device_id: Option<&str>, device_mode: DeviceMode, id: &str) -> CmdResult<()> {
+    let actor = actor_from(conn, actor_s)?;
+    require_allow(&actor, Action::ManageStaffHr, &Target::of(TargetKind::Staff))?;
+    require_module_enabled(conn, vidya_core::modules::Module::Hr)?;
+    let (staff_id, date, status): (String, String, String) = conn
+        .query_row("SELECT staff_id, date, status FROM staff_attendance WHERE id=?1", params![id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+        .optional()?
+        .ok_or_else(CmdError::not_found)?;
+    if status != "away_pending" {
+        return Err(CmdError::validation("status", "not_away_pending"));
+    }
+    principal_attn_write(
+        conn, actor_s, device_id, device_mode, "reject_away_checkin", id, &staff_id, &date, "absent",
+        "UPDATE staff_attendance SET status='absent', accepted_by=?2, updated_at=?3, version=version+1 WHERE id=?1",
+        serde_json::json!({ "status": "absent" }),
+    )
+}
+
+#[derive(Debug, Deserialize)]
+pub struct MarkStaffAttendanceInput {
+    pub staff_id: String,
+    pub date: String,
+    pub status: String,
+    pub note: Option<String>,
+}
+
+/// Principal manual entry / correction of a staff-attendance day (route `manual`,
+/// audited with the reason). Principal only.
+pub fn mark_staff_attendance_logic(conn: &mut Connection, actor_s: &SessionStaff, device_id: Option<&str>, device_mode: DeviceMode, input: &MarkStaffAttendanceInput) -> CmdResult<()> {
+    let actor = actor_from(conn, actor_s)?;
+    require_allow(&actor, Action::ManageStaffHr, &Target::of(TargetKind::Staff))?;
+    require_module_enabled(conn, vidya_core::modules::Module::Hr)?;
+    if !["present", "late", "absent", "half_day", "leave"].contains(&input.status.as_str()) {
+        return Err(CmdError::validation("status", "invalid"));
+    }
+    // Existing row id (upsert by staff+date).
+    let existing: Option<String> = conn
+        .query_row("SELECT id FROM staff_attendance WHERE staff_id=?1 AND date=?2", params![input.staff_id, input.date], |r| r.get(0))
+        .optional()?;
+    let id = existing.unwrap_or_else(|| new_id("sat"));
+    let now = now_iso();
+    let dev = device_id.map(str::to_string);
+    let school_id = single_school_id(conn)?;
+    let sync_state = if device_mode == DeviceMode::Server { "confirmed" } else { "on_device" };
+    let actor_id = actor_s.id.clone();
+    let staff_id = input.staff_id.clone();
+    let date = input.date.clone();
+    let status = input.status.clone();
+    let note = input.note.clone();
+    with_write(conn, &WriteCtx { mode: device_mode }, move |tx| {
+        tx.execute(
+            "INSERT INTO staff_attendance(id,staff_id,date,route,status,accepted_by,note,school_id,created_at,updated_at,updated_by_staff,updated_by_device,sync_state) \
+             VALUES (?1,?2,?3,'manual',?4,?5,?6,?7,?8,?8,?5,?9,?10) \
+             ON CONFLICT(staff_id,date) DO UPDATE SET route='manual', status=excluded.status, accepted_by=excluded.accepted_by, note=excluded.note, updated_at=excluded.updated_at, version=staff_attendance.version+1",
+            params![id, staff_id, date, status, actor_id, note, school_id, now, dev, sync_state],
+        )?;
+        let audit = AuditEntry {
+            at: now.clone(),
+            staff_id: Some(actor_id.clone()),
+            action: "mark_staff_attendance".into(),
+            table: Some("staff_attendance".into()),
+            record_id: Some(id.clone()),
+            after_json: Some(serde_json::json!({ "staff_id": staff_id, "date": date, "status": status }).to_string()),
+            reason: note.clone(),
+            ..Default::default()
+        };
+        let op = Op {
+            op_id: new_id("op"),
+            hlc: now.clone(),
+            device_id: dev.clone().unwrap_or_default(),
+            staff_id: actor_id.clone(),
+            audience: "admin".into(),
+            table: "staff_attendance".into(),
+            record_id: id.clone(),
+            kind: "insert".into(),
+            payload: serde_json::json!({ "staff_id": staff_id, "date": date, "status": status }).to_string(),
+            base_version: None,
+            server_epoch: 1,
+        };
+        Ok(Effect { value: (), audit, op })
+    })?;
+    Ok(())
+}
+
 // ============================================================= payments (UPI) =
 
 /// Read the school's UPI settings (Settings → Payments, the reminder sheet, the
@@ -8898,6 +9423,111 @@ mod tests {
 
     fn principal() -> SessionStaff {
         SessionStaff { id: "stf-priya".into(), name: "Priya Sharma".into(), role: "principal".into() }
+    }
+
+    // ---- Phase 17: Staff HR — settings + attendance ------------------------
+    fn teacher(id: &str) -> SessionStaff {
+        SessionStaff { id: id.into(), name: id.into(), role: "teacher".into() }
+    }
+
+    #[test]
+    fn hr_settings_default_and_save() {
+        let mut c = seeded();
+        // Defaults: 09:00, grace 0, away off (§10.5 OWNER defaults).
+        let s = get_hr_settings_logic(&mut c).unwrap();
+        assert_eq!(s.start_time, "09:00");
+        assert_eq!(s.grace_min, 0);
+        assert!(!s.allow_away);
+        // Principal edits; a teacher cannot.
+        set_hr_settings_logic(&mut c, &principal(), &HrSettingsInput { start_time: "08:30".into(), grace_min: 10, allow_away: true }).unwrap();
+        assert!(set_hr_settings_logic(&mut c, &teacher("stf-meena"), &HrSettingsInput { start_time: "08:00".into(), grace_min: 0, allow_away: false }).is_err());
+        let s = get_hr_settings_logic(&mut c).unwrap();
+        assert_eq!(s.start_time, "08:30");
+        assert_eq!(s.grace_min, 10);
+        assert!(s.allow_away);
+    }
+
+    #[test]
+    fn leave_types_seeded_and_editable() {
+        let mut c = seeded();
+        let types = list_leave_types_logic(&mut c).unwrap();
+        // OWNER defaults seeded by 0028.
+        assert_eq!(types.len(), 3);
+        let casual = types.iter().find(|t| t.id == "lt-casual").unwrap();
+        assert_eq!(casual.yearly_quota, Some(12));
+        assert!(casual.paid);
+        let unpaid = types.iter().find(|t| t.id == "lt-unpaid").unwrap();
+        assert_eq!(unpaid.yearly_quota, None);
+        assert!(!unpaid.paid);
+        // Principal edits a quota; a teacher cannot.
+        save_leave_type_logic(&mut c, &principal(), &LeaveTypeInput { id: Some("lt-casual".into()), name: "Casual leave".into(), name_hi: None, name_te: None, yearly_quota: Some(15), paid: true, active: true }).unwrap();
+        assert_eq!(list_leave_types_logic(&mut c).unwrap().iter().find(|t| t.id == "lt-casual").unwrap().yearly_quota, Some(15));
+        assert!(save_leave_type_logic(&mut c, &teacher("stf-meena"), &LeaveTypeInput { id: None, name: "X".into(), name_hi: None, name_te: None, yearly_quota: None, paid: false, active: true }).is_err());
+    }
+
+    fn checkin(route: &str, minute: i64, device_ms: i64) -> CheckInInput {
+        CheckInInput { route: route.into(), date: "2026-09-23".into(), minute, device_ms }
+    }
+
+    #[test]
+    fn lan_check_in_present_one_per_day_and_clock_skew() {
+        let mut c = seeded();
+        let t = teacher("stf-meena");
+        // 08:47 (minute 527) on school Wi-Fi, before the 09:00 bell → present.
+        let r = staff_check_in_logic(&mut c, &t, Some("dev-1"), DeviceMode::Server, &checkin("lan", 527, now_epoch_ms())).unwrap();
+        assert_eq!(r.status, "present");
+        assert!(!r.clock_warning);
+        // A second check-in the same day is rejected (one per day).
+        assert!(staff_check_in_logic(&mut c, &t, Some("dev-1"), DeviceMode::Server, &checkin("lan", 600, now_epoch_ms())).is_err());
+        // A device whose clock is 20 min off is flagged for the Principal.
+        let t2 = teacher("stf-nair");
+        let r = staff_check_in_logic(&mut c, &t2, Some("dev-2"), DeviceMode::Server, &checkin("lan", 540, now_epoch_ms() + 20 * 60_000)).unwrap();
+        assert!(r.clock_warning);
+    }
+
+    #[test]
+    fn away_check_in_waits_then_principal_accepts() {
+        let mut c = seeded();
+        let anita = teacher("stf-anita");
+        // Away route (drive) with "allow away" off → away_pending.
+        let r = staff_check_in_logic(&mut c, &anita, None, DeviceMode::Server, &checkin("drive", 520, now_epoch_ms())).unwrap();
+        assert_eq!(r.status, "away_pending");
+        // The Principal's day register shows it; accept → present (before start).
+        let rows = staff_attendance_day_logic(&mut c, &principal(), "2026-09-23").unwrap();
+        let row = rows.iter().find(|x| x.staff_id == "stf-anita").unwrap();
+        assert_eq!(row.status.as_deref(), Some("away_pending"));
+        let id = row.id.clone().unwrap();
+        accept_away_checkin_logic(&mut c, &principal(), None, DeviceMode::Server, &id).unwrap();
+        let rows = staff_attendance_day_logic(&mut c, &principal(), "2026-09-23").unwrap();
+        assert_eq!(rows.iter().find(|x| x.staff_id == "stf-anita").unwrap().status.as_deref(), Some("present"));
+    }
+
+    #[test]
+    fn check_in_rejected_on_non_working_day() {
+        let mut c = seeded();
+        // 2026-09-27 is a Sunday (default weekly off).
+        let err = staff_check_in_logic(&mut c, &teacher("stf-anita"), None, DeviceMode::Server, &CheckInInput { route: "lan".into(), date: "2026-09-27".into(), minute: 520, device_ms: now_epoch_ms() });
+        assert!(err.is_err());
+    }
+
+    #[test]
+    fn my_staff_day_shows_month_and_recent() {
+        let c = &mut seeded();
+        // Meena has seeded present days this month (up to yesterday).
+        let day = my_staff_day_logic(c, &teacher("stf-meena"), "2026-09-23").unwrap();
+        assert_eq!(day.start_time, "09:00");
+        assert!(day.month_present > 0, "seeded present days");
+        assert!(!day.recent.is_empty());
+    }
+
+    #[test]
+    fn principal_manual_entry_marks_a_staff_absent() {
+        let mut c = seeded();
+        mark_staff_attendance_logic(&mut c, &principal(), None, DeviceMode::Server, &MarkStaffAttendanceInput { staff_id: "stf-nair".into(), date: "2026-09-23".into(), status: "absent".into(), note: Some("No show".into()) }).unwrap();
+        let rows = staff_attendance_day_logic(&mut c, &principal(), "2026-09-23").unwrap();
+        assert_eq!(rows.iter().find(|x| x.staff_id == "stf-nair").unwrap().status.as_deref(), Some("absent"));
+        // A teacher cannot run the manual entry.
+        assert!(mark_staff_attendance_logic(&mut c, &teacher("stf-meena"), None, DeviceMode::Server, &MarkStaffAttendanceInput { staff_id: "stf-nair".into(), date: "2026-09-23".into(), status: "present".into(), note: None }).is_err());
     }
 
     // ---- Phase 13: calendar ------------------------------------------------

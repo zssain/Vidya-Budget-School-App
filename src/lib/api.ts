@@ -578,6 +578,73 @@ export interface LeaveTypeInput {
   paid: boolean
   active: boolean
 }
+export interface CheckInInput {
+  route: 'lan' | 'drive'
+  date: string // device-local YYYY-MM-DD
+  minute: number // device-local minutes since midnight
+  device_ms: number // Date.now()
+}
+export interface CheckInResult {
+  status: string
+  check_in_min: number
+  clock_warning: boolean
+}
+export interface StaffDayToday {
+  status: string
+  check_in_min: number | null
+  check_out_min: number | null
+  route: string | null
+  clock_warning: boolean
+}
+export interface StaffDayRecent {
+  date: string
+  status: string
+  check_in_min: number | null
+  check_out_min: number | null
+  note: string | null
+}
+export interface StaffDayDto {
+  date: string
+  start_time: string
+  today: StaffDayToday | null
+  month_present: number
+  month_leave: number
+  month_late: number
+  recent: StaffDayRecent[]
+}
+export interface StaffAttnRow {
+  id: string | null
+  staff_id: string
+  name: string
+  role: string
+  status: string | null
+  check_in_min: number | null
+  check_out_min: number | null
+  route: string | null
+  clock_warning: boolean
+  note: string | null
+}
+export interface StaffAttnMonthRow {
+  staff_id: string
+  name: string
+  role: string
+  present: number
+  late: number
+  leave: number
+  absent: number
+  away_pending: number
+}
+export interface StaffAttnMonthDto {
+  month: string
+  working_days: number
+  rows: StaffAttnMonthRow[]
+}
+export interface MarkStaffAttendanceInput {
+  staff_id: string
+  date: string
+  status: string
+  note?: string | null
+}
 
 export interface PrincipalDashboard {
   attendance_pct_tenths: number
@@ -1356,6 +1423,14 @@ export const get_hr_settings = () => invoke<HrSettingsDto>('get_hr_settings')
 export const set_hr_settings = (input: HrSettingsInput) => invoke<void>('set_hr_settings', { input })
 export const list_leave_types = () => invoke<LeaveTypeDto[]>('list_leave_types')
 export const save_leave_type = (input: LeaveTypeInput) => invoke<LeaveTypeDto>('save_leave_type', { input })
+export const my_staff_day = (today: string) => invoke<StaffDayDto>('my_staff_day', { today })
+export const staff_check_in = (input: CheckInInput) => invoke<CheckInResult>('staff_check_in', { input })
+export const staff_check_out = (date: string, minute: number) => invoke<void>('staff_check_out', { date, minute })
+export const staff_attendance_day = (date: string) => invoke<StaffAttnRow[]>('staff_attendance_day', { date })
+export const staff_attendance_month = (month: string) => invoke<StaffAttnMonthDto>('staff_attendance_month', { month })
+export const accept_away_checkin = (id: string) => invoke<void>('accept_away_checkin', { id })
+export const reject_away_checkin = (id: string) => invoke<void>('reject_away_checkin', { id })
+export const mark_staff_attendance = (input: MarkStaffAttendanceInput) => invoke<void>('mark_staff_attendance', { input })
 export const get_payment_settings = () => invoke<PaymentSettings>('get_payment_settings')
 export const set_payment_settings = (input: PaymentSettingsInput) => invoke<void>('set_payment_settings', { input })
 export const qr_svg = (data: string) => invoke<string>('qr_svg', { data })

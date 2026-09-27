@@ -56,11 +56,54 @@ pub fn seed_demo_school(conn: &mut Connection, now: OffsetDateTime) -> rusqlite:
     expenses(&tx, &ctx)?;
     academics(&tx)?;
     classroom(&tx)?;
+    staff_hr(&tx, &ctx)?;
     requests(&tx, &ctx)?;
     tx.commit()?;
     // v2 (P13): the seed inserts payments/reversals directly, so post the derived
     // balanced vouchers for them (idempotent).
     crate::ledger::backfill_vouchers(conn)?;
+    Ok(())
+}
+
+/// Staff HR (P17): a fortnight of staff check-ins for the teachers up to yesterday,
+/// so the Principal's Staff-attendance register + month grid, the phone "My
+/// attendance" screen and the salary-from-HR link all have real data. Most days are
+/// present (in 8:45, out 3:40); Meena's most recent working day is an away check-in
+/// waiting for the Principal (to demo accept/reject); Nair has an occasional late.
+fn staff_hr(tx: &rusqlite::Transaction, c: &Ctx) -> rusqlite::Result<()> {
+    let sid: String = tx.query_row("SELECT id FROM school LIMIT 1", [], |r| r.get(0))?;
+    let week = vidya_core::calendar::SchoolWeek::default();
+    let teachers = ["stf-anita", "stf-meena", "stf-nair"];
+    let mut day = c.today.previous_day();
+    let mut n = 0u32;
+    let mut most_recent = true;
+    while n < 12 {
+        let d = match day {
+            Some(d) => d,
+            None => break,
+        };
+        if vidya_core::calendar::is_working_day(d, &week, &[]) {
+            let ds = d.format(YMD).unwrap_or_default();
+            let at = format!("{ds}T03:15:00Z"); // ~08:45 IST
+            for (i, staff_id) in teachers.iter().enumerate() {
+                let (status, route, cin, cout): (&str, &str, i64, Option<i64>) = if most_recent && i == 1 {
+                    ("away_pending", "drive", 540, None) // Meena — away, waiting
+                } else if i == 2 && n % 6 == 3 {
+                    ("late", "lan", 545, Some(940)) // Nair — occasional late
+                } else {
+                    ("present", "lan", 525, Some(940))
+                };
+                tx.execute(
+                    "INSERT INTO staff_attendance(id,staff_id,date,check_in_at,check_in_min,check_out_min,route,status,school_id,created_at,updated_at,sync_state) \
+                     VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?4,?4,'confirmed')",
+                    params![format!("sat-{staff_id}-{ds}"), staff_id, ds, at, cin, cout, route, status, sid],
+                )?;
+            }
+            most_recent = false;
+            n += 1;
+        }
+        day = d.previous_day();
+    }
     Ok(())
 }
 

@@ -142,6 +142,14 @@ pub const COMMANDS: &[&str] = &[
     "set_hr_settings",
     "list_leave_types",
     "save_leave_type",
+    "my_staff_day",
+    "staff_check_in",
+    "staff_check_out",
+    "staff_attendance_day",
+    "staff_attendance_month",
+    "accept_away_checkin",
+    "reject_away_checkin",
+    "mark_staff_attendance",
     "get_payment_settings",
     "set_payment_settings",
     "qr_svg",
@@ -843,6 +851,64 @@ pub fn list_leave_types(state: State<RtCtx>) -> CmdResult<Vec<LeaveTypeDto>> {
 pub fn save_leave_type(state: State<RtCtx>, input: LeaveTypeInput) -> CmdResult<LeaveTypeDto> {
     let actor = state.require_session()?;
     state.with_db(|conn| save_leave_type_logic(conn, &actor, &input))
+}
+
+#[tauri::command]
+pub fn my_staff_day(state: State<RtCtx>, today: String) -> CmdResult<StaffDayDto> {
+    let actor = state.require_session()?;
+    state.with_db(|conn| my_staff_day_logic(conn, &actor, &today))
+}
+
+#[tauri::command]
+pub fn staff_check_in(state: State<RtCtx>, input: CheckInInput) -> CmdResult<CheckInResult> {
+    let actor = state.require_session()?;
+    let device_id = state.device_id.lock().map_err(|_| crate::error::CmdError::internal("lock"))?.clone();
+    let mode = state.device_mode;
+    state.with_db(|conn| staff_check_in_logic(conn, &actor, device_id.as_deref(), mode, &input))
+}
+
+#[tauri::command]
+pub fn staff_check_out(state: State<RtCtx>, date: String, minute: i64) -> CmdResult<()> {
+    let actor = state.require_session()?;
+    let device_id = state.device_id.lock().map_err(|_| crate::error::CmdError::internal("lock"))?.clone();
+    let mode = state.device_mode;
+    state.with_db(|conn| staff_check_out_logic(conn, &actor, device_id.as_deref(), mode, &date, minute))
+}
+
+#[tauri::command]
+pub fn staff_attendance_day(state: State<RtCtx>, date: String) -> CmdResult<Vec<StaffAttnRowDto>> {
+    let actor = state.require_session()?;
+    state.with_db(|conn| staff_attendance_day_logic(conn, &actor, &date))
+}
+
+#[tauri::command]
+pub fn staff_attendance_month(state: State<RtCtx>, month: String) -> CmdResult<StaffAttnMonthDto> {
+    let actor = state.require_session()?;
+    state.with_db(|conn| staff_attendance_month_logic(conn, &actor, &month))
+}
+
+#[tauri::command]
+pub fn accept_away_checkin(state: State<RtCtx>, id: String) -> CmdResult<()> {
+    let actor = state.require_session()?;
+    let device_id = state.device_id.lock().map_err(|_| crate::error::CmdError::internal("lock"))?.clone();
+    let mode = state.device_mode;
+    state.with_db(|conn| accept_away_checkin_logic(conn, &actor, device_id.as_deref(), mode, &id))
+}
+
+#[tauri::command]
+pub fn reject_away_checkin(state: State<RtCtx>, id: String) -> CmdResult<()> {
+    let actor = state.require_session()?;
+    let device_id = state.device_id.lock().map_err(|_| crate::error::CmdError::internal("lock"))?.clone();
+    let mode = state.device_mode;
+    state.with_db(|conn| reject_away_checkin_logic(conn, &actor, device_id.as_deref(), mode, &id))
+}
+
+#[tauri::command]
+pub fn mark_staff_attendance(state: State<RtCtx>, input: MarkStaffAttendanceInput) -> CmdResult<()> {
+    let actor = state.require_session()?;
+    let device_id = state.device_id.lock().map_err(|_| crate::error::CmdError::internal("lock"))?.clone();
+    let mode = state.device_mode;
+    state.with_db(|conn| mark_staff_attendance_logic(conn, &actor, device_id.as_deref(), mode, &input))
 }
 
 // --------------------------------------------------------------- payments -----

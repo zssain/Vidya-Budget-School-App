@@ -92,6 +92,8 @@ pub fn module_of_table(table: &str) -> Option<&'static str> {
         // seating — off → never synced to a device.
         "period" | "timetable_slot" | "substitution" | "homework_note" | "report_remark"
         | "report_lock" | "report_template" | "exam_room" | "exam_seat" | "exam_schedule" => Some("classroom"),
+        // Staff HR (P17): leave types + staff attendance + leave records.
+        "leave_type" | "staff_attendance" | "leave_record" => Some("hr"),
         _ => None,
     }
 }
@@ -140,6 +142,17 @@ pub fn visible_row(conn: &Connection, actor: &Actor, table: &str, id: &str) -> r
     // Message templates (P14) are Core reference data every role reads to compose.
     if table == "message_template" {
         return Ok(mk(row, None));
+    }
+    // Leave types (P17) are reference data every role reads (the Apply-for-leave form).
+    if table == "leave_type" {
+        return Ok(mk(row, None));
+    }
+    // Staff attendance (P17): the Principal sees all; other staff see only their OWN.
+    if table == "staff_attendance" && actor.role != Role::Principal {
+        let who: Option<String> = conn
+            .query_row("SELECT staff_id FROM staff_attendance WHERE id=?1", [id], |r| r.get(0))
+            .optional()?;
+        return Ok(if who.as_deref() == Some(actor.staff_id.as_str()) { mk(row, None) } else { None });
     }
     // A message-outbox row (P14) is visible to its creator and the Principal only,
     // so a teacher/accountant never receives another role's messages.
@@ -302,6 +315,8 @@ pub fn snapshot(conn: &Connection, actor: &Actor) -> rusqlite::Result<Vec<Change
     for id in ids_of(conn, "SELECT id FROM period", &[])? { push(conn, "period", &id, None)?; }
     // Report-card remark templates (P16, `classroom`): reference data every role reads.
     for id in ids_of(conn, "SELECT id FROM report_template", &[])? { push(conn, "report_template", &id, None)?; }
+    // Leave types (P17, `hr`): reference data every role reads for the leave form.
+    for id in ids_of(conn, "SELECT id FROM leave_type", &[])? { push(conn, "leave_type", &id, None)?; }
 
     // Staff — names only for non-Principal.
     let staff_filter = |row: &mut serde_json::Value| {
@@ -349,6 +364,7 @@ pub fn snapshot(conn: &Connection, actor: &Actor) -> rusqlite::Result<Vec<Change
                       "store_item", "store_sale", "stock_move",
                       "timetable_slot", "substitution", "homework_note", "report_remark",
                       "exam_room", "exam_seat", "exam_schedule",
+                      "staff_attendance",
                       "marks_sheet", "mark_entry", "exam", "exam_subject"] {
                 for id in ids_of(conn, &format!("SELECT id FROM {t}"), &[])? {
                     push(conn, t, &id, None)?;
@@ -364,6 +380,10 @@ pub fn snapshot(conn: &Connection, actor: &Actor) -> rusqlite::Result<Vec<Change
             // Own requests only.
             for id in ids_of(conn, "SELECT id FROM request WHERE requested_by=?1", &[&actor.staff_id])? {
                 push(conn, "request", &id, None)?;
+            }
+            // Own staff attendance (P17): the accountant checks in like any staff.
+            for id in ids_of(conn, "SELECT id FROM staff_attendance WHERE staff_id=?1", &[&actor.staff_id])? {
+                push(conn, "staff_attendance", &id, None)?;
             }
         }
         Role::Teacher => {
@@ -428,6 +448,8 @@ pub fn snapshot(conn: &Connection, actor: &Actor) -> rusqlite::Result<Vec<Change
                 }
             }
             for id in ids_of(conn, "SELECT id FROM request WHERE requested_by=?1", &[&actor.staff_id])? { push(conn, "request", &id, None)?; }
+            // Own staff attendance (P17): the teacher's own check-ins / leave days.
+            for id in ids_of(conn, "SELECT id FROM staff_attendance WHERE staff_id=?1", &[&actor.staff_id])? { push(conn, "staff_attendance", &id, None)?; }
             // Classroom (P16): the timetable slots of the teacher's classes (covers
             // both their class-teacher class and any subject they teach in it), so
             // "My timetable" and the class grid render on the phone.

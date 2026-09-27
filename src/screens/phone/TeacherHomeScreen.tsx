@@ -14,7 +14,9 @@
 //     so the two-tone teal/gold split is exact — fidelity wins.
 //   - no hard-coded visible text: every string comes from t('teacher.*').
 //   - links/tiles navigate via @/lib/router; :active scale(.96) via .v-active-96.
-import type { ReactNode } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
+import * as api from '@/lib/api'
+import type { StaffDayDto } from '@/lib/api'
 import { Icon } from '@/components/Icon'
 import { t, getLang } from '@/lib/i18n'
 import { navigate } from '@/lib/router'
@@ -114,6 +116,54 @@ function TileGlyph({ icon }: { icon: TeacherTileIcon }) {
     case 'inline:requests':
       return INLINE_TILE.requests
   }
+}
+
+// Staff-HR check-in card (P17 Step 2) — a card on the Teacher Home (§10.5 "Home
+// tile or card for staff"). Self-contained: it reads my_staff_day; if the HR
+// module is off the call errors and the card hides. NOTE: this adds a card the
+// original TeacherHome mock does not draw — the Teacher-Home fidelity baseline
+// must be regenerated with owner approval (P11 attendance-change precedent).
+function fmtTime12(min: number | null | undefined): string {
+  if (min == null) return '—'
+  const h = Math.floor(min / 60)
+  const m = min % 60
+  const ampm = h < 12 ? 'AM' : 'PM'
+  const h12 = h % 12 === 0 ? 12 : h % 12
+  return `${h12}:${String(m).padStart(2, '0')} ${ampm}`
+}
+
+function CheckInBanner() {
+  const [day, setDay] = useState<StaffDayDto | null>(null)
+  const [hidden, setHidden] = useState(false)
+  useEffect(() => {
+    const d = new Date()
+    const today = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+    api.my_staff_day(today).then(setDay).catch(() => setHidden(true))
+  }, [])
+  if (hidden) return null
+  const today = day?.today ?? null
+  const checkedIn = !!today && today.check_in_min != null
+  const onLeave = today?.status === 'leave'
+  const away = today?.status === 'away_pending'
+  const title = onLeave ? t('staffhr.day.onLeaveToday') : checkedIn ? t('staffhr.home.checkedIn', { time: fmtTime12(today!.check_in_min) }) : t('staffhr.home.checkIn')
+  const sub = onLeave ? '' : away ? t('staffhr.home.away') : checkedIn ? '' : t('staffhr.home.checkInSub')
+  return (
+    <button
+      type="button"
+      className="v-active-96"
+      onClick={() => navigate('/teacher/checkin')}
+      style={{ display: 'flex', alignItems: 'center', gap: 14, width: '100%', textAlign: 'left', padding: '14px 16px', borderRadius: 16, border: '1px solid rgba(255,255,255,0.12)', background: 'rgba(255,255,255,0.05)', color: '#FFFFFF' }}
+    >
+      <span style={{ width: 42, height: 42, borderRadius: 21, flexShrink: 0, border: '1px solid rgba(197,171,122,0.5)', color: '#C5AB7A', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        <Icon name={checkedIn || onLeave ? 'check' : 'clock'} size={20} strokeWidth={1.7} />
+      </span>
+      <span style={{ flexGrow: 1, display: 'flex', flexDirection: 'column', gap: 2, minWidth: 0 }}>
+        <b style={{ fontWeight: 600, fontSize: 15 }}>{title}</b>
+        {sub ? <span style={{ fontSize: 12, color: '#9FACBF' }}>{sub}</span> : null}
+      </span>
+      <Icon name="chevronRight" size={18} strokeWidth={1.6} />
+    </button>
+  )
 }
 
 export default function TeacherHomeScreen({ data }: { data: TeacherHomeData }) {
@@ -256,6 +306,9 @@ export default function TeacherHomeScreen({ data }: { data: TeacherHomeData }) {
             </span>
           </div>
         </div>
+
+        {/* Staff-HR check-in card (P17). Hidden when the HR module is off. */}
+        <CheckInBanner />
 
         {/* Task card. */}
         <section

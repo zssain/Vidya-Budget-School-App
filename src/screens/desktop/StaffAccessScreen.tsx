@@ -7,6 +7,7 @@ import { useEffect, useState } from 'react'
 import * as api from '@/lib/api'
 import type { CmdError, ClassDto, InviteDto, StaffFullDto } from '@/lib/api'
 import { t } from '@/lib/i18n'
+import StaffAttendanceRegister from './StaffAttendanceRegister'
 
 const CARD: React.CSSProperties = { background: 'var(--surface)', border: '1px solid var(--line)', borderRadius: 16 }
 const SERIF = "'Newsreader', Georgia, serif"
@@ -34,10 +35,13 @@ export default function StaffAccessScreen() {
   const [invite, setInvite] = useState<InviteDto | null>(null)
   const [showAdd, setShowAdd] = useState(false)
   const [form, setForm] = useState({ name: '', role: 'teacher', mobile: '', email: '' })
+  const [tab, setTab] = useState<'list' | 'attendance'>('list')
+  const [hrOn, setHrOn] = useState(false)
 
   const load = () => {
     api.list_staff_access().then(setStaff).catch((e) => setError(errMsg(e as CmdError)))
     api.list_classes().then(setClasses).catch(() => {})
+    api.list_modules().then((ms) => setHrOn(ms.find((m) => m.key === 'hr')?.enabled ?? false)).catch(() => {})
   }
   useEffect(load, [])
 
@@ -73,9 +77,23 @@ export default function StaffAccessScreen() {
     <div style={{ minHeight: '100vh', background: 'var(--bg)', color: 'var(--ink)', padding: 40, fontFamily: "'Geist', 'Noto Sans Devanagari', system-ui, sans-serif" }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', marginBottom: 24 }}>
         <h1 style={{ fontFamily: SERIF, fontSize: 40, letterSpacing: '-0.025em', margin: 0 }}>{t('sa.title')}</h1>
-        <button onClick={() => setShowAdd((v) => !v)} style={btn('var(--accent)', '#fff')}>{t('sa.add')}</button>
+        {tab === 'list' && <button onClick={() => setShowAdd((v) => !v)} style={btn('var(--accent)', '#fff')}>{t('sa.add')}</button>}
       </div>
+      {hrOn && (
+        <div style={{ display: 'flex', gap: 10, marginBottom: 20 }}>
+          {(['list', 'attendance'] as const).map((tk) => (
+            <button key={tk} type="button" onClick={() => setTab(tk)} style={{ height: 38, padding: '0 18px', borderRadius: 8, fontSize: 14, fontWeight: 500, cursor: 'pointer', border: `1px solid ${tab === tk ? 'var(--accent)' : 'var(--line-strong)'}`, background: tab === tk ? 'var(--accent)' : 'var(--white)', color: tab === tk ? 'var(--white)' : 'var(--ink)' }}>
+              {tk === 'list' ? t('staffhr.reg.tabList') : t('staffhr.reg.tabAttendance')}
+            </button>
+          ))}
+        </div>
+      )}
       {error && <p style={{ color: 'var(--danger)', fontSize: 13 }}>{error}</p>}
+
+      {tab === 'attendance' ? (
+        <StaffAttendanceRegister />
+      ) : (
+        <>
 
       {showAdd && (
         <div style={{ ...CARD, padding: 20, marginBottom: 20, maxWidth: 520 }}>
@@ -152,6 +170,8 @@ export default function StaffAccessScreen() {
             </div>
           </div>
         </div>
+      )}
+        </>
       )}
     </div>
   )

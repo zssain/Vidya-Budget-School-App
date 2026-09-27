@@ -78,6 +78,10 @@ fn action_for(table: &str, kind: &str) -> Option<Action> {
         // Classroom (P16): a teacher's homework/notes and report-card remarks.
         ("homework_note", _) => Some(Action::ManageNotes),
         ("report_remark", _) => Some(Action::EnterReportRemark),
+        // Staff HR (P17): leave types / leave records are Principal-managed.
+        ("leave_type", _) | ("leave_record", _) => Some(Action::ManageStaffHr),
+        // `staff_attendance` is decided per-row in `apply_op` (own = StaffCheckIn,
+        // another staff's row = ManageStaffHr), so it is not mapped here.
         _ => None,
     }
 }
@@ -271,7 +275,17 @@ pub fn apply_op(conn: &mut Connection, op: &Op) -> rusqlite::Result<OpResult> {
 
     // 4) Module switch (§14) then permission (vidya-core decides). A disabled
     //    module's op is rejected server-side before the permission check.
-    if let Some(action) = action_for(&op.table, &op.kind) {
+    // Staff HR (P17): a `staff_attendance` op is the author's own check-in
+    // (StaffCheckIn, any active staff) when the row's `staff_id` is the author,
+    // otherwise a Principal manual entry (ManageStaffHr). This stops a staff
+    // member forging another staff member's attendance.
+    let hr_action = if op.table == "staff_attendance" {
+        let own = op.payload.get("staff_id").and_then(|v| v.as_str()) == Some(op.staff_id.as_str());
+        Some(if own { Action::StaffCheckIn } else { Action::ManageStaffHr })
+    } else {
+        None
+    };
+    if let Some(action) = hr_action.or_else(|| action_for(&op.table, &op.kind)) {
         let enabled = crate::modules::enabled_set(conn)?;
         if vidya_core::modules::require_module(&enabled, action).is_err() {
             return finalize(conn, op, rejected(&op.op_id, codes::MODULE_OFF));
