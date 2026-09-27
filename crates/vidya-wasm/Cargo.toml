@@ -24,6 +24,7 @@ serde_json = "1"             # §13; JSON strings cross the boundary (no serde-w
 
 [dev-dependencies]
 wasm-bindgen-test = "0.3"    # runs the parity tests under `wasm-pack test --node`
+base64 = "0.22"              # §13; test-only, to encode a sample relay session key
 
 # Release size tuning lives at the workspace root [profile.release] (lto, opt-level="s",
 # strip) — a crate-level profile is ignored in a workspace, so none is set here.

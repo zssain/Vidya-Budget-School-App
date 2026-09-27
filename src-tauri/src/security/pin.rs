@@ -1,52 +1,22 @@
-//! PIN unlock (docs/00-SYSTEM-CONTEXT.md §9, prompts/P02 Step 6). Argon2id
-//! (m = 19 MiB, t = 2, p = 1). Lockout: 5 wrong → 30 s, doubling, max 1 h.
+//! PIN unlock — a thin **platform wrapper** over the shared, pure `vidya_core::pin`
+//! logic (docs/00-SYSTEM-CONTEXT.md §9, §18, prompts/P02 Step 6).
+//!
+//! The Argon2id configuration (m = 19 MiB, t = 2, p = 1), verification and the
+//! lockout curve now live in `vidya_core::pin` so the iPhone PWA hashes/verifies/
+//! locks out PINs IDENTICALLY. vidya-core is pure and does not generate the salt;
+//! this wrapper adds the only platform bit — a fresh **OS-random** 16-byte salt —
+//! and delegates. (In the browser the PWA supplies a `crypto.getRandomValues` salt.)
 
-use argon2::password_hash::SaltString;
-use argon2::{Algorithm, Argon2, Params, PasswordHash, PasswordHasher, PasswordVerifier, Version};
 use rand::RngCore;
 
-fn argon2() -> Argon2<'static> {
-    // m = 19 MiB = 19456 KiB, t = 2, p = 1.
-    let params = Params::new(19_456, 2, 1, None).expect("argon2 params");
-    Argon2::new(Algorithm::Argon2id, Version::V0x13, params)
-}
+// Re-export the shared pure logic so existing callers (`security::pin::…`) are unchanged.
+pub use vidya_core::pin::{is_locked, lockout_seconds, remaining_before_lock, verify_pin};
 
-/// Hash a PIN → a PHC string (embeds salt + params).
+/// Hash a PIN → a PHC string (embeds salt + params), using a fresh OS-random salt.
 pub fn hash_pin(pin: &str) -> Result<String, String> {
     let mut salt = [0u8; 16];
     rand::rngs::OsRng.fill_bytes(&mut salt);
-    let salt = SaltString::encode_b64(&salt).map_err(|e| e.to_string())?;
-    let hash = argon2().hash_password(pin.as_bytes(), &salt).map_err(|e| e.to_string())?;
-    Ok(hash.to_string())
-}
-
-/// Verify a PIN against a stored PHC string.
-pub fn verify_pin(pin: &str, phc: &str) -> bool {
-    match PasswordHash::new(phc) {
-        Ok(parsed) => argon2().verify_password(pin.as_bytes(), &parsed).is_ok(),
-        Err(_) => false,
-    }
-}
-
-/// Lockout wait after `fail_count` consecutive wrong PINs (§9). `None` before the
-/// 5th failure; then 30 s doubling each further failure, capped at 1 hour.
-pub fn lockout_seconds(fail_count: u32) -> Option<u64> {
-    if fail_count < 5 {
-        return None;
-    }
-    let over = fail_count - 5;
-    let secs = 30u64.checked_shl(over).unwrap_or(3600).min(3600);
-    Some(secs)
-}
-
-/// Tries remaining before the account locks.
-pub fn remaining_before_lock(fail_count: u32) -> u32 {
-    5u32.saturating_sub(fail_count)
-}
-
-/// Whether the account is currently locked (times in epoch ms).
-pub fn is_locked(locked_until_ms: Option<i64>, now_ms: i64) -> bool {
-    matches!(locked_until_ms, Some(until) if now_ms < until)
+    vidya_core::pin::hash_pin_with_salt(pin, &salt)
 }
 
 #[cfg(test)]
@@ -60,6 +30,16 @@ mod tests {
         assert!(!verify_pin("4321", &phc));
         assert!(!verify_pin("1234", "not-a-hash"));
         assert!(phc.starts_with("$argon2id$"));
+    }
+
+    #[test]
+    fn hash_uses_a_fresh_random_salt() {
+        // The wrapper's contribution: two hashes of the same PIN differ (distinct
+        // OS-random salts), yet both verify.
+        let a = hash_pin("1234").unwrap();
+        let b = hash_pin("1234").unwrap();
+        assert_ne!(a, b, "fresh salt per hash");
+        assert!(verify_pin("1234", &a) && verify_pin("1234", &b));
     }
 
     #[test]

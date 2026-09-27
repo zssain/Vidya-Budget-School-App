@@ -19,3 +19,15 @@ ed25519-dalek = "2"
 # vidya-core stays IO-free and compiles to wasm32.
 chacha20poly1305 = "0.10"
 hmac = "0.12"
+# PIN hashing (Argon2id) shared with the PWA (§9, §18). Pure: the salt is supplied
+# by the caller, so no `rand` here; compiles to wasm32.
+argon2 = "0.5"
+
+# On wasm32 the transitive `getrandom` (via rand_core, pulled by chacha20poly1305/
+# argon2/ed25519-dalek) needs its `js` backend to compile — it wires to the browser
+# WebCrypto `crypto.getRandomValues`. This is the wasm randomness backend for the
+# §13-allowed rand/argon2/aead crates; it is NOT compiled for native targets. vidya
+# core still never *calls* it (the salt/nonce are caller-supplied) — it only needs
+# to link on wasm32.
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+getrandom = { version = "0.2", features = ["js"] }

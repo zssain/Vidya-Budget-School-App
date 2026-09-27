@@ -32,6 +32,7 @@ pub mod modules;
 pub mod notes;
 pub mod numbering;
 pub mod permissions;
+pub mod pin;
 pub mod receipts;
 pub mod report;
 pub mod requests;

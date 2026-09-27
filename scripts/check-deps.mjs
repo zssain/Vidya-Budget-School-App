@@ -32,6 +32,9 @@ const RUST_ALLOWED = new Set([
   // These are only in `crates/vidya-wasm` (the PWA's WASM module) — never in the
   // Tauri app build. `wasm-bindgen-test` is a dev/test dep.
   'wasm-bindgen', 'wasm-bindgen-test',
+  // wasm32-only randomness backend for the §13 rand/argon2/aead crates (WebCrypto);
+  // gated to `cfg(target_arch = "wasm32")`, never in a native/app build (§18).
+  'getrandom',
 ])
 
 const JS_ALLOWED = new Set([

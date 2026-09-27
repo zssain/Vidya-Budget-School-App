@@ -16,6 +16,7 @@
 
 use vidya_core::attendance;
 use vidya_core::hlc::{self, Hlc};
+use vidya_core::{pin, seal};
 use wasm_bindgen::prelude::*;
 
 /// The vidya-core version compiled into the WASM — a smoke test that the module
@@ -84,6 +85,87 @@ pub fn hlc_skew(local_wall_ms: f64, remote_wall_ms: f64) -> bool {
     hlc::skew_flag(local_wall_ms as u64, remote_wall_ms as u64)
 }
 
+// ---- Sealing (identical .vop bundle / relay envelope crypto as the app) --------
+// The browser supplies the 12-byte nonce (crypto.getRandomValues) and does the
+// ops→JSON itself; these wrap the pure `vidya_core::seal` primitives so a bundle
+// sealed here is byte-compatible with one sealed by the Android/desktop app.
+
+fn key32(k: &[u8]) -> Result<[u8; 32], String> {
+    k.try_into().map_err(|_| "key must be 32 bytes".to_string())
+}
+
+/// Seal `plaintext` under a 32-byte `key` with `aad` and a caller-supplied 12-byte
+/// `nonce` → `nonce ‖ ciphertext+tag`. Throws on a bad key/nonce length.
+#[wasm_bindgen]
+pub fn seal_with_nonce(key: &[u8], aad: &[u8], nonce: &[u8], plaintext: &[u8]) -> Result<Vec<u8>, String> {
+    seal::seal_with_nonce(&key32(key)?, aad, nonce, plaintext).map_err(|e| format!("{e:?}"))
+}
+
+/// Open a `nonce ‖ ciphertext+tag` blob under a 32-byte `key` with `aad`. Throws on
+/// a tampered/short blob, wrong key, or wrong associated data.
+#[wasm_bindgen]
+pub fn seal_open(key: &[u8], aad: &[u8], sealed: &[u8]) -> Result<Vec<u8>, String> {
+    seal::open(&key32(key)?, aad, sealed).map_err(|e| format!("{e:?}"))
+}
+
+/// Associated data for a Drive `.vop` bundle (audience + key version).
+#[wasm_bindgen]
+pub fn bundle_aad(audience: &str, key_version: f64) -> Vec<u8> {
+    seal::bundle_aad(audience, key_version as i64)
+}
+
+/// Associated data for the relay route (method/path/device/epoch).
+#[wasm_bindgen]
+pub fn relay_aad(method: &str, path: &str, device_id: &str, server_epoch: f64) -> Vec<u8> {
+    seal::associated_data(method, path, device_id, server_epoch as i64)
+}
+
+/// Derive the two per-direction relay keys from a base64 session key, returned as
+/// `c2s(32) ‖ s2c(32)` (64 bytes). Throws if the session key is not 32 bytes.
+#[wasm_bindgen]
+pub fn derive_direction_keys(session_key_b64: &str) -> Result<Vec<u8>, String> {
+    let k = seal::derive_keys(session_key_b64).map_err(|e| format!("{e:?}"))?;
+    let mut out = Vec::with_capacity(64);
+    out.extend_from_slice(&k.c2s);
+    out.extend_from_slice(&k.s2c);
+    Ok(out)
+}
+
+// ---- PIN (Argon2id, identical parameters as the app) --------------------------
+
+/// Hash a PIN with a caller-supplied 16-byte random salt → a PHC string. Throws on
+/// a bad salt length. (The browser provides the salt via crypto.getRandomValues.)
+#[wasm_bindgen]
+pub fn pin_hash_with_salt(pin: &str, salt: &[u8]) -> Result<String, String> {
+    let salt: [u8; 16] = salt.try_into().map_err(|_| "salt must be 16 bytes".to_string())?;
+    pin::hash_pin_with_salt(pin, &salt)
+}
+
+/// Verify a PIN against a stored PHC string (identical Argon2id verify as the app).
+#[wasm_bindgen]
+pub fn pin_verify(pin_input: &str, phc: &str) -> bool {
+    pin::verify_pin(pin_input, phc)
+}
+
+/// Lockout wait (seconds) after `fail_count` wrong PINs, or `undefined` before the
+/// 5th failure. Same curve as the app (30 s doubling, capped at 1 h).
+#[wasm_bindgen]
+pub fn pin_lockout_seconds(fail_count: u32) -> Option<u32> {
+    pin::lockout_seconds(fail_count).map(|s| s as u32)
+}
+
+/// Tries remaining before the account locks.
+#[wasm_bindgen]
+pub fn pin_remaining(fail_count: u32) -> u32 {
+    pin::remaining_before_lock(fail_count)
+}
+
+/// Whether the account is currently locked (times in epoch ms).
+#[wasm_bindgen]
+pub fn pin_is_locked(locked_until_ms: Option<f64>, now_ms: f64) -> bool {
+    pin::is_locked(locked_until_ms.map(|v| v as i64), now_ms as i64)
+}
+
 // ---- Parity tests: the SAME vectors run natively (`cargo test`) and in WASM
 // (`wasm-pack test --node`), proving the wrapper is faithful to vidya-core. ----
 #[cfg(test)]
@@ -124,5 +206,47 @@ mod tests {
         assert!(n1 > a, "counter advances when wall_ms is unchanged");
         // a malformed HLC throws.
         assert!(hlc_parse("not-an-hlc").is_err());
+    }
+
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+    #[cfg_attr(not(target_arch = "wasm32"), test)]
+    fn sealing_round_trips_and_is_deterministic() {
+        // Interop: a bundle sealed here is byte-identical to one the app seals with
+        // the same key+aad+nonce+plaintext, and each side can open the other's.
+        let key = [7u8; 32];
+        let nonce = [9u8; 12];
+        let aad = bundle_aad("class:c1", 3.0);
+        let sealed = seal_with_nonce(&key, &aad, &nonce, b"ops").unwrap();
+        assert_eq!(sealed, seal_with_nonce(&key, &aad, &nonce, b"ops").unwrap());
+        assert_eq!(seal_open(&key, &aad, &sealed).unwrap(), b"ops");
+        assert!(seal_open(&key, &bundle_aad("finance", 3.0), &sealed).is_err(), "wrong audience can't open");
+        assert!(seal_with_nonce(&[0u8; 8], &aad, &nonce, b"x").is_err(), "bad key length throws");
+        // Relay direction keys derive to 64 bytes (c2s ‖ s2c), and the two differ.
+        let dk = derive_direction_keys(&base64_std([7u8; 32])).unwrap();
+        assert_eq!(dk.len(), 64);
+        assert_ne!(&dk[..32], &dk[32..]);
+    }
+
+    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
+    #[cfg_attr(not(target_arch = "wasm32"), test)]
+    fn pin_hash_verify_and_lockout_match_core() {
+        let salt = [3u8; 16];
+        let phc = pin_hash_with_salt("1234", &salt).unwrap();
+        assert!(pin_verify("1234", &phc));
+        assert!(!pin_verify("4321", &phc));
+        assert!(phc.contains("m=19456,t=2,p=1"), "identical Argon2id params");
+        assert!(pin_hash_with_salt("1234", &[0u8; 8]).is_err(), "bad salt length throws");
+        assert_eq!(pin_lockout_seconds(4), None);
+        assert_eq!(pin_lockout_seconds(5), Some(30));
+        assert_eq!(pin_remaining(4), 1);
+        assert!(pin_is_locked(Some(2000.0), 1000.0));
+        assert!(!pin_is_locked(None, 1000.0));
+    }
+
+    /// Base64 (standard) of a 32-byte array — a tiny helper for the relay-key test
+    /// (the app passes the session key as base64).
+    fn base64_std(bytes: [u8; 32]) -> String {
+        use base64::Engine;
+        base64::engine::general_purpose::STANDARD.encode(bytes)
     }
 }
