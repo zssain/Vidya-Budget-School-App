@@ -2,6 +2,18 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
+    <!-- Content-Security-Policy (Phase 19, Step 8). The PWA talks to exactly two
+         external hosts: accounts.google.com (the GIS sign-in library + token flow)
+         and www.googleapis.com (Drive REST); Drive media downloads may redirect to
+         *.googleusercontent.com. 'wasm-unsafe-eval' lets Safari 16.4+ instantiate
+         our vidya-wasm module; 'unsafe-inline' style is required because the shared
+         React components use inline style attributes. No inline/remote scripts
+         beyond GIS. The host SHOULD also send this as an HTTP header (with
+         frame-ancestors 'none', which meta ignores) — see docs/DEPLOY-PWA.md. -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; base-uri 'self'; object-src 'none'; img-src 'self' data: blob:; font-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'wasm-unsafe-eval' https://accounts.google.com; connect-src 'self' https://www.googleapis.com https://accounts.google.com https://*.googleusercontent.com; frame-src https://accounts.google.com; worker-src 'self'; manifest-src 'self'; form-action 'self'"
+    />
     <!-- viewport-fit=cover so the phone layout's env(safe-area-inset-*) works on
          iPhones with a notch/home indicator (the layout already uses them). -->
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />

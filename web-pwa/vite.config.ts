@@ -16,6 +16,13 @@ const appVersion: string = JSON.parse(
   readFileSync(fileURLToPath(new URL('../package.json', import.meta.url)), 'utf8'),
 ).version
 
+// The browser OAuth client ID is a build-time, NON-secret value (like the desktop
+// and Android client IDs in build-config/release.json). CI passes it as the repo
+// Variable GOOGLE_CLIENT_ID_WEB; a local shell may use the VITE_-prefixed name.
+// When neither is set we leave it to Vite's normal .env loading — an empty value
+// makes the app show a "sign-in not set up yet" state (no crash). See DEPLOY-PWA.md.
+const webClientId = process.env.VITE_GOOGLE_CLIENT_ID_WEB ?? process.env.GOOGLE_CLIENT_ID_WEB
+
 // Step 6: generate dist/sw.js from sw-template.js, injecting the app shell + every
 // emitted asset (hashed JS/CSS/WASM/fonts) as the precache list and a content-hash
 // version. Hand-written service worker; no Workbox.
@@ -34,9 +41,25 @@ function serviceWorker(): Plugin {
   }
 }
 
+// SPA fallback for static hosts. The router is hash-based, but the invitation
+// deep-link is a real path — `/join#d=…` — so on its FIRST load (in Safari, before
+// the service worker exists) the host must return index.html for that path. GitHub
+// Pages serves 404.html for any unknown path, so we emit a copy of index.html as
+// 404.html. Cloudflare Pages uses a `_redirects` rule instead (see DEPLOY-PWA.md).
+function spaFallback(): Plugin {
+  return {
+    name: 'vidya-spa-fallback',
+    apply: 'build',
+    writeBundle() {
+      const dist = (p: string) => fileURLToPath(new URL('./dist/' + p, import.meta.url))
+      writeFileSync(dist('404.html'), readFileSync(dist('index.html'), 'utf8'))
+    },
+  }
+}
+
 export default defineConfig({
   root: fileURLToPath(new URL('.', import.meta.url)),
-  plugins: [react(), tailwindcss(), serviceWorker()],
+  plugins: [react(), tailwindcss(), serviceWorker(), spaFallback()],
   resolve: {
     alias: {
       // Same alias as the app so the shared src/ components resolve identically.
@@ -48,6 +71,9 @@ export default defineConfig({
   define: {
     'import.meta.env.VITE_PLATFORM': JSON.stringify('web'),
     __APP_VERSION__: JSON.stringify(appVersion),
+    ...(webClientId
+      ? { 'import.meta.env.VITE_GOOGLE_CLIENT_ID_WEB': JSON.stringify(webClientId) }
+      : {}),
   },
   build: {
     outDir: fileURLToPath(new URL('./dist', import.meta.url)),

@@ -204,10 +204,58 @@ jobs:
           name: Vidya ${{ github.ref_name }}
           files: out/*
 
+  # ---- iPhone PWA: static bundle (WASM + web), zipped ---------------------
+  # Builds crates/vidya-wasm to WebAssembly and the static web-pwa/ site, then
+  # attaches it as Vidya-PWA_<ver>.zip. This is the deployable bundle for the free
+  # static host (GitHub/Cloudflare Pages) — see docs/DEPLOY-PWA.md; the workflow does
+  # NOT auto-deploy to a live domain (owner confirms the subdomain, §18). The web
+  # OAuth client ID is a NON-secret build value like the desktop/Android IDs.
+  pwa:
+    name: iPhone PWA
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: '.nvmrc'
+          cache: 'npm'
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - run: npm ci
+      # wasm-pack drives the WASM build (build:wasm). wasm-opt is disabled in
+      # crates/vidya-wasm/Cargo.toml, so no binaryen download is needed.
+      - name: Install wasm-pack
+        run: cargo install wasm-pack --locked
+      - name: Sync version from the tag
+        run: node scripts/set-version.mjs "${GITHUB_REF_NAME#v}"
+      - name: Require the Google Web client ID (no fake sign-in)
+        run: |
+          if [ -z "${{ vars.GOOGLE_CLIENT_ID_WEB }}" ]; then
+            echo "::error::GOOGLE_CLIENT_ID_WEB repo Variable is empty — the PWA could not sign in to Drive. Add it (Settings → Secrets and variables → Actions → Variables). See docs/DEPLOY-PWA.md." >&2
+            exit 1
+          fi
+      - name: Build the PWA (WASM + static web)
+        env:
+          GOOGLE_CLIENT_ID_WEB: ${{ vars.GOOGLE_CLIENT_ID_WEB }}
+        run: npm run build:web
+      - name: Package the static site
+        run: |
+          VER="${GITHUB_REF_NAME#v}"
+          mkdir -p out
+          ( cd web-pwa/dist && zip -r "../../out/Vidya-PWA_${VER}.zip" . )
+      - name: Attach to DRAFT release
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          tag_name: ${{ github.ref_name }}
+          name: Vidya ${{ github.ref_name }}
+          files: out/*
+
   # ---- SHA256SUMS.txt + release notes over every attached asset -----------
   checksums:
     name: SHA256SUMS + notes
-    needs: [macos, windows, android]
+    needs: [macos, windows, android, pwa]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

@@ -18,6 +18,7 @@ record; staff join from other PCs and Android phones.
 | macOS | `Vidya_1.0.0_universal.dmg` | macOS 12 or newer, Intel **and** Apple Silicon |
 | Android (newer phones) | `Vidya_1.0.0_arm64-v8a.apk` | Android 7.0 or newer, 64-bit |
 | Android (older / low-end phones) | `Vidya_1.0.0_armeabi-v7a.apk` | Android 7.0 or newer, 32-bit |
+| iPhone | *nothing to download — a web app* | iOS 16.4 or newer; add from Safari (see below) |
 
 > If the universal macOS `.dmg` is ever too large for the size guarantee below,
 > we ship two per-architecture files instead: `Vidya_1.0.0_aarch64.dmg`
@@ -36,6 +37,8 @@ macOS/Linux).
 - **Windows:** Windows 10 or 11, 64-bit. Runs on a 4 GB RAM PC.
 - **macOS:** macOS 12 (Monterey) or newer. Intel or Apple Silicon.
 - **Android:** Android 7.0 or newer (API level 24), phones with 2 GB RAM.
+- **iPhone:** iOS 16.4 or newer. Added from **Safari** as a Home-Screen web app —
+  there is no App Store download and no Apple ID needed.
 
 ---
 
@@ -182,6 +185,49 @@ Sync is still **best-effort** in the background and is never promised while the
 app is closed — Vidya always shows honest status ("Offline · N waiting to send",
 "Confirmed by school server") and never a fake "synced". Exempting battery
 optimisation simply gives it a better chance to send while you are away.
+
+---
+
+## iPhone (web app)
+
+Vidya on iPhone is an **installable web app** — there is nothing to download from
+the App Store, and no Apple ID. You add it from Safari and it then behaves like a
+normal app icon: it runs full-screen, works offline, and keeps your data on the phone.
+
+**You need:** an iPhone on **iOS 16.4 or newer**, and the web address from your
+school (for example `https://app.vidya.zuhairhussain.com`).
+
+### 1. Add it to your Home Screen
+
+1. Open the web address in **Safari** (it must be Safari — only Safari can install a
+   Home-Screen web app on iPhone).
+2. Tap the **Share** button (the square with an up-arrow).
+3. Scroll down and tap **Add to Home Screen**, then **Add**.
+4. Open **Vidya from the new Home-Screen icon** — always from the icon, not the Safari
+   tab. That is what makes it run full-screen and keep your data.
+
+### 2. Join your school
+
+Open the invitation **link or QR code** the Principal sent you (the same one works for
+Android and iPhone), tap **Join**, and set a **PIN**. Your request goes to the school
+through Google Drive; once the school PC approves it (usually a minute or two), you are
+in. You sign in to Google **once** — the school's account, used only to sync through
+its Google Drive. Vidya can see only the files it creates.
+
+### 3. Good to know (how the iPhone app differs)
+
+The same honest limits appear in the app under the account button → **About this
+iPhone app**:
+
+- **Syncs through Google Drive**, not the local Wi-Fi — changes reach other devices in
+  about a minute.
+- **No background sync.** Changes send and arrive only while Vidya is open, so open the
+  app to sync.
+- **Photos** come from your camera or photo library when you attach them.
+- **No push notifications yet** — alerts show inside the app while it is open.
+- **Your data stays on the iPhone.** Added to the Home Screen, Vidya keeps your data
+  (it is exempt from Safari's 7-day cleanup); only very low iPhone storage could clear
+  it, so keep Vidya synced.
 
 ---
 
