@@ -9,17 +9,27 @@
 // dead code — `isWeb` is false there).
 
 import type { CmdError } from '../api'
+import { createPin, lock } from './lock'
 
-/** A Web command handler: `(args) => result`. Registered in Step 3+ (store/sync). */
+/** A Web command handler: `(args) => result`. */
 export type WebHandler = (args?: Record<string, unknown>) => Promise<unknown>
 
 /**
- * The commands the Web backend serves. Empty in Step 2 (the choke-point plumbing);
- * Step 3+ fills it with the phone-screen commands (unlock/PIN, attendance, notes,
- * staff check-in, leave, requests, inbox, the accountant collect-fee, sync status…).
- * A command absent from this map is intentionally unavailable in the PWA.
+ * The commands the Web backend serves. Step 3 wires the local-store foundation
+ * (PIN create/lock via WASM Argon2id + the encrypted IndexedDB store); the rest of
+ * the phone-screen commands (unlock→app_state, attendance, notes, staff check-in,
+ * leave, requests, inbox, the accountant collect-fee, sync status…) are registered
+ * as the join flow (Step 5) and each screen are ported. A command absent from this
+ * map is intentionally unavailable in the PWA and returns NOT_AVAILABLE_ON_WEB.
  */
-export const WEB_COMMANDS: Record<string, WebHandler> = {}
+export const WEB_COMMANDS: Record<string, WebHandler> = {
+  create_pin: async (args) => {
+    await createPin(String(args?.pin ?? ''))
+  },
+  lock: async () => {
+    lock()
+  },
+}
 
 /** True if the PWA implements `cmd`. The UI hides any feature whose command isn't. */
 export function isAvailableOnWeb(cmd: string): boolean {

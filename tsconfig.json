@@ -22,7 +22,10 @@
 
     "types": ["vite/client", "node"],
     "baseUrl": ".",
-    "paths": { "@/*": ["./src/*"] }
+    "paths": {
+      "@/*": ["./src/*"],
+      "@wasm": ["./src/lib/web/wasm-shim.d.ts"]
+    }
   },
   "include": ["src", "tests", "vite.config.ts", "playwright.config.ts", "web-pwa"],
   "exclude": ["legacy", "node_modules", "dist", "src-tauri", "cloud", "design"]

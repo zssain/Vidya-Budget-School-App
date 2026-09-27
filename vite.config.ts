@@ -42,7 +42,12 @@ function designMock(): Plugin {
 export default defineConfig({
   plugins: [react(), tailwindcss(), designMock()],
   resolve: {
-    alias: { '@': fileURLToPath(new URL('./src', import.meta.url)) },
+    alias: {
+      '@': fileURLToPath(new URL('./src', import.meta.url)),
+      // The Tauri/test build never runs the PWA's WASM; alias `@wasm` to a stub so
+      // the shared Web-backend code resolves (the PWA build aliases the real module).
+      '@wasm': fileURLToPath(new URL('./src/lib/web/wasm-stub.ts', import.meta.url)),
+    },
   },
   // Platform is decided at BUILD time (see src/lib/platform.ts).
   define: {

@@ -26,9 +26,11 @@ import '@fontsource/noto-sans-telugu/telugu-600.css'
 import '@/styles/app.css'
 import { loadAccent } from '@/lib/theme'
 import { loadLang } from '@/lib/i18n'
+import { installAutoLock } from '@/lib/web/lock'
 
 loadAccent()
 loadLang()
+installAutoLock() // auto-lock after 5 min hidden (§9)
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>

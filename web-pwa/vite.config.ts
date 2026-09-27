@@ -19,8 +19,12 @@ export default defineConfig({
   root: fileURLToPath(new URL('.', import.meta.url)),
   plugins: [react(), tailwindcss()],
   resolve: {
-    // Same alias as the app so the shared src/ components resolve identically.
-    alias: { '@': fileURLToPath(new URL('../src', import.meta.url)) },
+    alias: {
+      // Same alias as the app so the shared src/ components resolve identically.
+      '@': fileURLToPath(new URL('../src', import.meta.url)),
+      // The generated vidya-wasm ES module (built by `npm run build:wasm`).
+      '@wasm': fileURLToPath(new URL('./wasm/vidya_wasm.js', import.meta.url)),
+    },
   },
   define: {
     'import.meta.env.VITE_PLATFORM': JSON.stringify('web'),
