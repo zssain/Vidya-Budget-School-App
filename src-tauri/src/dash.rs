@@ -80,6 +80,73 @@ pub struct PrincipalDashboard {
     /// Home "Needs attention": no school **sync** account is connected yet (P12
     /// Step 1.2) — "Connect the school sync account".
     pub needs_sync_account: bool,
+    /// Home "Needs attention": approved leave whose attendance still needs a
+    /// substitute (P17 §10.5).
+    pub substitute_needs: Vec<SubstituteNeed>,
+}
+
+/// A class-teacher's approved leave whose attendance still needs a substitute
+/// (Principal Home "Needs attention", P17 §10.5).
+#[derive(Debug, Clone, Serialize)]
+pub struct SubstituteNeed {
+    pub teacher_id: String,
+    pub teacher_name: String,
+    /// The still-uncovered working dates (`YYYY-MM-DD`), from `today` onward.
+    pub dates: Vec<String>,
+}
+
+/// Approved leaves of a class-teacher, current or upcoming, whose attendance has
+/// not yet been covered by a substitution (Home "arrange substitutes for …").
+pub fn substitute_needs(conn: &Connection, today: &str) -> rusqlite::Result<Vec<SubstituteNeed>> {
+    let ymd = time::macros::format_description!("[year]-[month]-[day]");
+    let week = crate::calendar::load_week(conn)?;
+    let events = crate::calendar::load_events(conn)?;
+    let mut stmt = conn.prepare(
+        "SELECT lr.staff_id, s.name, lr.from_date, lr.to_date FROM leave_record lr \
+         JOIN staff s ON s.id=lr.staff_id \
+         WHERE lr.to_date>=?1 AND EXISTS (SELECT 1 FROM class c WHERE c.class_teacher_id=lr.staff_id) \
+         ORDER BY lr.from_date",
+    )?;
+    let leaves: Vec<(String, String, String, String)> = stmt
+        .query_map(params![today], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    drop(stmt);
+    let mut out = Vec::new();
+    for (staff_id, name, from, to) in leaves {
+        let (from_d, to_d) = match (vidya_core::calendar::parse_date(&from), vidya_core::calendar::parse_date(&to)) {
+            (Some(f), Some(t)) => (f, t),
+            _ => continue,
+        };
+        let mut dates = Vec::new();
+        let mut day = from_d;
+        loop {
+            let ds = day.format(&ymd).unwrap_or_default();
+            if ds.as_str() >= today && vidya_core::calendar::is_working_day(day, &week, &events) {
+                let covered: bool = conn
+                    .query_row(
+                        "SELECT 1 FROM substitution WHERE absent_teacher_id=?1 AND date=?2 AND includes_attendance=1 LIMIT 1",
+                        params![staff_id, ds],
+                        |_| Ok(()),
+                    )
+                    .optional()?
+                    .is_some();
+                if !covered {
+                    dates.push(ds);
+                }
+            }
+            if day == to_d {
+                break;
+            }
+            match day.next_day() {
+                Some(n) => day = n,
+                None => break,
+            }
+        }
+        if !dates.is_empty() {
+            out.push(SubstituteNeed { teacher_id: staff_id, teacher_name: name, dates });
+        }
+    }
+    Ok(out)
 }
 
 /// The latest completed backup, for the "Last backup" line (honest status §3.13).
@@ -399,5 +466,6 @@ pub fn principal_dashboard(conn: &Connection, today: &str) -> rusqlite::Result<P
         open_conflicts: open_conflicts(conn)?,
         last_backup: last_backup(conn)?,
         needs_sync_account: crate::drive_account::needs_sync_account(conn)?,
+        substitute_needs: substitute_needs(conn, today)?,
     })
 }

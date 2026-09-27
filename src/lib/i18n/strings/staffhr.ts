@@ -119,6 +119,9 @@ const staffhr: Bundle = {
     'staffhr.approve.doneSub': 'Substitutes next.',
     'staffhr.approve.doneNote': '{name} · salary register updated · {name2} notified',
     'staffhr.approve.arrangeSubs': 'Arrange substitutes',
+    'staffhr.salary.awayFlag': 'Away check-in — counted present, pending your review',
+    // Home "Needs attention": arrange substitutes for an approved leave.
+    'staffhr.home.needSubs': 'Arrange substitutes for {name}',
   },
   hi: {
     'staffhr.settings.eyebrow': 'स्टाफ़ एचआर',
@@ -227,6 +230,8 @@ const staffhr: Bundle = {
     'staffhr.approve.doneSub': 'अब स्थानापन्न।',
     'staffhr.approve.doneNote': '{name} · वेतन रजिस्टर अपडेट · {name2} को सूचित किया',
     'staffhr.approve.arrangeSubs': 'स्थानापन्न व्यवस्था करें',
+    'staffhr.salary.awayFlag': 'दूर से चेक-इन — उपस्थित गिना गया, आपकी समीक्षा शेष',
+    'staffhr.home.needSubs': '{name} के लिए स्थानापन्न व्यवस्था करें',
   },
 }
 

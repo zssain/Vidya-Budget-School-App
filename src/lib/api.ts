@@ -683,6 +683,13 @@ export interface PrincipalDashboard {
   term_label: string | null
   open_conflicts: number
   last_backup: LastBackupInfo | null
+  substitute_needs?: SubstituteNeed[] // P17: approved leave needing a substitute
+}
+
+export interface SubstituteNeed {
+  teacher_id: string
+  teacher_name: string
+  dates: string[]
 }
 
 export interface LastBackupInfo {
@@ -1089,6 +1096,7 @@ export interface SalaryRowDto {
   remaining_advance_paise: number
   net_paise: number
   paid: boolean
+  away_flagged?: boolean // P17: an away check-in counted present but flagged
 }
 export interface SalaryRegisterDto {
   month: string
@@ -1099,6 +1107,7 @@ export interface SalaryRegisterDto {
   net_to_pay_paise: number
   pending: number
   rows: SalaryRowDto[]
+  hr_on?: boolean // P17: days present come from HR — hide the manual field
 }
 export interface SalaryStructureInput {
   staff_id: string

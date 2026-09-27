@@ -71,6 +71,17 @@ function buildNeeds(d: PrincipalDashboard): HomeNeed[] {
       sub: t('home.needs.conflictSub'),
     })
   }
+  // P17: approved leave whose attendance still needs a substitute.
+  for (const s of d.substitute_needs ?? []) {
+    const dates = s.dates
+      .map((iso) => new Date(`${iso}T00:00:00`).toLocaleDateString('en-IN', { weekday: 'short' }))
+      .join(', ')
+    needs.push({
+      tone: 'warn',
+      title: t('staffhr.home.needSubs', { name: s.teacher_name }),
+      sub: dates,
+    })
+  }
   return needs.slice(0, 4)
 }
 

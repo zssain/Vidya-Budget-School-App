@@ -92,8 +92,13 @@ export default function SalaryRegister() {
                 <span style={{ color: 'var(--muted)' }}>{t(`salary.role.${r.role}`)}</span>
                 <span style={{ textAlign: 'right' }}>{formatMoney(r.monthly_paise)}</span>
                 <span style={{ textAlign: 'right', display: 'flex', gap: '4px', justifyContent: 'flex-end', alignItems: 'center' }}>
-                  {r.paid ? (
-                    <span>{r.days_present} / {r.working_days}</span>
+                  {/* P17: with the Staff-HR module on, days present come from staff
+                      attendance + leave — the manual field disappears (read-only). */}
+                  {(data.hr_on || r.paid) ? (
+                    <span>
+                      {r.days_present} / {r.working_days}
+                      {r.away_flagged ? <span title={t('staffhr.salary.awayFlag')} style={{ color: 'var(--gold-text)', marginLeft: 4 }}>*</span> : null}
+                    </span>
                   ) : (
                     <>
                       <input inputMode="numeric" value={String(days[r.staff_id] ?? r.days_present)} onChange={(e) => setDays({ ...days, [r.staff_id]: Math.max(0, Math.min(r.working_days, Number(e.target.value.replace(/[^0-9]/g, '') || '0'))) })} style={{ width: '38px', height: '30px', textAlign: 'right', borderRadius: '4px', border: '1px solid var(--line-strong)', background: 'var(--white)', color: 'var(--ink)', fontSize: '13px', fontVariantNumeric: 'tabular-nums' }} />

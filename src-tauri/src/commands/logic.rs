@@ -2541,6 +2541,9 @@ pub struct SalaryRowDto {
     pub remaining_advance_paise: i64,
     pub net_paise: i64,
     pub paid: bool,
+    /// P17: an away check-in this month is counted present but flagged for review.
+    #[serde(default)]
+    pub away_flagged: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -2553,6 +2556,10 @@ pub struct SalaryRegisterDto {
     pub net_to_pay_paise: i64,
     pub pending: i64,
     pub rows: Vec<SalaryRowDto>,
+    /// P17: when the Staff-HR module is on, days present come from staff attendance
+    /// + leave (the manual days-present field disappears on the register).
+    #[serde(default)]
+    pub hr_on: bool,
 }
 
 /// Build one register row for a staff member (computed via vidya-core).
@@ -2566,6 +2573,7 @@ fn salary_row(
     working_days: u32,
     days_present: u32,
     paid: bool,
+    away_flagged: bool,
 ) -> rusqlite::Result<SalaryRowDto> {
     let (remaining_advance, recover_target) = advance_state(conn, staff_id)?;
     let line = vidya_core::salary::compute_salary_line(&vidya_core::salary::SalaryInputs {
@@ -2588,7 +2596,32 @@ fn salary_row(
         remaining_advance_paise: remaining_advance,
         net_paise: line.net_paise,
         paid,
+        away_flagged,
     })
+}
+
+/// Days present for a staff member from Staff-HR data (§10.5): working days minus
+/// days absent minus **unpaid**-leave days. Paid leave and a not-yet-accepted
+/// `away_pending` count as present (the register flags away separately). Returns
+/// (days_present, away_flagged) for the month `YYYY-MM`.
+fn hr_days_present(conn: &Connection, staff_id: &str, month: &str, working_days: u32) -> rusqlite::Result<(u32, bool)> {
+    let absent: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM staff_attendance WHERE staff_id=?1 AND status='absent' AND date LIKE ?2||'%'",
+        params![staff_id, month],
+        |r| r.get(0),
+    )?;
+    // Unpaid-leave days attributed to the month of the leave's start date.
+    let unpaid: i64 = conn.query_row(
+        "SELECT COALESCE(SUM(unpaid_days),0) FROM leave_record WHERE staff_id=?1 AND from_date LIKE ?2||'%'",
+        params![staff_id, month],
+        |r| r.get(0),
+    )?;
+    let away: i64 = conn.query_row(
+        "SELECT COUNT(*) FROM staff_attendance WHERE staff_id=?1 AND status='away_pending' AND date LIKE ?2||'%'",
+        params![staff_id, month],
+        |r| r.get(0),
+    )?;
+    Ok((vidya_core::hr::days_present(working_days, absent as u32, unpaid as u32), away > 0))
 }
 
 /// The salary register for a month (prototype `salary`). `days` is the Principal's
@@ -2603,6 +2636,10 @@ pub fn salary_register_logic(
     require_allow(&actor, Action::ManageSalary, &Target::of(TargetKind::Fee))?;
     require_module_enabled(conn, vidya_core::modules::Module::Accounts)?;
     let working_days = working_days_in_month(conn, month)?;
+    // P17: when the Staff-HR module is on, days present come from staff attendance
+    // + leave (the manual `days` field disappears on the register); otherwise the
+    // Principal's manual per-staff entry is used (the P15 behaviour).
+    let hr_on = crate::modules::is_enabled(conn, "hr")?;
     let days_map: std::collections::HashMap<&str, u32> =
         days.iter().map(|d| (d.staff_id.as_str(), d.days_present.max(0) as u32)).collect();
 
@@ -2623,7 +2660,11 @@ pub fn salary_register_logic(
         if monthly <= 0 {
             continue;
         }
-        let days_present = *days_map.get(id.as_str()).unwrap_or(&working_days);
+        let (days_present, away_flagged) = if hr_on {
+            hr_days_present(conn, &id, month, working_days)?
+        } else {
+            (*days_map.get(id.as_str()).unwrap_or(&working_days), false)
+        };
         let paid: bool = conn
             .query_row(
                 "SELECT 1 FROM salary_line l JOIN salary_run r ON r.id=l.run_id WHERE r.month=?1 AND l.staff_id=?2 AND l.paid_voucher_id IS NOT NULL",
@@ -2632,7 +2673,7 @@ pub fn salary_register_logic(
             )
             .optional()?
             .is_some();
-        let row = salary_row(conn, &id, &name, &role, monthly, working_days, days_present, paid)?;
+        let row = salary_row(conn, &id, &name, &role, monthly, working_days, days_present, paid, away_flagged)?;
         total += row.monthly_paise;
         recovered += row.advance_recovery_paise;
         deducted += row.deduction_paise;
@@ -2651,6 +2692,7 @@ pub fn salary_register_logic(
         net_to_pay_paise: net_to_pay,
         pending,
         rows,
+        hr_on,
     })
 }
 
@@ -3659,6 +3701,15 @@ pub fn assign_substitute_logic(conn: &mut Connection, actor_s: &SessionStaff, da
     let school_id = single_school_id(conn)?;
     let includes_attendance = !plan.attendance_classes.is_empty();
     let mut periods_covered = 0i64;
+    // P17 link: if this cover is for an approved leave on `date`, tie the
+    // substitution row to that leave record (substitution.leave_record_id).
+    let leave_record_id: Option<String> = conn
+        .query_row(
+            "SELECT id FROM leave_record WHERE staff_id=?1 AND from_date<=?2 AND to_date>=?2 LIMIT 1",
+            params![absent_teacher_id, plan.date],
+            |r| r.get(0),
+        )
+        .optional()?;
 
     let tx = conn.transaction()?;
     for cover in &plan.covers {
@@ -3666,17 +3717,17 @@ pub fn assign_substitute_logic(conn: &mut Connection, actor_s: &SessionStaff, da
             continue;
         }
         tx.execute(
-            "INSERT INTO substitution(id,date,absent_teacher_id,substitute_teacher_id,class_id,period_no,includes_attendance,created_by,school_id,created_at,updated_at,sync_state) \
-             VALUES (?1,?2,?3,?4,?5,?6,0,?7,?8,?9,?9,'confirmed')",
-            params![new_id("sub"), plan.date, absent_teacher_id, substitute_teacher_id, cover.class_id, cover.period_no, actor_s.id, school_id, now],
+            "INSERT INTO substitution(id,date,absent_teacher_id,substitute_teacher_id,class_id,period_no,includes_attendance,leave_record_id,created_by,school_id,created_at,updated_at,sync_state) \
+             VALUES (?1,?2,?3,?4,?5,?6,0,?7,?8,?9,?10,?10,'confirmed')",
+            params![new_id("sub"), plan.date, absent_teacher_id, substitute_teacher_id, cover.class_id, cover.period_no, leave_record_id, actor_s.id, school_id, now],
         )?;
         periods_covered += 1;
     }
     for ac in &plan.attendance_classes {
         tx.execute(
-            "INSERT INTO substitution(id,date,absent_teacher_id,substitute_teacher_id,class_id,period_no,includes_attendance,created_by,school_id,created_at,updated_at,sync_state) \
-             VALUES (?1,?2,?3,?4,?5,NULL,1,?6,?7,?8,?8,'confirmed')",
-            params![new_id("sub"), plan.date, absent_teacher_id, substitute_teacher_id, ac.id, actor_s.id, school_id, now],
+            "INSERT INTO substitution(id,date,absent_teacher_id,substitute_teacher_id,class_id,period_no,includes_attendance,leave_record_id,created_by,school_id,created_at,updated_at,sync_state) \
+             VALUES (?1,?2,?3,?4,?5,NULL,1,?6,?7,?8,?9,?9,'confirmed')",
+            params![new_id("sub"), plan.date, absent_teacher_id, substitute_teacher_id, ac.id, leave_record_id, actor_s.id, school_id, now],
         )?;
     }
     // Notify the substitute (in-app notification; their attendance grant is live).
@@ -9850,6 +9901,43 @@ mod tests {
         assert_eq!(after["unpaid_days"].as_i64(), Some(1));
     }
 
+    #[test]
+    fn salary_days_present_come_from_hr_matching_the_p15_nair_example() {
+        let mut c = seeded();
+        // September 2026 has 26 working days (Mon–Sat). Give R. Nair 2 UNPAID leave
+        // days → days present 24, matching the P15 anchor (₹17,000, 2 unpaid →
+        // ₹1,308 deducted, net ₹15,692) — but now from HR data, not a manual field.
+        let r = request_leave_logic(&mut c, &teacher("stf-nair"), &leave_input("lt-unpaid", "2026-09-24", "2026-09-25")).unwrap();
+        decide_request_logic(&mut c, &principal(), DeviceMode::Server, &r.id, "approve", None).unwrap();
+        let reg = salary_register_logic(&mut c, &principal(), "2026-09", &[]).unwrap();
+        assert!(reg.hr_on, "HR module on → days come from HR");
+        let nair = reg.rows.iter().find(|x| x.staff_id == "stf-nair").unwrap();
+        assert_eq!(nair.working_days, 26);
+        assert_eq!(nair.days_present, 24);
+        assert_eq!(nair.unpaid_leave_days, 2);
+        assert_eq!(nair.deduction_paise, 130_800); // ₹1,308
+        assert_eq!(nair.net_paise, 1_569_200); // ₹15,692
+    }
+
+    #[test]
+    fn home_flags_substitutes_needed_after_a_class_teacher_leave() {
+        let mut c = seeded();
+        // Meena (class teacher of V-A) takes leave next Thu/Fri; no substitute yet.
+        let r = request_leave_logic(&mut c, &teacher("stf-meena"), &leave_input("lt-casual", "2026-09-24", "2026-09-25")).unwrap();
+        decide_request_logic(&mut c, &principal(), DeviceMode::Server, &r.id, "approve", None).unwrap();
+        let needs = crate::dash::substitute_needs(&c, "2026-09-23").unwrap();
+        let m = needs.iter().find(|n| n.teacher_id == "stf-meena").expect("Meena needs a substitute");
+        assert_eq!(m.dates, vec!["2026-09-24".to_string(), "2026-09-25".to_string()]);
+        // Assigning a substitute for the 24th removes that date from the need.
+        assign_substitute_logic(&mut c, &principal(), "2026-09-24", "stf-meena", "stf-anita").unwrap();
+        let needs = crate::dash::substitute_needs(&c, "2026-09-23").unwrap();
+        let m = needs.iter().find(|n| n.teacher_id == "stf-meena").unwrap();
+        assert_eq!(m.dates, vec!["2026-09-25".to_string()]);
+        // The substitution is linked to the leave record.
+        let linked: i64 = c.query_row("SELECT COUNT(*) FROM substitution WHERE absent_teacher_id='stf-meena' AND date='2026-09-24' AND leave_record_id IS NOT NULL", [], |r| r.get(0)).unwrap();
+        assert!(linked > 0, "substitution linked to the leave record");
+    }
+
     // ---- Phase 13: calendar ------------------------------------------------
     #[test]
     fn calendar_defaults_then_weekly_offs_edit() {
@@ -10813,6 +10901,11 @@ mod tests {
     #[test]
     fn salary_register_and_pay_posts_balanced_vouchers() {
         let mut c = seeded();
+        // P17 (Rule 11): the salary register now uses Staff-HR attendance when the
+        // `hr` module is on. This test exercises the P15 MANUAL days-present path,
+        // so turn HR off; the HR-driven path is covered by
+        // `salary_days_present_come_from_hr_matching_the_p15_nair_example`.
+        c.execute("UPDATE module_setting SET enabled=0 WHERE key='hr'", []).unwrap();
         let reg = salary_register_logic(&mut c, &principal(), "2026-09", &[]).unwrap();
         let wd = reg.working_days as u32;
         assert!(wd > 0, "the calendar has working days in September");
