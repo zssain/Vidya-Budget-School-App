@@ -29,6 +29,7 @@ import TeacherTimetableScreen from '@/screens/phone/TeacherTimetableScreen'
 import NotesScreen from '@/screens/phone/NotesScreen'
 import MyAttendanceScreen from '@/screens/phone/MyAttendanceScreen'
 import ApplyLeaveScreen from '@/screens/phone/ApplyLeaveScreen'
+import AboutScreen from '@/screens/phone/AboutScreen'
 import AttendanceRegisterScreen from '@/screens/desktop/AttendanceRegisterScreen'
 import MyRequestsScreen from '@/screens/desktop/MyRequestsScreen'
 import InboxScreen from '@/screens/desktop/InboxScreen'
@@ -191,6 +192,7 @@ export default function App() {
         if (base === '/teacher/notes') return <NotesScreen />
         if (base === '/teacher/checkin') return <MyAttendanceScreen />
         if (base === '/teacher/leave') return <ApplyLeaveScreen />
+        if (base === '/teacher/about') return <AboutScreen />
         return <TeacherHomeScreen data={teacherHomeFixture} />
       }
       // Principal / Accountant: every desktop screen renders inside AppShell

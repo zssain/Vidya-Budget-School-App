@@ -20,6 +20,7 @@ import type { StaffDayDto } from '@/lib/api'
 import { Icon } from '@/components/Icon'
 import { t, getLang } from '@/lib/i18n'
 import { navigate } from '@/lib/router'
+import { isWeb } from '@/lib/platform'
 import logo from '@/assets/vidya-horizontal-on-dark.svg'
 import logoHi from '@/assets/vidya-horizontal-hindi-on-dark.svg'
 import type { TeacherHomeData, TeacherTileIcon } from '@/dev/fixtures/teacherHome'
@@ -235,6 +236,9 @@ export default function TeacherHomeScreen({ data }: { data: TeacherHomeData }) {
             <button
               type="button"
               aria-label={t('teacher.aria.account')}
+              // On the iPhone PWA the account button opens the About screen (§18
+              // honest limits). On Android it stays inert, exactly as in the mock.
+              onClick={isWeb ? () => navigate('/teacher/about') : undefined}
               style={{
                 width: '44px',
                 height: '44px',

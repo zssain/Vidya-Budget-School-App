@@ -24,6 +24,7 @@ import '@fontsource/noto-sans-telugu/telugu-500.css'
 import '@fontsource/noto-sans-telugu/telugu-600.css'
 
 import '@/styles/app.css'
+import './ios.css' // iPhone-only tweaks: 16px form fields (no focus zoom), tap highlight
 import { loadAccent } from '@/lib/theme'
 import { loadLang } from '@/lib/i18n'
 import { installAutoLock } from '@/lib/web/lock'

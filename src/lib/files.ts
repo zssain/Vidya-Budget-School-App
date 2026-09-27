@@ -4,6 +4,7 @@
 
 import { save, open } from '@tauri-apps/plugin-dialog'
 import { openUrl } from '@tauri-apps/plugin-opener'
+import { isWeb } from './platform'
 
 const CSV = [{ name: 'CSV', extensions: ['csv'] }]
 
@@ -15,6 +16,14 @@ const CSV = [{ name: 'CSV', extensions: ['csv'] }]
 export async function shareWhatsApp(mobile: string | null, text: string): Promise<void> {
   const num = mobile ? `91${mobile}` : ''
   const url = `https://wa.me/${num}?text=${encodeURIComponent(text)}`
+  // iPhone PWA (Phase 19): there is no Tauri opener. Open the wa.me deep link
+  // directly — a Home-Screen web app hands it to Safari, which opens WhatsApp. If a
+  // popup is blocked in standalone mode, fall back to a same-tab navigation.
+  if (isWeb) {
+    const win = window.open(url, '_blank', 'noopener')
+    if (!win) window.location.href = url
+    return
+  }
   try {
     await openUrl(url)
   } catch {

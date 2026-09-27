@@ -7,9 +7,20 @@
 // document with @page print CSS, waits a tick for layout, then calls print().
 
 import * as api from './api'
+import { isWeb } from './platform'
 
 /** Open the print dialog for the current window. Returns false if neither path worked. */
 export async function printCurrentWindow(): Promise<boolean> {
+  // The iPhone PWA has no Tauri webview print command — go straight to the browser
+  // print dialog (iOS: Share → Print, or Save to PDF).
+  if (isWeb) {
+    try {
+      window.print()
+      return true
+    } catch {
+      return false
+    }
+  }
   try {
     await api.print_page()
     return true

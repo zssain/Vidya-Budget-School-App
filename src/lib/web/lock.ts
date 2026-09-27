@@ -31,6 +31,15 @@ export async function createPin(pin: string): Promise<void> {
   await kvPut(KEY_FAIL, 0)
   await kvPut(KEY_LOCKED_UNTIL, null)
   unlocked = true
+  // Ask the browser to keep our data (§18, spike Q6): a persisted origin is
+  // excluded from storage-pressure eviction, and Safari 17+/iOS grants persistence
+  // heuristically for a Home-Screen web app. Best-effort — a `false` or unsupported
+  // result is fine (the app still works; the data is just not eviction-proof).
+  try {
+    await navigator.storage?.persist?.()
+  } catch {
+    /* StorageManager unavailable — best-effort only */
+  }
 }
 
 export interface UnlockResult {

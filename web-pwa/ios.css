@@ -1,0 +1,23 @@
+/* iPhone PWA fixes (Phase 19, Step 7). Imported ONLY by web-pwa/main.tsx, so it
+   never lands in the Tauri (Android/desktop) bundle and never affects the fidelity
+   snapshots. */
+
+/* Safari zooms the whole page in when a focused text field's font-size is < 16px.
+   The shared components use 14–15px inline styles; on the PWA we force >= 16px on
+   form fields so tapping one never triggers that zoom. `!important` is required
+   because the components set font-size inline (inline beats a normal rule). */
+input,
+select,
+textarea {
+  font-size: 16px !important;
+}
+
+/* Keep our own font sizing in landscape (iOS otherwise inflates text), and remove
+   the grey tap-flash so taps feel native in a Home-Screen web app. */
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+* {
+  -webkit-tap-highlight-color: transparent;
+}
