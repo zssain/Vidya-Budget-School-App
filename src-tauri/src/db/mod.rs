@@ -112,22 +112,63 @@ pub fn is_readable(conn: &Connection) -> bool {
 }
 
 /// Apply pending migrations; returns the resulting schema version.
+///
+/// Foreign-key enforcement is turned OFF for the duration of a migration run and
+/// ON again afterwards — the documented SQLite pattern for schema changes, and
+/// the fix P13 prescribed for the v1→v2 upgrade. A table-recreate migration
+/// (0012 rebuilds `request`, which `reversal.request_id` references) does
+/// `DROP TABLE request`; with FK on, that DROP fails on a production DB that
+/// holds an applied reversal. `PRAGMA foreign_keys` is a no-op inside a
+/// transaction, so it MUST be toggled here, outside the per-migration
+/// transactions. Once every migration is applied, FK is re-enabled and
+/// `foreign_key_check` runs — so a migration that leaves a genuinely dangling
+/// reference is turned into a hard error instead of silent corruption. Each
+/// migration is still its own transaction, so an interrupted run leaves
+/// schema_version at the last fully-applied version.
 pub fn run_migrations(conn: &mut Connection) -> rusqlite::Result<i64> {
     let current: i64 = conn
         .query_row("SELECT COALESCE(MAX(version),0) FROM schema_version", [], |r| r.get(0))
         .unwrap_or(0);
+    let pending = MIGRATIONS.iter().any(|(v, _)| *v > current);
+    if !pending {
+        return Ok(current);
+    }
+
+    // Must be set outside any transaction to take effect.
+    conn.execute_batch("PRAGMA foreign_keys = OFF;")?;
+
     let mut applied = current;
-    for (v, sql) in MIGRATIONS {
-        if *v > current {
-            let tx = conn.transaction()?;
-            tx.execute_batch(sql)?;
-            tx.execute(
-                "INSERT INTO schema_version(version, applied_at) VALUES (?1, ?2)",
-                rusqlite::params![v, now_iso()],
-            )?;
-            tx.commit()?;
-            applied = *v;
+    let mut run = || -> rusqlite::Result<()> {
+        for (v, sql) in MIGRATIONS {
+            if *v > current {
+                let tx = conn.transaction()?;
+                tx.execute_batch(sql)?;
+                tx.execute(
+                    "INSERT INTO schema_version(version, applied_at) VALUES (?1, ?2)",
+                    rusqlite::params![v, now_iso()],
+                )?;
+                tx.commit()?;
+                applied = *v;
+            }
         }
+        Ok(())
+    };
+    let result = run();
+
+    // Always restore FK enforcement, even if a migration failed.
+    conn.execute_batch("PRAGMA foreign_keys = ON;")?;
+    result?;
+
+    // A migration that left a dangling reference is a bug — surface it loudly
+    // rather than shipping a corrupt database.
+    let violations: i64 = conn
+        .query_row("SELECT COUNT(*) FROM pragma_foreign_key_check", [], |r| r.get(0))
+        .unwrap_or(0);
+    if violations > 0 {
+        return Err(rusqlite::Error::SqliteFailure(
+            rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_CONSTRAINT_FOREIGNKEY),
+            Some(format!("post-migration foreign key check found {violations} violation(s)")),
+        ));
     }
     Ok(applied)
 }
