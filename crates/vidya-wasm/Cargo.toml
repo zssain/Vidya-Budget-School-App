@@ -1,0 +1,29 @@
+# vidya-wasm — a thin wasm-bindgen wrapper around `vidya-core` so the iPhone PWA
+# (Phase 19) runs the IDENTICAL business rules, HLC ordering, sealing and Argon2id
+# as the Android/desktop app. No IO, no licence code, no server. It only re-exports
+# vidya-core decisions across the JS boundary; it never re-implements a rule.
+#
+# Dependencies (Rule 4 / 00-context §18): `wasm-bindgen` is the wrapper mechanism
+# named by the P19 Step-1 decision; `serde_json` is §13. `wasm-bindgen-test` is a
+# dev/test tool. Build-time tools `wasm-pack` / `wasm-bindgen-cli` are not deps.
+[package]
+name = "vidya-wasm"
+version = "2.0.0"
+edition = "2021"
+description = "WASM wrapper around vidya-core — identical rules/encryption for the iPhone PWA."
+
+[lib]
+# cdylib → the .wasm the PWA loads; rlib → so `cargo test --workspace` builds it
+# natively and the parity tests can also run on the host.
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+vidya-core = { path = "../vidya-core" }
+wasm-bindgen = "0.2"          # ~0 runtime cost; the JS↔WASM binding layer (P19 Step 1)
+serde_json = "1"             # §13; JSON strings cross the boundary (no serde-wasm-bindgen)
+
+[dev-dependencies]
+wasm-bindgen-test = "0.3"    # runs the parity tests under `wasm-pack test --node`
+
+# Release size tuning lives at the workspace root [profile.release] (lto, opt-level="s",
+# strip) — a crate-level profile is ignored in a workspace, so none is set here.

@@ -27,6 +27,11 @@ const RUST_ALLOWED = new Set([
   'tauri-plugin-dialog', 'tauri-plugin-opener', 'tauri-plugin-deep-link',
   'tauri-plugin-barcode-scanner',
   'vidya-core', // in-repo pure-rules crate
+  'vidya-wasm', // in-repo WASM wrapper of vidya-core (iPhone PWA, P19)
+  // P19 (00-context §18): the wasm-bindgen wrapper mechanism named by the phase.
+  // These are only in `crates/vidya-wasm` (the PWA's WASM module) — never in the
+  // Tauri app build. `wasm-bindgen-test` is a dev/test dep.
+  'wasm-bindgen', 'wasm-bindgen-test',
 ])
 
 const JS_ALLOWED = new Set([
