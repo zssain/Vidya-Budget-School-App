@@ -587,6 +587,26 @@ mod tests {
     }
 
     #[test]
+    fn teacher_gets_only_own_staff_attendance_and_leave_types_are_reference() {
+        let c = seeded();
+        // Leave types are reference data every role receives.
+        let p = actor(Role::Principal, "stf-priya", &[], &[]);
+        assert!(tables(&snapshot(&c, &p).unwrap()).contains("leave_type"));
+        // A teacher's snapshot only carries their OWN staff_attendance rows.
+        let a = actor(Role::Teacher, "stf-anita", &["cls-5a"], &[]);
+        let snap = snapshot(&c, &a).unwrap();
+        assert!(tables(&snap).contains("leave_type"), "leave types are reference data");
+        let sa: Vec<&Change> = snap.iter().filter(|c| c.table == "staff_attendance").collect();
+        assert!(!sa.is_empty(), "the teacher has seeded check-ins");
+        for ch in sa {
+            assert_eq!(ch.payload.get("staff_id").and_then(|v| v.as_str()), Some("stf-anita"), "only own attendance");
+        }
+        // The Principal sees more than one staff member's attendance.
+        let ids: BTreeSet<String> = snapshot(&c, &p).unwrap().iter().filter(|c| c.table == "staff_attendance").filter_map(|c| c.payload.get("staff_id").and_then(|v| v.as_str()).map(str::to_string)).collect();
+        assert!(ids.len() >= 2, "principal sees every staff member's attendance");
+    }
+
+    #[test]
     fn principal_sees_everything() {
         let c = seeded();
         let a = actor(Role::Principal, "stf-priya", &[], &[]);

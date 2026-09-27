@@ -9902,6 +9902,20 @@ mod tests {
     }
 
     #[test]
+    fn approving_a_leave_is_idempotent() {
+        let mut c = seeded();
+        let r = request_leave_logic(&mut c, &teacher("stf-meena"), &leave_input("lt-casual", "2026-09-24", "2026-09-25")).unwrap();
+        decide_request_logic(&mut c, &principal(), DeviceMode::Server, &r.id, "approve", None).unwrap();
+        // A second approve is refused (the request is no longer pending).
+        assert!(decide_request_logic(&mut c, &principal(), DeviceMode::Server, &r.id, "approve", None).is_err());
+        // Exactly one leave record + two leave days — no double-apply.
+        let recs: i64 = c.query_row("SELECT COUNT(*) FROM leave_record WHERE request_id=?1", params![r.id], |r| r.get(0)).unwrap();
+        assert_eq!(recs, 1);
+        let days: i64 = c.query_row("SELECT COUNT(*) FROM staff_attendance WHERE staff_id='stf-meena' AND status='leave'", [], |r| r.get(0)).unwrap();
+        assert_eq!(days, 2);
+    }
+
+    #[test]
     fn salary_days_present_come_from_hr_matching_the_p15_nair_example() {
         let mut c = seeded();
         // September 2026 has 26 working days (Mon–Sat). Give R. Nair 2 UNPAID leave
