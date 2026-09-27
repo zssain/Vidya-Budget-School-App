@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <!-- viewport-fit=cover so the phone layout's env(safe-area-inset-*) works on
+         iPhones with a notch/home indicator (the layout already uses them). -->
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#0C1B38" />
+    <!-- iOS: run standalone from the Home Screen with the navy status bar (§18). -->
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Vidya" />
+    <meta name="description" content="Vidya Budget School — staff app for iPhone." />
+    <title>Vidya</title>
+    <!-- Web app manifest, icons and service worker are wired in Phase 19 Step 6. -->
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/main.tsx"></script>
+  </body>
+</html>

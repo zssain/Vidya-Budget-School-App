@@ -6,8 +6,12 @@
 // sync or the build fails.
 //
 // Tauri v2 converts camelCase JS arg keys to the snake_case Rust parameters.
+//
+// Dispatch goes through the platform Backend (P19 Step 2): the Tauri backend on
+// desktop/android, and the IndexedDB+WASM+Drive Web backend in the iPhone PWA. The
+// `invoke` signature is identical, so every wrapper below is unchanged.
 
-import { invoke } from '@tauri-apps/api/core'
+import { invoke } from './backend'
 
 // ---- Error shape (thrown by invoke on Err) -------------------------------
 export interface CmdError {
