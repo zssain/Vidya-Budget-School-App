@@ -5,7 +5,7 @@
 // so a change made on the iPhone syncs and re-validates on the school server exactly
 // like one from the app.
 
-import { APPLIED_OPS, CURSORS, KV, OUTBOX, openDb, type RecordStore, reqDone, tx } from './db'
+import { APPLIED_OPS, CURSORS, KV, OUTBOX, openDb, RECORD_STORES, type RecordStore, reqDone, tx } from './db'
 import { decryptJson, encryptJson } from './crypto'
 
 interface EncRow {
@@ -128,6 +128,33 @@ export async function wasApplied(opId: string): Promise<boolean> {
   const db = await openDb()
   const row = await reqDone(db.transaction(APPLIED_OPS, 'readonly').objectStore(APPLIED_OPS).get(opId))
   return row != null
+}
+
+/** Apply a peer's op received via Drive (provisional, §8.3): upsert/delete the row
+ *  and mark the op applied — one transaction, idempotent by op_id. Does NOT create a
+ *  new outbox op (this op did not originate here). An unknown table is skipped. */
+export async function applyRemoteOp(op: Op): Promise<'applied' | 'duplicate' | 'skipped'> {
+  if (await wasApplied(op.op_id)) return 'duplicate'
+  if (!(RECORD_STORES as readonly string[]).includes(op.table)) {
+    await markApplied(op.op_id, 'unknown_table')
+    return 'skipped'
+  }
+  const store = op.table as RecordStore
+  const db = await openDb()
+  const appliedRow = { op_id: op.op_id, applied_at: new Date().toISOString(), result: 'applied' }
+  if (op.kind === 'delete') {
+    await tx(db, [store, APPLIED_OPS], 'readwrite', (t) => {
+      t.objectStore(store).delete(op.record_id)
+      t.objectStore(APPLIED_OPS).put(appliedRow)
+    })
+  } else {
+    const enc = await encryptJson(op.payload)
+    await tx(db, [store, APPLIED_OPS], 'readwrite', (t) => {
+      t.objectStore(store).put({ id: op.record_id, enc })
+      t.objectStore(APPLIED_OPS).put(appliedRow)
+    })
+  }
+  return 'applied'
 }
 
 export async function getCursor(peer: string): Promise<{ last_hlc?: string; last_server_seq?: number } | null> {
