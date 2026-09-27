@@ -285,11 +285,25 @@ pub fn apply_op(conn: &mut Connection, op: &Op) -> rusqlite::Result<OpResult> {
     } else {
         None
     };
-    if let Some(action) = hr_action.or_else(|| action_for(&op.table, &op.kind)) {
-        let enabled = crate::modules::enabled_set(conn)?;
-        if vidya_core::modules::require_module(&enabled, action).is_err() {
+    // 4a) Module switch (§8.4/§14): reject a disabled module's op server-side,
+    //     before ANY write, for EVERY one of that module's tables — not only the
+    //     permission-mapped ones. `scope::module_of_table` is the authoritative
+    //     table→module map (the same one that excludes these tables from pull), so
+    //     an `expense`, `store_item`, `circular`, `timetable_slot` … op for a
+    //     disabled module is rejected here even though `action_for` doesn't map it.
+    //     (Previously the gate lived only inside the `action_for` block below, so
+    //     un-mapped module tables bypassed it — P18 security fix.)
+    if let Some(module) = crate::sync::scope::module_of_table(&op.table) {
+        if !crate::modules::is_enabled(conn, module)? {
             return finalize(conn, op, rejected(&op.op_id, codes::MODULE_OFF));
         }
+    }
+
+    // 4b) Permission (vidya-core decides) for tables mapped to an Action. NOTE:
+    //     tables `action_for` does not map still miss the server permission
+    //     re-check — a known gap tracked in docs/phase-notes/phase-18.md (security
+    //     review §7). 4a above now enforces the module half for all module tables.
+    if let Some(action) = hr_action.or_else(|| action_for(&op.table, &op.kind)) {
         let mut target = target_for(&op.table, &op.payload);
         if target.class_id.is_none() {
             target.class_id = resolve_class_id(conn, &op.table, &op.record_id, &op.payload)?;
@@ -699,5 +713,47 @@ mod tests {
         let (sheet, student) = draft_sheet_and_student(&c);
         let res = apply_op(&mut c, &mark_op(&sheet, &student, "P", AFTER_CUTOVER_MS)).unwrap();
         assert_eq!(res.status, OpStatus::Confirmed);
+    }
+
+    /// A `store_item` op authored by the Principal. `store_item` is NOT mapped by
+    /// `action_for`, so before the P18 fix its module switch was never checked
+    /// server-side.
+    fn store_item_op() -> Op {
+        Op {
+            op_id: "op-store-1".into(),
+            hlc: Hlc::new(AFTER_CUTOVER_MS, 0, "dev-a1").to_string_form(),
+            device_id: "dev-a1".into(),
+            staff_id: "stf-priya".into(),
+            audience: "finance".into(),
+            table: "store_item".into(),
+            record_id: "si-test-1".into(),
+            kind: "insert".into(),
+            payload: serde_json::json!({ "id": "si-test-1", "name": "Notebook", "price_paise": 5000, "stock": 10 }),
+            base_version: None,
+            server_epoch: 1,
+        }
+    }
+
+    #[test]
+    fn module_off_op_is_rejected_server_side_even_for_unmapped_tables() {
+        // `store` is OFF by default (§14). A `store_item` op — a table `action_for`
+        // does not map — must be rejected server-side with MODULE_OFF before any
+        // write (§8.4), not silently applied. Regression for the P18 security fix.
+        let mut c = seeded();
+        assert!(!crate::modules::is_enabled(&c, "store").unwrap(), "store is off by default");
+        let res = apply_op(&mut c, &store_item_op()).unwrap();
+        assert_eq!(res.status, OpStatus::Rejected);
+        assert_eq!(res.reason_code.as_deref(), Some(codes::MODULE_OFF));
+        let n: i64 = c.query_row("SELECT COUNT(*) FROM store_item WHERE id='si-test-1'", [], |r| r.get(0)).unwrap();
+        assert_eq!(n, 0, "rejected → nothing written");
+    }
+
+    #[test]
+    fn module_on_op_passes_the_module_gate() {
+        // With the module ON the same op is no longer module-gated (it is applied).
+        let mut c = seeded();
+        c.execute("UPDATE module_setting SET enabled=1 WHERE key='store'", []).unwrap();
+        let res = apply_op(&mut c, &store_item_op()).unwrap();
+        assert_ne!(res.reason_code.as_deref(), Some(codes::MODULE_OFF), "module on → not module-gated");
     }
 }
