@@ -123,6 +123,15 @@ const en: Record<string, string> = {
   'backups.status.verified': 'Backed up · this PC and Drive',
   'backups.status.partial': 'Backed up · this PC',
   'backups.status.failed': 'Backup failed',
+  'backups.drive.title': 'Google Drive (off-site copy)',
+  'backups.drive.body': 'Also keep an encrypted copy in the school’s Google Drive, so a lost or broken PC never loses your records. Vidya can see only the files it creates.',
+  'backups.drive.connect': 'Connect Google Drive',
+  'backups.drive.connecting': 'Opening Google…',
+  'backups.drive.connected': 'Connected to Google Drive',
+  'backups.drive.connectedAs': 'Connected as {email}',
+  'backups.drive.connectedNote': 'New backups are also uploaded here and verified.',
+  'backups.drive.disconnect': 'Disconnect',
+  'backups.drive.notConfigured': 'Google Drive backup isn’t set up in this build yet.',
 }
 
 const hi: Record<string, string> = {
@@ -246,6 +255,15 @@ const hi: Record<string, string> = {
   'backups.status.verified': 'बैकअप हुआ · यह PC और Drive',
   'backups.status.partial': 'बैकअप हुआ · यह PC',
   'backups.status.failed': 'बैकअप विफल',
+  'backups.drive.title': 'Google Drive (ऑफ़-साइट कॉपी)',
+  'backups.drive.body': 'स्कूल के Google Drive में भी एक एन्क्रिप्टेड कॉपी रखें, ताकि PC खोने या खराब होने पर भी रिकॉर्ड न जाएँ। Vidya केवल अपनी बनाई फ़ाइलें ही देख सकता है।',
+  'backups.drive.connect': 'Google Drive कनेक्ट करें',
+  'backups.drive.connecting': 'Google खोला जा रहा है…',
+  'backups.drive.connected': 'Google Drive से कनेक्ट है',
+  'backups.drive.connectedAs': '{email} के रूप में कनेक्ट',
+  'backups.drive.connectedNote': 'नए बैकअप यहाँ भी अपलोड और सत्यापित होते हैं।',
+  'backups.drive.disconnect': 'डिस्कनेक्ट करें',
+  'backups.drive.notConfigured': 'इस बिल्ड में Google Drive बैकअप अभी सेट नहीं है।',
 }
 
 const settings: Bundle = { en, hi }

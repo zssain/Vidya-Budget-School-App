@@ -6,7 +6,7 @@
 
 import { useEffect, useState } from 'react'
 import * as api from '@/lib/api'
-import type { BackupRunDto, BackupStatusDto, CmdError } from '@/lib/api'
+import type { BackupRunDto, BackupStatusDto, CmdError, DriveStatusDto } from '@/lib/api'
 import { formatRelative } from '@/lib/format'
 import { t } from '@/lib/i18n'
 
@@ -36,10 +36,14 @@ export default function BackupsScreen() {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [done, setDone] = useState(false)
+  const [drive, setDrive] = useState<DriveStatusDto | null>(null)
+  const [driveBusy, setDriveBusy] = useState(false)
 
   const refresh = () => api.backup_status().then(setStatus).catch(() => setStatus({ enabled: false, runs: [] }))
+  const refreshDrive = () => api.drive_status().then(setDrive).catch(() => setDrive(null))
   useEffect(() => {
     refresh()
+    refreshDrive()
   }, [])
 
   const runBackup = (key?: string) => {
@@ -55,6 +59,24 @@ export default function BackupsScreen() {
       })
       .catch((e) => setError(t((e as CmdError).message_key, (e as CmdError).vars as Record<string, string | number>)))
       .finally(() => setBusy(false))
+  }
+
+  const connectDrive = () => {
+    setDriveBusy(true)
+    setError(null)
+    api
+      .drive_connect()
+      .then(setDrive)
+      .catch((e) => setError(t((e as CmdError).message_key, (e as CmdError).vars as Record<string, string | number>)))
+      .finally(() => setDriveBusy(false))
+  }
+  const disconnectDrive = () => {
+    setDriveBusy(true)
+    api
+      .drive_disconnect()
+      .then(setDrive)
+      .catch(() => {})
+      .finally(() => setDriveBusy(false))
   }
 
   const enabled = status?.enabled ?? false
@@ -106,6 +128,38 @@ export default function BackupsScreen() {
             <div style={{ fontWeight: 600, fontSize: 14 }}>{t('backups.enabledPill')}</div>
             <div style={{ fontSize: 13, color: 'var(--muted)' }}>{t('backups.autoNote', { secs: TICK_SECS })}</div>
           </div>
+        </div>
+      )}
+
+      {/* Google Drive off-site copy (Phase A / "#1"). Shown once backups are on. */}
+      {enabled && drive && (
+        <div style={{ ...CARD, marginBottom: 20, maxWidth: 640 }}>
+          <h3 style={H3}>{t('backups.drive.title')}</h3>
+          {!drive.configured ? (
+            <p style={{ fontSize: 13, color: 'var(--muted)', margin: 0, lineHeight: 1.5 }}>{t('backups.drive.notConfigured')}</p>
+          ) : drive.connected ? (
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+              <div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                  <span style={{ width: 8, height: 8, borderRadius: 4, background: 'var(--online)', flexShrink: 0 }} />
+                  <span style={{ fontWeight: 600, fontSize: 14 }}>
+                    {drive.account_email ? t('backups.drive.connectedAs', { email: drive.account_email }) : t('backups.drive.connected')}
+                  </span>
+                </div>
+                <div style={{ fontSize: 13, color: 'var(--muted)', marginTop: 4 }}>{t('backups.drive.connectedNote')}</div>
+              </div>
+              <button onClick={disconnectDrive} disabled={driveBusy} style={btn('transparent', 'var(--ink)')}>
+                {t('backups.drive.disconnect')}
+              </button>
+            </div>
+          ) : (
+            <div>
+              <p style={{ fontSize: 13, color: 'var(--muted)', margin: '0 0 14px', lineHeight: 1.5 }}>{t('backups.drive.body')}</p>
+              <button onClick={connectDrive} disabled={driveBusy} style={btn('var(--accent)', '#fff')}>
+                {driveBusy ? t('backups.drive.connecting') : t('backups.drive.connect')}
+              </button>
+            </div>
+          )}
         </div>
       )}
 
