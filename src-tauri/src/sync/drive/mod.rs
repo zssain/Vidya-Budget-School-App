@@ -22,6 +22,7 @@ pub mod attention;
 pub mod bundle;
 pub mod exchange;
 pub mod fake;
+pub mod google;
 pub mod join;
 pub mod keys;
 pub mod oauth;
