@@ -167,8 +167,15 @@ pub fn run() {
                         tokio::time::interval(std::time::Duration::from_secs(backup::schedule::TICK_SECS));
                     loop {
                         ticker.tick().await;
-                        let ctx = handle.state::<RtCtx>();
-                        backup::schedule::scheduler_tick(&ctx);
+                        // Run the tick on a BLOCKING thread: it does SQLCipher I/O and,
+                        // when Drive backup is connected, a blocking Drive client
+                        // (its own runtime) — neither may run on an async worker.
+                        let handle2 = handle.clone();
+                        let _ = tauri::async_runtime::spawn_blocking(move || {
+                            let ctx = handle2.state::<RtCtx>();
+                            backup::schedule::scheduler_tick(&ctx);
+                        })
+                        .await;
                     }
                 });
             }
@@ -222,7 +229,9 @@ fn invoke_handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'stat
         list_staff_access, add_staff, suspend_staff, remove_staff, create_invite, revoke_invite,
         set_class_teacher, assign_subject_teacher, effective_access, list_devices, revoke_device,
         server_status, sync_status, sync_now, list_conflicts, resolve_conflict, list_review_flags,
-        resolve_review_flag, seed_demo_school
+        resolve_review_flag,
+        drive_status, drive_connect, drive_disconnect,
+        seed_demo_school
     ]
 }
 
@@ -267,6 +276,7 @@ fn invoke_handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'stat
         list_staff_access, add_staff, suspend_staff, remove_staff, create_invite, revoke_invite,
         set_class_teacher, assign_subject_teacher, effective_access, list_devices, revoke_device,
         server_status, sync_status, sync_now, list_conflicts, resolve_conflict, list_review_flags,
-        resolve_review_flag
+        resolve_review_flag,
+        drive_status, drive_connect, drive_disconnect
     ]
 }

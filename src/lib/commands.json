@@ -188,7 +188,10 @@
     "list_conflicts",
     "resolve_conflict",
     "list_review_flags",
-    "resolve_review_flag"
+    "resolve_review_flag",
+    "drive_status",
+    "drive_connect",
+    "drive_disconnect"
   ],
   "debugOnly": ["seed_demo_school"]
 }

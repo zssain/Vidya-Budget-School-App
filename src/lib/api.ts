@@ -1637,6 +1637,16 @@ export const backup_status = () => invoke<BackupStatusDto>('backup_status')
 export const backup_now = (recoveryKey?: string) =>
   invoke<BackupStatusDto>('backup_now', { recoveryKey: recoveryKey ?? null })
 
+// ---- Phase A ("#1"): desktop Google Drive backup --------------------------
+export interface DriveStatusDto {
+  connected: boolean
+  account_email: string
+  configured: boolean
+}
+export const drive_status = () => invoke<DriveStatusDto>('drive_status')
+export const drive_connect = () => invoke<DriveStatusDto>('drive_connect')
+export const drive_disconnect = () => invoke<DriveStatusDto>('drive_disconnect')
+
 // ---- Phase 4: staff & access, invitations, devices, sync, conflicts --------
 export interface StaffFullDto {
   id: string

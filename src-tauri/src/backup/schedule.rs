@@ -16,8 +16,9 @@ use rusqlite::{params, Connection, OptionalExtension};
 use crate::ctx::RtCtx;
 use crate::error::{CmdError, CmdResult};
 use crate::security::{audit, recovery};
+use crate::sync::drive::{google::GoogleDrive, oauth, DriveApi};
 
-use vidya_core::backup::{slugify, BackupOutcome};
+use vidya_core::backup::{slugify, BackupOutcome, DriveState};
 
 /// How often the scheduler checks whether a fresh backup is due.
 pub const TICK_SECS: u64 = 20;
@@ -71,6 +72,27 @@ pub fn derive_and_cache(conn: &Connection, data_dir: &Path, recovery_key: &str) 
     Ok(hex)
 }
 
+/// Build a live Drive client + ensure the `Vidya/backups` folder, when Google Drive
+/// is connected on this PC. Returns `None` (→ local-only backup) if Drive is not
+/// connected, the build has no desktop client id, or any OAuth/Drive step fails — a
+/// Drive problem must never fail the backup itself. Call from a BLOCKING context
+/// (the client owns a runtime); `run_and_record` is only reached off the async
+/// runtime (sync `backup_now` command / `spawn_blocking` scheduler tick).
+fn drive_parts(conn: &Connection) -> Option<(GoogleDrive, String)> {
+    if !oauth::is_connected(conn) {
+        return None;
+    }
+    let client_id = crate::config::get().google_client_id_desktop.clone();
+    if client_id.is_empty() {
+        return None;
+    }
+    let token = oauth::valid_access_token(conn, &client_id).ok()?;
+    let client = GoogleDrive::new(token).ok()?;
+    let vidya = client.ensure_folder("root", "Vidya").ok()?;
+    let backups = client.ensure_folder(&vidya, "backups").ok()?;
+    Some((client, backups))
+}
+
 /// Export + verify a backup and record the run. Returns nothing; the row in
 /// `backup_run` is the record of truth (Principal Home + Backups read it).
 pub fn run_and_record(conn: &mut Connection, data_dir: &Path, key_hex: &str) -> CmdResult<()> {
@@ -80,7 +102,13 @@ pub fn run_and_record(conn: &mut Connection, data_dir: &Path, key_hex: &str) -> 
     let today = at.get(0..10).unwrap_or("").to_string();
     let dir = data_dir.join("backups");
 
-    let res = super::run_backup(conn, &slug, key_hex, &at, &dir, None)
+    // Add a Drive copy when connected; local-only otherwise or on any Drive error.
+    let parts = drive_parts(conn);
+    let target = parts
+        .as_ref()
+        .map(|(client, folder)| super::DriveTarget { client, backups_folder: folder.as_str() });
+
+    let res = super::run_backup(conn, &slug, key_hex, &at, &dir, target)
         .map_err(|e| CmdError::internal(format!("backup: {e:?}")))?;
 
     let status = match res.outcome {
@@ -88,14 +116,22 @@ pub fn run_and_record(conn: &mut Connection, data_dir: &Path, key_hex: &str) -> 
         BackupOutcome::Partial => "partial",
         BackupOutcome::Failed => "failed",
     };
-    let destination = res.local_verified.then(|| "this PC".to_string());
+    let destination = res.local_verified.then(|| match res.drive {
+        DriveState::Verified => "this PC + Google Drive".to_string(),
+        _ => "this PC".to_string(),
+    });
     conn.execute(
         "INSERT INTO backup_run (id, started_at, finished_at, status, destination, checksum, chain_head) \
          VALUES (?1, ?2, ?3, ?4, ?5, NULL, ?6)",
         params![uuid::Uuid::now_v7().to_string(), at, now_rfc3339(), status, destination, res.chain_head],
     )?;
-    // Prune to 30 daily + 12 monthly (§12).
+    // Prune to 30 daily + 12 monthly (§12) locally, and the same on Drive when used.
     let _ = super::retain_local(&dir, &today);
+    if let Some((client, folder)) = &parts {
+        if matches!(res.drive, DriveState::Verified) {
+            let _ = super::retain_drive(client, folder, &today);
+        }
+    }
     Ok(())
 }
 

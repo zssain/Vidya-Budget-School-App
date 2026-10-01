@@ -214,6 +214,10 @@ pub const COMMANDS: &[&str] = &[
     "resolve_conflict",
     "list_review_flags",
     "resolve_review_flag",
+    // Phase A ("#1") — desktop Google Drive backup.
+    "drive_status",
+    "drive_connect",
+    "drive_disconnect",
     #[cfg(debug_assertions)]
     "seed_demo_school",
 ];
@@ -1410,6 +1414,56 @@ pub fn backup_now(state: State<RtCtx>, recovery_key: Option<String>) -> CmdResul
     let enabled = crate::backup::schedule::read_cached_key(&state.data_dir).is_some();
     let runs = state.with_db(backup_runs_logic)?;
     Ok(BackupStatusDto { enabled, runs })
+}
+
+// ---- Google Drive backup (Phase A / "#1") ---------------------------------
+
+/// Backups screen Drive state: is Drive connected on this PC, which account, and does
+/// this build even carry a desktop OAuth client id (`configured`)?
+#[derive(serde::Serialize)]
+pub struct DriveStatusDto {
+    pub connected: bool,
+    pub account_email: String,
+    pub configured: bool,
+}
+
+fn drive_status_dto(ctx: &RtCtx) -> CmdResult<DriveStatusDto> {
+    let configured = !crate::config::get().google_client_id_desktop.is_empty();
+    let tokens = ctx.with_db(|c| Ok(crate::sync::drive::oauth::load_tokens(c)))?;
+    let connected = tokens.as_ref().map(|t| !t.refresh_token.is_empty()).unwrap_or(false);
+    let account_email = tokens.map(|t| t.account_email).unwrap_or_default();
+    Ok(DriveStatusDto { connected, account_email, configured })
+}
+
+/// Current Google Drive connection status (Backups screen).
+#[tauri::command]
+pub fn drive_status(state: State<RtCtx>) -> CmdResult<DriveStatusDto> {
+    drive_status_dto(&state)
+}
+
+/// Connect Google Drive: run the interactive loopback OAuth flow (opens the browser),
+/// store the tokens. This is a SYNC command, so Tauri runs it off the async runtime —
+/// the flow owns its own runtime, which is safe there. It blocks until the user
+/// finishes consent or the 5-minute timeout elapses.
+#[tauri::command]
+pub fn drive_connect(state: State<RtCtx>) -> CmdResult<DriveStatusDto> {
+    use crate::sync::drive::oauth;
+    let client_id = crate::config::get().google_client_id_desktop.clone();
+    if client_id.is_empty() {
+        return Err(crate::error::CmdError::new("DRIVE_NOT_CONFIGURED", "error.DRIVE_NOT_CONFIGURED", serde_json::Value::Null));
+    }
+    let tokens = oauth::run_connect(&client_id).map_err(|e| {
+        crate::error::CmdError::new("DRIVE_CONNECT_FAILED", "error.DRIVE_CONNECT_FAILED", serde_json::json!({ "detail": e.to_string() }))
+    })?;
+    state.with_db(|c| oauth::store_tokens(c, &tokens).map_err(|e| crate::error::CmdError::internal(e.to_string())))?;
+    drive_status_dto(&state)
+}
+
+/// Disconnect Google Drive (forget the tokens on this PC). Local backups continue.
+#[tauri::command]
+pub fn drive_disconnect(state: State<RtCtx>) -> CmdResult<DriveStatusDto> {
+    state.with_db(|c| crate::sync::drive::oauth::clear_tokens(c).map_err(|e| crate::error::CmdError::internal(e.to_string())))?;
+    drive_status_dto(&state)
 }
 
 #[cfg(debug_assertions)]
