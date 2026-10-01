@@ -215,6 +215,14 @@ mod tests {
         assert_eq!(dest.as_deref(), Some("this PC"));
     }
 
+    #[test]
+    fn drive_parts_is_none_when_not_connected() {
+        let (_dir, conn) = seeded_dir();
+        // No Google Drive tokens stored → no live client → the backup stays
+        // local-only (never a network hit, never a failure).
+        assert!(drive_parts(&conn).is_none());
+    }
+
     // Minimal scoped temp dir (no external crate).
     mod tempdir_like {
         use std::path::{Path, PathBuf};
