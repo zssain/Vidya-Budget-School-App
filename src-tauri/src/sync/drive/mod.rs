@@ -24,6 +24,7 @@ pub mod exchange;
 pub mod fake;
 pub mod join;
 pub mod keys;
+pub mod oauth;
 pub mod pull;
 
 use std::collections::BTreeMap;
