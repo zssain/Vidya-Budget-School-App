@@ -41,7 +41,7 @@ screen (same `drive.file` scope — Vidya only ever touches files it created).
 2. **Application type: Web application.** Name it `Vidya Web (PWA)`.
 3. Under **Authorized JavaScript origins**, add the exact origin(s) the app is served
    from — scheme + host, **no path, no trailing slash**:
-   - `https://app.vidya.zuhairhussain.com` — the production origin **[OWNER confirms
+   - `https://app.neverworks.org` — the production origin **[OWNER confirms
      the subdomain]**;
    - `http://localhost:5273` — only if you want to test the dev server locally.
 4. **Leave "Authorized redirect URIs" empty.** The PWA uses the Google Identity
@@ -101,7 +101,7 @@ full Drive testing needs the real HTTPS origin or `http://localhost:5273` via
    the release). Because everything is relative to `/`, deploy it at the **domain
    root**, not a sub-path.
 2. GitHub → **Settings → Pages** → choose the branch/folder.
-3. Add a `CNAME` file containing `app.vidya.zuhairhussain.com` **[OWNER confirms]** so
+3. Add a `CNAME` file containing `app.neverworks.org` **[OWNER confirms]** so
    Pages serves the custom domain over HTTPS.
 4. The emitted `404.html` makes the `/join` deep-link resolve to the app on first
    load — no extra config needed.
@@ -118,7 +118,7 @@ full Drive testing needs the real HTTPS origin or `http://localhost:5273` via
    ```
    /*  /index.html  200
    ```
-4. Add `app.vidya.zuhairhussain.com` under **Custom domains**.
+4. Add `app.neverworks.org` under **Custom domains**.
 
 Both hosts give free automatic HTTPS, which iOS **requires** for a Home-Screen web
 app, for the service worker, and for Google sign-in.

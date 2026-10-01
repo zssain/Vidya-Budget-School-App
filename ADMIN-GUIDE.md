@@ -378,7 +378,7 @@ disconnected account, a pending approval, a conflict, or a review flag. Vidya ne
 hides a problem behind a false "everything's fine".
 
 For anything this guide doesn't cover, contact support at
-**mohammedzuhairhussain28@gmail.com** (website **vidya.zuhairhussain.com**).
+**mohammedzuhairhussain28@gmail.com** (website **neverworks.org**).
 
 ---
 

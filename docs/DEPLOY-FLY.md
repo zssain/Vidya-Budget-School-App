@@ -4,10 +4,10 @@ This guide walks a non-expert owner through hosting the two small Rust services
 that Vidya needs online:
 
 - **Relay** (`cloud/relay/`) — a stateless WebSocket relay. Binds `0.0.0.0:8788`,
-  health endpoint `/healthz`. Target host: **`wss://relay.vidya.zuhairhussain.com`**.
+  health endpoint `/healthz`. Target host: **`wss://relay.neverworks.org`**.
 - **Licence API** (`cloud/licence/`) — the licence service (binary `vidya-licence`),
   serves on port **8787**, and needs **persistent storage** for its code/licence
-  JSON store. Target host: **`https://api.vidya.zuhairhussain.com`**.
+  JSON store. Target host: **`https://api.neverworks.org`**.
 
 You will create **two separate Fly.io apps** (one per service). This document is
 only about hosting these two services. Wiring the hostnames into the app's release
@@ -40,7 +40,7 @@ You will need:
   `fly launch` will offer to generate one (accept it) or you can copy the relay's
   Dockerfile as a starting point and change the binary name to `vidya-licence`
   and the port to `8787`.
-- Your **domain registrar login** for `zuhairhussain.com` (to add DNS records in §6).
+- Your **domain registrar login** for `neverworks.org` (to add DNS records in §6).
 
 ---
 
@@ -422,8 +422,8 @@ curl https://vidya-licence.fly.dev/            # → the website home page
 
 You want:
 
-- `api.vidya.zuhairhussain.com`   → the **licence** app
-- `relay.vidya.zuhairhussain.com` → the **relay** app
+- `api.neverworks.org`   → the **licence** app
+- `relay.neverworks.org` → the **relay** app
 
 Fly issues free TLS certificates via Let's Encrypt once DNS is pointed correctly.
 The key command is **`fly certs add <hostname>`**, which prints the **exact DNS
@@ -451,13 +451,13 @@ Source: https://fly.io/docs/flyctl/ips/ (a shared IPv4 and an IPv6 are free; a
 From the **licence** app folder:
 
 ```sh
-fly certs add api.vidya.zuhairhussain.com
+fly certs add api.neverworks.org
 ```
 
 From the **relay** app folder:
 
 ```sh
-fly certs add relay.vidya.zuhairhussain.com
+fly certs add relay.neverworks.org
 ```
 
 Each command **prints the exact DNS records to create** — this is the important
@@ -475,12 +475,12 @@ copy them from your own `fly certs add` output.
 
 ### 6c. Create those records at your registrar
 
-Log in to the registrar that holds `zuhairhussain.com`, open its DNS editor, and
+Log in to the registrar that holds `neverworks.org`, open its DNS editor, and
 create each record from the `fly certs add` output. Typical for a subdomain:
 
 - **Type:** as printed (A / AAAA / CNAME / the `_acme-challenge` CNAME)
 - **Name / Host:** the subdomain part, e.g. `api.vidya` or `relay.vidya`
-  (some registrars want the full `api.vidya.zuhairhussain.com`, some want just
+  (some registrars want the full `api.neverworks.org`, some want just
   `api.vidya` — follow the registrar's convention)
 - **Value / Target:** exactly as printed by Fly
 - **TTL:** default is fine
@@ -490,19 +490,19 @@ create each record from the `fly certs add` output. Typical for a subdomain:
 DNS can take a few minutes to a couple of hours to propagate. Check status:
 
 ```sh
-fly certs show api.vidya.zuhairhussain.com
-fly certs check api.vidya.zuhairhussain.com
+fly certs show api.neverworks.org
+fly certs check api.neverworks.org
 ```
 
-(and the same for `relay.vidya.zuhairhussain.com`.) Once Fly reports the
+(and the same for `relay.neverworks.org`.) Once Fly reports the
 certificate as issued, test the real URLs:
 
 ```sh
-curl https://api.vidya.zuhairhussain.com/          # licence API is up over TLS
-curl https://relay.vidya.zuhairhussain.com/healthz # relay health → ok
+curl https://api.neverworks.org/          # licence API is up over TLS
+curl https://relay.neverworks.org/healthz # relay health → ok
 ```
 
-The relay's `wss://relay.vidya.zuhairhussain.com` tunnel uses the **same**
+The relay's `wss://relay.neverworks.org` tunnel uses the **same**
 hostname and certificate — `https` working means `wss` works.
 
 ---
@@ -557,7 +557,7 @@ For these two services, your monthly bill is driven by exactly three things:
   `fly certs check <hostname>`.
 - Make sure you didn't accidentally add the record for the wrong subdomain, and
   that the registrar didn't append the domain twice (a common gotcha:
-  `api.vidya.zuhairhussain.com.zuhairhussain.com`).
+  `api.neverworks.org.neverworks.org`).
 
 **The volume is full (licence app).**
 - Check usage: `fly ssh console` into the machine, then `df -h /data`.

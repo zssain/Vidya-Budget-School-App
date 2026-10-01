@@ -7,7 +7,7 @@ free static hosting, so the running cost to the developer is **₹0 / month**
 (docs/00-SYSTEM-CONTEXT §0 zero-monthly-cost rule, §10.5).
 
 Host it on GitHub Pages **or** Cloudflare Pages (both are covered below — you only need
-one; you may run both, one as a backup). Point `vidya.zuhairhussain.com` at whichever you
+one; you may run both, one as a backup). Point `neverworks.org` at whichever you
 publish.
 
 > Nothing here deploys anything automatically. These are the manual steps.
@@ -101,7 +101,7 @@ arbitrary subfolder from the UI alone).
 3. Push to `main`. The workflow publishes `site/` to
    `https://zssain.github.io/Vidya-Budget-School-App/`.
 4. **Custom domain:** Settings → Pages → Custom domain → enter
-   `vidya.zuhairhussain.com` → Save. GitHub writes a `CNAME` file into the published
+   `neverworks.org` → Save. GitHub writes a `CNAME` file into the published
    site and provisions a free HTTPS certificate once DNS is set (§4). Leave
    "Enforce HTTPS" ticked once it is available.
 
@@ -122,15 +122,15 @@ arbitrary subfolder from the UI alone).
 3. **Save and Deploy.** Cloudflare serves the files from `site/` at a
    `*.pages.dev` URL.
 4. **Custom domain:** the Pages project → **Custom domains → Set up a custom domain →**
-   `vidya.zuhairhussain.com`. If `zuhairhussain.com` is already on Cloudflare DNS,
+   `neverworks.org`. If `neverworks.org` is already on Cloudflare DNS,
    Cloudflare adds the record and the certificate for you.
 
 ---
 
-## 4. DNS for `vidya.zuhairhussain.com` — **[OWNER] to confirm the domain/registrar**
+## 4. DNS for `neverworks.org` — **[OWNER] to confirm the domain/registrar**
 
-`vidya.zuhairhussain.com` is a **subdomain** of `zuhairhussain.com`. Add **one**
-`CNAME` record for the `vidya` host at wherever `zuhairhussain.com`'s DNS is managed
+`neverworks.org` is a **subdomain** of `neverworks.org`. Add **one**
+`CNAME` record for the `vidya` host at wherever `neverworks.org`'s DNS is managed
 (**[OWNER]** to confirm the registrar / DNS provider):
 
 ### If you host on GitHub Pages
@@ -141,7 +141,7 @@ arbitrary subfolder from the UI alone).
 
 (GitHub serves the custom domain from that CNAME; the free certificate is issued
 automatically once the CNAME resolves. Apex/`A` records are only needed if you ever
-point the bare `zuhairhussain.com` at Pages — not required for this subdomain.)
+point the bare `neverworks.org` at Pages — not required for this subdomain.)
 
 ### If you host on Cloudflare Pages
 
@@ -149,17 +149,17 @@ point the bare `zuhairhussain.com` at Pages — not required for this subdomain.
 |---|---|---|---|---|
 | CNAME | `vidya` | `<your-project>.pages.dev.` | Proxied (orange cloud) | Auto |
 
-If `zuhairhussain.com` already uses Cloudflare nameservers, adding the custom domain in
+If `neverworks.org` already uses Cloudflare nameservers, adding the custom domain in
 the Pages UI creates this record for you — you usually don't add it by hand.
 
 **[OWNER] to confirm:**
-- Where `zuhairhussain.com` DNS is managed (registrar or Cloudflare).
+- Where `neverworks.org` DNS is managed (registrar or Cloudflare).
 - That `vidya` is not already in use.
 - Which host you're publishing (GitHub Pages vs Cloudflare Pages) so only the matching
   CNAME above is added.
 
 After the CNAME propagates (minutes to a few hours), the site is live at
-`https://vidya.zuhairhussain.com` with free HTTPS. **No company server is involved.**
+`https://neverworks.org` with free HTTPS. **No company server is involved.**
 
 ---
 

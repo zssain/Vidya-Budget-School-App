@@ -91,7 +91,7 @@ export default function AboutScreen() {
           <p style={{ margin: '0 0 6px', fontSize: 13, color: 'var(--muted)' }}>{t('about.tagline')}</p>
           <InfoRow label={t('about.version')} value={version} />
           <InfoRow label={t('about.support')} value="mohammedzuhairhussain28@gmail.com" />
-          <InfoRow label={t('about.website')} value="vidya.zuhairhussain.com" />
+          <InfoRow label={t('about.website')} value="neverworks.org" />
         </div>
 
         {/* iPhone honest-limits — only on the PWA. */}

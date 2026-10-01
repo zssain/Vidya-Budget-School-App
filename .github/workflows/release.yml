@@ -275,7 +275,7 @@ jobs:
             echo "> Security → Open Anyway). Android APKs suffixed \`-UNSIGNED-TEST\` are"
             echo "> debug-signed test builds."
             echo ""
-            echo "Published by Zuhair Hussain · support: mohammedzuhairhussain28@gmail.com · zuhairhussain.com"
+            echo "Published by Zuhair Hussain · support: mohammedzuhairhussain28@gmail.com · neverworks.org"
             echo ""
             echo "---"
             echo ""

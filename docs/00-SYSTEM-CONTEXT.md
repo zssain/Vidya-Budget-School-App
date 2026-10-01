@@ -28,7 +28,7 @@ Companion files (read them too):
 - **Developed by Zuhair Hussain.** Credit everywhere (About screen, installers' publisher
   field, website, receipts footer, videos): **"Developed by Zuhair Hussain"**. Copyright line:
   **"© 2026 Zuhair Hussain"**.
-- Support email `mohammedzuhairhussain28@gmail.com`; website `vidya.zuhairhussain.com`; address
+- Support email `mohammedzuhairhussain28@gmail.com`; website `neverworks.org`; address
   Hyderabad, Telangana. **No phone number anywhere.**
 - **Business model:** one-time purchase, perpetual licence, no expiry, no limits. Price
   **[OWNER]** (shown as `[PRICE]`). Optional yearly support (AMC) is sold outside the app; the
@@ -541,7 +541,7 @@ target.)
   phone-sized collect-fee flow. **Never** the school server, setup, restore, backups or licences —
   those commands return `NOT_AVAILABLE_ON_WEB` and the UI hides them.
 - **Hosting.** Static files only, on free hosting (GitHub Pages or Cloudflare Pages) at
-  `app.vidya.zuhairhussain.com` **[OWNER confirms subdomain]**. The host never sees school data.
+  `app.neverworks.org` **[OWNER confirms subdomain]**. The host never sees school data.
 - **Sync route — Drive only, never LAN.** A browser can't trust the school PC's self-signed
   certificate, so the PWA **never uses the LAN route**. It syncs through the **school sync account's
   Google Drive** (≈1–2 minutes), and through the relay only if the optional Instant-sync module is on
@@ -555,7 +555,7 @@ target.)
 - **Join without LAN.** Joining uses a sealed **join request** file in `exchange/joins/` that the
   school PC processes on its next Drive check and answers with a sealed join response (device token,
   series, audience keys, session key). The invitation QR gains an HTTPS form
-  `https://app.vidya.zuhairhussain.com/join#d=<same payload>` (fragment, so the host never receives
+  `https://app.neverworks.org/join#d=<same payload>` (fragment, so the host never receives
   it); one QR works for Android (app link) and iPhone (web).
 - **Honest limits (Profile → About this iPhone app + INSTALL.md):** no background sync (changes send
   when the app is open); Safari can clear website data if the web app is unused for a long time

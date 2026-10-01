@@ -4,7 +4,7 @@ The installable **staff** web app (PWA). It is the SAME React app as the Tauri b
 (shared `src/`, no forked styles — see `@` → `../src` in `vite.config.ts`) compiled
 with `platform = 'web'`, so it uses the **Web backend** (IndexedDB + WASM + Google
 Drive) and the phone layout. Output is **static files only** — hosted free on GitHub
-or Cloudflare Pages at `app.vidya.zuhairhussain.com` (00-context §18). Nothing here
+or Cloudflare Pages at `app.neverworks.org` (00-context §18). Nothing here
 needs a company server.
 
 ## Build

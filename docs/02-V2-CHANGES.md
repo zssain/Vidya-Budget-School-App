@@ -19,7 +19,7 @@ or official documentation before building on it.
 
 - Credit everywhere (About screen, installers' publisher field, website, receipts footer,
   videos): **"Developed by Zuhair Hussain"**. Copyright line: "© 2026 Zuhair Hussain".
-- Support email: `mohammedzuhairhussain28@gmail.com`. Website: `vidya.zuhairhussain.com`.
+- Support email: `mohammedzuhairhussain28@gmail.com`. Website: `neverworks.org`.
   Address: Hyderabad, Telangana. No phone number anywhere.
 - Business model unchanged: **one-time purchase, perpetual licence, no expiry, no limits.**
   Price **[OWNER]**, shown as `[PRICE]` until provided. Optional yearly support (AMC) is sold

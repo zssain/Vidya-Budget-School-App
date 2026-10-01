@@ -195,7 +195,7 @@ the App Store, and no Apple ID. You add it from Safari and it then behaves like 
 normal app icon: it runs full-screen, works offline, and keeps your data on the phone.
 
 **You need:** an iPhone on **iOS 16.4 or newer**, and the web address from your
-school (for example `https://app.vidya.zuhairhussain.com`).
+school (for example `https://app.neverworks.org`).
 
 ### 1. Add it to your Home Screen
 
@@ -279,7 +279,7 @@ Drive, approvals, backups, moving to a new PC — see **ADMIN-GUIDE.md**.
 
 - **Developed by:** Zuhair Hussain
 - **Support:** mohammedzuhairhussain28@gmail.com
-- **Website:** https://vidya.zuhairhussain.com
+- **Website:** https://neverworks.org
 - © 2026 Zuhair Hussain
 
 Because v1.0.0 is unsigned, Windows shows the publisher as "Unknown" and macOS

@@ -6,7 +6,7 @@ bank app and mint the licence on your laptop with
 [`tools/licence-maker`](../tools/licence-maker/README.md).
 
 - Support / buyers email you at: **`mohammedzuhairhussain28@gmail.com`**
-- Site & downloads: **`vidya.zuhairhussain.com`** (see [`site/`](../site/))
+- Site & downloads: **`neverworks.org`** (see [`site/`](../site/))
 - Price is **`[PRICE]`** until you set it · your UPI QR image is an **[OWNER]** item
 - All licence commands run from `tools/licence-maker/` with `--dir <your key folder>`
   (or set `$VIDYA_LICENCE_DIR`). See the [licence-maker README](../tools/licence-maker/README.md).
@@ -42,7 +42,7 @@ Do these **in order**. Never skip the bank-app check or the duplicate-UTR check.
    (asks for `--force`), writes the **licence key** + a **`.vlic`** file, and
    appends an `issue` row to `register.csv`.
 6. **Deliver it** — email the buyer the printed **licence key** (or attach the
-   **`.vlic`** file) and the **download link** (`vidya.zuhairhussain.com`, see
+   **`.vlic`** file) and the **download link** (`neverworks.org`, see
    [`site/`](../site/)). They activate offline on their PC.
 7. **Recorded** — it is now in `register.csv` (school, UTR, buyer email, licence id).
    Then do the **back-up** step in section 4.

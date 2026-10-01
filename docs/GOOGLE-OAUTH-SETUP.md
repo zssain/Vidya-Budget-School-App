@@ -19,23 +19,33 @@ You just click buttons and copy a few text values.
 
 ## What you are building (the big picture)
 
-Vidya needs **two** separate OAuth clients — think of each as a numbered ID card
-that tells Google "this request is coming from the Vidya app":
+Vidya needs **three** separate OAuth clients — think of each as a numbered ID card
+that tells Google "this request is coming from the Vidya app". They differ by the
+**client type**, which depends on *how* each build signs in — not on the kind of
+product:
 
-| # | Client | For which version of Vidya | When to make it |
+| # | Client **type** to pick | For which version of Vidya | When to make it |
 |---|--------|---------------------------|-----------------|
-| A | **Desktop app** client | The Windows / macOS installer | Now |
-| B | **Android** client | The Android phone/tablet app | **Later** — only after the app's package name and the release signing key are decided (see Part 8) |
+| A | **Desktop app** | The Windows / macOS installer | Now |
+| B | **Web application** | The **iPhone PWA** (it is a website, so NOT the "iOS" type) | Now |
+| C | **Android** | The Android phone/tablet app | **Later** — only after the app's package name and the release signing key are decided (see Part 7) |
 
-Both live inside **one** Google Cloud project called **"Vidya"**.
+All three live inside **one** Google Cloud project called **"Vidya"**, and share the
+one consent screen + the one `drive.file` scope.
 
-You will finish with two long text strings called **client IDs**. They go into
-Vidya's build configuration under these two names:
+You will finish with three long text strings called **client IDs**. They go into
+Vidya's build configuration under these three names:
 
 - `google_client_id_desktop`
+- `google_client_id_web`
 - `google_client_id_android`
 
-(How they get plugged in is covered in Part 9.)
+(How they get plugged in is covered in Part 8.)
+
+> **Why the iPhone client is "Web application", not "iOS":** a PWA is a website that
+> staff add to their Home Screen — there is no App Store app — so Google treats its
+> sign-in as a web app, authorized by its web address. The "iOS" client type is only
+> for a native app downloaded from the App Store, which Vidya does not ship.
 
 ### Key facts you'll enter (keep these handy)
 
@@ -45,11 +55,11 @@ Vidya's build configuration under these two names:
 | Publisher / owner | Zuhair Hussain |
 | User support email | `mohammedzuhairhussain28@gmail.com` |
 | Developer contact email | `mohammedzuhairhussain28@gmail.com` |
-| Website | `https://zuhairhussain.com` |
-| Privacy policy URL | `https://zuhairhussain.com/vidya/privacy` |
+| Website | `https://neverworks.org` |
+| Privacy policy URL | `https://neverworks.org/privacy` |
 | Drive permission (scope) | `https://www.googleapis.com/auth/drive.file` |
 
-> ⚠️ **The privacy policy page must really exist.** `https://zuhairhussain.com/vidya/privacy`
+> ⚠️ **The privacy policy page must really exist.** `https://neverworks.org/privacy`
 > is a placeholder. You can enter it now while the app is in *Testing*, but Google
 > will **not** let you publish the app to the public until that page is actually
 > live on the internet. Put up a real privacy-policy page before Part 7.
@@ -150,10 +160,10 @@ describe your app here before Google will hand out any client IDs.
 
 8. Go to the **Branding** tab (if you're not already there).
 9. Find **App domain → Privacy policy link** (wording may be "Privacy policy URL").
-10. Enter: `https://zuhairhussain.com/vidya/privacy`
+10. Enter: `https://neverworks.org/privacy`
 11. *(Optional but recommended)* fill in the **Application home page** with
-    `https://zuhairhussain.com` and, if there is an **Authorized domains** box,
-    add `zuhairhussain.com`.
+    `https://neverworks.org` and, if there is an **Authorized domains** box,
+    add `neverworks.org`.
 12. Click **Save**.
 
 > ⚠️ Reminder from earlier: this privacy URL can be saved now, but the page must be
@@ -289,7 +299,7 @@ automatically.
 5. Click **Create**.
 6. A window pops up showing **Your Client ID** (a long string ending in
    `.apps.googleusercontent.com`).
-   - **Copy the Client ID** and paste it somewhere safe — you'll need it in Part 9.
+   - **Copy the Client ID** and paste it somewhere safe — you'll need it in Part 8.
    - You can always find it again later on the **Clients / Credentials** page.
    - Note: a Desktop-app client may also show a "client secret." For Vidya's
      PKCE-based flow the secret is not treated as truly secret, but there's no harm
@@ -299,7 +309,38 @@ automatically.
 
 ---
 
-## Part 7 — Create the **Android** OAuth client (client B) — DO THIS LAST
+## Part 6B — Create the **Web application** OAuth client (client B — the iPhone PWA)
+
+This is the ID card for the **iPhone PWA**. A PWA is a website, so its type is
+**Web application** — **not** "iOS" (that type is only for App Store apps, which Vidya
+does not ship). The PWA signs in with Google's **browser token model**: it is
+authorized by its **web address** ("JavaScript origin") and needs **no redirect URL
+and no client secret**.
+
+**Steps:**
+
+1. Left menu → **APIs & Services → Credentials** (or the **Clients** tab).
+2. Click **Create client** (older wording: **Create credentials → OAuth client ID**).
+3. For **Application type**, choose **Web application**.
+4. **Name:** e.g. `Vidya Web (PWA)` (for your reference only).
+5. Under **Authorized JavaScript origins**, click **Add URI** and enter the exact
+   address the PWA is served from — **scheme + host only, no path, no trailing slash**:
+   - `https://app.neverworks.org` — the production origin.
+   - `http://localhost:5273` — optional, only if you want to test on your own computer
+     with `npm run dev:web`.
+6. **Leave "Authorized redirect URIs" EMPTY.** The browser token model does not use a
+   redirect URL. (If you add one it does no harm, but it is not needed.)
+7. Click **Create** and copy the **Client ID** (ends in `.apps.googleusercontent.com`).
+
+➡️ Record this as **`google_client_id_web`**.
+
+> The origin must match **exactly** — `https://`, the right host, no trailing slash. A
+> mismatch is the #1 cause of "redirect_uri / origin not allowed" sign-in errors on the
+> PWA. You can edit this client later to add more origins (e.g. a staging URL).
+
+---
+
+## Part 7 — Create the **Android** OAuth client (client C) — DO THIS LAST
 
 > 🛑 **Do not do this part yet if the two things below aren't settled.** The Android
 > client is permanently tied to two values that are *not final* right now:
@@ -358,36 +399,40 @@ line — it's 20 pairs of hex digits separated by colons
 
 ---
 
-## Part 8 — Where the two client IDs go (build config → GitHub)
+## Part 8 — Where the three client IDs go (build config → GitHub)
 
-You now have two values:
+You now have up to three values:
 
 | Build-config key | Value | Which client |
 |------------------|-------|--------------|
 | `google_client_id_desktop` | `…apps.googleusercontent.com` | Part 6 (Desktop app) |
+| `google_client_id_web` | `…apps.googleusercontent.com` | Part 6B (Web / iPhone PWA) |
 | `google_client_id_android` | `…apps.googleusercontent.com` | Part 7 (Android) |
 
-These feed Vidya's **build configuration**. At release time they are supplied to
-the automated build (GitHub Actions) as **repository secrets / variables** with the
-**exact same names**:
+These feed Vidya's **build configuration**. At release time they are supplied to the
+automated build (GitHub Actions) as repository **Variables** with the **exact same
+UPPER_CASE names**:
 
 1. On GitHub, open the Vidya repository.
-2. Go to **Settings → Secrets and variables → Actions**.
-3. Add each value:
-   - Client IDs are not truly secret, so either the **Variables** tab or the
-     **Secrets** tab works; if unsure, **Secrets** is the safe default.
-   - Click **New repository secret** (or **New variable**).
+2. Go to **Settings → Secrets and variables → Actions → the `Variables` tab**.
+3. For each, click **New repository variable** and add:
    - **Name:** `GOOGLE_CLIENT_ID_DESKTOP` — **Value:** the desktop client ID.
-   - Repeat: **Name:** `GOOGLE_CLIENT_ID_ANDROID` — **Value:** the android client ID.
+   - **Name:** `GOOGLE_CLIENT_ID_WEB` — **Value:** the web client ID.
+   - **Name:** `GOOGLE_CLIENT_ID_ANDROID` — **Value:** the android client ID.
 
-   *(Use the exact key names the build expects. This guide's config keys are
-   `google_client_id_desktop` / `google_client_id_android`; GitHub environment
-   names are conventionally UPPER_CASE. Match whatever the workflow file references.)*
+> ⚠️ **Use the `Variables` tab, not `Secrets`.** The release workflow reads these as
+> `${{ vars.GOOGLE_CLIENT_ID_* }}`, so a value put in the **Secrets** tab is read as
+> **empty** and the build fails (the PWA job fails on purpose rather than ship a
+> non-working sign-in). Client IDs are not confidential, so Variables is also the
+> correct place for them.
 
-4. Save. The next release build will read these in and bake them into the app.
+4. Save. The next release build reads them in and bakes them into each build.
 
-You do **not** need to create the Android secret until the Android client actually
-exists (Part 7). The desktop build only needs `google_client_id_desktop`.
+You only need each variable when you actually ship that build: the desktop build needs
+`GOOGLE_CLIENT_ID_DESKTOP`; the PWA job needs `GOOGLE_CLIENT_ID_WEB`; the Android build
+needs `GOOGLE_CLIENT_ID_ANDROID` (created last, Part 7). For **local** PWA testing you
+can instead put `VITE_GOOGLE_CLIENT_ID_WEB=…` in `web-pwa/.env.local` (git-ignored) —
+see `docs/DEPLOY-PWA.md`.
 
 ---
 
@@ -401,9 +446,12 @@ exists (Part 7). The desktop build only needs `google_client_id_desktop`.
 - [ ] Privacy policy URL entered **and the page is actually live before publishing**
 - [ ] Yourself added under **Test users** (while in Testing)
 - [ ] **Desktop app** client created → saved as `google_client_id_desktop`
+- [ ] **Web application** client created (JS origin `https://app.neverworks.org`, no
+      redirect URI) → saved as `google_client_id_web`
 - [ ] Package name + release keystore decided → **Android** client created →
       saved as `google_client_id_android` *(last)*
-- [ ] Both IDs added to GitHub → **Settings → Secrets and variables → Actions**
+- [ ] All IDs added to GitHub → **Settings → Secrets and variables → Actions → the
+      `Variables` tab** (not Secrets)
 
 ---
 

@@ -34,11 +34,11 @@ Rule 5: no invented API behaviour — every claim here is sourced.
   `gmail.send` was chosen over broader Gmail scopes.
 - What sensitive-scope verification requires the owner to do (official list):
   1. **Verify domain ownership** of the OAuth project's authorized domains in **Google Search
-     Console** (i.e. prove control of `zuhairhussain.com`).
+     Console** (i.e. prove control of `neverworks.org`).
   2. A **live, public homepage** that clearly describes the app (not just a store listing).
   3. A **privacy policy** that explicitly discloses how the app accesses/uses/stores/shares
      Google user data, linked from the OAuth consent screen — the page must be **live** (the
-     current `https://zuhairhussain.com/vidya/privacy` is still a placeholder, per
+     current `https://neverworks.org/privacy` is still a placeholder, per
      `GOOGLE-OAUTH-SETUP.md`).
   4. **Per-scope justification** for `gmail.send`.
   5. An **unlisted YouTube demo video** showing the OAuth consent flow and the actual data usage.
