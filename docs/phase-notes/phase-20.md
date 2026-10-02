@@ -1,5 +1,32 @@
 # Phase 20 handoff — making sync/Drive actually live (desktop Drive backup; sync audit; Drive spike)
 
+## ⟳ Session update — desktop restore + LAN client now COMPLETE
+
+Since the sections below were first written, two more owner-ordered pieces landed
+(all on `v2/p20-live-sync`, verified, not pushed):
+
+- **Desktop is now fully complete** — restore was the missing half of backup and is
+  now wired end-to-end (local file + in-app Google Drive):
+  - R1 salt-carrying (`.vbak.meta` + Drive appProperties) `9c5b28e`
+  - R2 restore commands (summary + staged install + restart) `1b4c0b0`
+  - R3 restore-from-Drive `57a4ff6`; R4 Recover screen `2d93716`; docs `58e900f`
+  - A web-downloaded `.vbak` alone can't be restored (salt is in Drive properties) →
+    use in-app "Restore from Google Drive". See `docs/DRIVE-BACKUP.md`.
+- **Phase B (LAN multi-device client) is COMPLETE** — it was greenfield (no client
+  runtime existed); now built + CI-verified with a real server-start harness:
+  - B1 client-identity store `ef06c8c`
+  - B2 join over pinned TLS + `tests/sync_lan_e2e.rs` (real join + authed pull) `4c3574f`
+  - B3 `client_sync_tick` `1e3f4bc` + startup role detection & background sync loop
+    `a4a431c` + the `join_school` command & Welcome "Join a school" wiring `12abacd`
+  - The harness proves join + pinned-TLS sync end-to-end over localhost; the real
+    **two-PC** run is the owner's final check. Code-only (mDNS) join + mDNS
+    re-discovery of a moved server IP are noted follow-ups.
+
+**Still gated on the owner:** the Q-B Drive test (unblocks the Drive sync client +
+iPhone — #3/#4 below), plus the live desktop round-trip and a real two-PC LAN test.
+
+---
+
 ## Start state / branch
 
 - Branch `v2/p20-live-sync` (off `v2/p19`). Not merged, not tagged, not pushed.
