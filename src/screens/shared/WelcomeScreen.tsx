@@ -30,11 +30,14 @@ export default function WelcomeScreen({
   data,
   initial,
   onActivate,
+  onJoin,
 }: {
   data: WelcomeData
   initial?: 'setup' | 'join' | 'recover'
   /** Real flow: "Activate and continue" → activate the licence with this code. */
   onActivate?: (code: string) => void
+  /** Join flow: the field holds the invitation link; joins this device as a client. */
+  onJoin?: (invite: string) => void
 }) {
   const [mode, setMode] = useState<Mode>(initial ?? 'setup')
   const [code, setCode] = useState('')
@@ -290,6 +293,7 @@ export default function WelcomeScreen({
           type="button"
           onClick={() => {
             if (isSetup && onActivate) onActivate(code)
+            else if (isJoin && onJoin) onJoin(code)
             else if (isRecover) navigate('/recover')
           }}
           style={{

@@ -223,6 +223,8 @@ pub const COMMANDS: &[&str] = &[
     "restore_install",
     "restore_drive_list",
     "restore_drive_fetch",
+    // Join a school as a client (Phase B).
+    "join_school",
     #[cfg(debug_assertions)]
     "seed_demo_school",
 ];
@@ -1645,6 +1647,47 @@ pub fn restore_drive_fetch(state: State<RtCtx>, file_id: String, name: String) -
         .map_err(|e| crate::error::CmdError::internal(e.to_string()))?;
     std::fs::write(crate::backup::meta_path(&vbak), meta_json).map_err(|e| crate::error::CmdError::internal(e.to_string()))?;
     Ok(vbak.to_string_lossy().to_string())
+}
+
+// ---- Join a school as a client (Welcome → Join, Phase B) -------------------
+
+/// Join a school from an invitation link: connect to its server over the pinned cert,
+/// provision this device, persist the client identity, then RESTART so the app comes
+/// up as a Client (device_mode) and starts syncing. Async (the join is a network call).
+#[tauri::command]
+pub async fn join_school(app: tauri::AppHandle, state: State<'_, RtCtx>, invite: String, device_name: String) -> CmdResult<()> {
+    let payload = crate::server::invite::parse_join_link(invite.trim()).map_err(|e| {
+        crate::error::CmdError::new("INVITE_INVALID", "error.INVITE_INVALID", serde_json::json!({ "detail": e }))
+    })?;
+    let key_hex = state
+        .db_key_hex
+        .clone()
+        .ok_or_else(|| crate::error::CmdError::internal("no db key"))?;
+    let db_path = state.db_path();
+    let name = if device_name.trim().is_empty() { "New device".to_string() } else { device_name };
+    let platform = if cfg!(target_os = "android") {
+        "android"
+    } else if cfg!(target_os = "windows") {
+        "windows"
+    } else if cfg!(target_os = "macos") {
+        "macos"
+    } else {
+        "desktop"
+    };
+
+    // Do the network join FIRST (no DB handle → the future is Send, which Tauri's
+    // async commands require), then open a connection and persist the identity.
+    let resp = crate::sync::client::fetch_join(&payload, &name, platform)
+        .await
+        .map_err(|e| crate::error::CmdError::new("JOIN_FAILED", "error.JOIN_FAILED", serde_json::json!({ "detail": e })))?;
+    let conn = crate::db::open_encrypted(&db_path, &key_hex).map_err(|e| crate::error::CmdError::internal(e.to_string()))?;
+    crate::sync::client::apply_join_response(&conn, &resp, &payload.cert_sha256, &payload.lan_addrs, payload.port)
+        .map_err(|e| crate::error::CmdError::internal(e.to_string()))?;
+    drop(conn);
+
+    app.restart();
+    #[allow(unreachable_code)]
+    Ok(())
 }
 
 #[cfg(debug_assertions)]

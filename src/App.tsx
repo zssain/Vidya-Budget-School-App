@@ -86,6 +86,7 @@ export default function App() {
   const store = useStore()
   useLang() // re-render the whole tree when the language changes (Settings)
   const [activateErr, setActivateErr] = useState<CmdError | null>(null)
+  const [joinErr, setJoinErr] = useState<CmdError | null>(null)
 
   // Guarded by import.meta.env.DEV so the route strings are dead-code-eliminated
   // from release bundles (prompts/P09 §2 — no dev routes in shipped artifacts).
@@ -121,18 +122,25 @@ export default function App() {
       .catch((e) => setActivateErr(e as CmdError))
   }
 
+  // Join a school as a client from an invitation link. On success the backend
+  // restarts the app into Client mode; only an error returns here.
+  const handleJoin = (invite: string) => {
+    setJoinErr(null)
+    api.join_school(invite, '').catch((e) => setJoinErr(e as CmdError))
+  }
+
   switch (route.screen) {
     case 'welcome':
       // Recover an existing school from a .vbak (pre-auth sub-route of Welcome).
       if (base === '/recover') return <RecoverScreen />
       return (
         <>
-          {activateErr && (
+          {(activateErr || joinErr) && (
             <div style={{ position: 'fixed', top: 0, left: 0, right: 0, zIndex: 10, background: 'var(--pill-unpaid-bg)', color: 'var(--pill-unpaid-fg)', textAlign: 'center', padding: '10px 16px', fontSize: 13 }}>
-              {t(activateErr.message_key, activateErr.vars as Record<string, string | number>)}
+              {t((activateErr ?? joinErr)!.message_key, (activateErr ?? joinErr)!.vars as Record<string, string | number>)}
             </div>
           )}
-          <WelcomeScreen data={welcomeFixture} onActivate={handleActivate} />
+          <WelcomeScreen data={welcomeFixture} onActivate={handleActivate} onJoin={handleJoin} />
         </>
       )
     case 'setup':

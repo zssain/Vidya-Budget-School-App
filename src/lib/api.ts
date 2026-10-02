@@ -1671,6 +1671,10 @@ export const restore_drive_list = () => invoke<RestoreDriveEntryDto[]>('restore_
 export const restore_drive_fetch = (fileId: string, name: string) =>
   invoke<string>('restore_drive_fetch', { fileId, name })
 
+// Join a school as a client (Welcome → Join). On success the app restarts.
+export const join_school = (invite: string, deviceName: string) =>
+  invoke<void>('join_school', { invite, deviceName })
+
 // ---- Phase 4: staff & access, invitations, devices, sync, conflicts --------
 export interface StaffFullDto {
   id: string

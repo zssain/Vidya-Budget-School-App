@@ -195,7 +195,8 @@
     "restore_summary",
     "restore_install",
     "restore_drive_list",
-    "restore_drive_fetch"
+    "restore_drive_fetch",
+    "join_school"
   ],
   "debugOnly": ["seed_demo_school"]
 }

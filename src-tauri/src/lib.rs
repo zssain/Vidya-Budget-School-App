@@ -271,6 +271,7 @@ fn invoke_handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'stat
         resolve_review_flag,
         drive_status, drive_connect, drive_disconnect,
         restore_summary, restore_install, restore_drive_list, restore_drive_fetch,
+        join_school,
         seed_demo_school
     ]
 }
@@ -318,6 +319,7 @@ fn invoke_handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'stat
         server_status, sync_status, sync_now, list_conflicts, resolve_conflict, list_review_flags,
         resolve_review_flag,
         drive_status, drive_connect, drive_disconnect,
-        restore_summary, restore_install, restore_drive_list, restore_drive_fetch
+        restore_summary, restore_install, restore_drive_list, restore_drive_fetch,
+        join_school
     ]
 }

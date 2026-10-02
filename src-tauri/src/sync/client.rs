@@ -96,16 +96,11 @@ pub fn clear(conn: &Connection) -> rusqlite::Result<()> {
     kv::delete(conn, KV_CLIENT)
 }
 
-/// Join a school as a client (Phase B): POST `/v1/join` to the school server over the
-/// invite's **pinned** TLS cert, trying each advertised LAN address in turn, then
-/// persist the returned identity. Returns the stored [`ClientIdentity`]. Async — call
-/// from a command (off the server's own runtime).
-pub async fn join_school(
-    conn: &Connection,
-    payload: &JoinPayload,
-    device_name: &str,
-    platform: &str,
-) -> Result<ClientIdentity, String> {
+/// Call `/v1/join` on the school server over the invite's **pinned** TLS cert, trying
+/// each advertised LAN address in turn, and return the server's `JoinResp`. No DB —
+/// so the future is `Send` (it holds no `&Connection` across the network awaits), which
+/// a Tauri async command requires. Persist the result with [`apply_join_response`].
+pub async fn fetch_join(payload: &JoinPayload, device_name: &str, platform: &str) -> Result<JoinResp, String> {
     let req = JoinReq {
         invite_code: payload.code.clone(),
         device_name: device_name.to_string(),
@@ -122,17 +117,27 @@ pub async fn join_school(
     for addr in &payload.lan_addrs {
         let url = format!("https://{addr}:{}/v1/join", payload.port);
         match http.post(&url).json(&req).send().await {
-            Ok(r) if r.status().is_success() => {
-                let jr: JoinResp = r.json().await.map_err(|e| e.to_string())?;
-                apply_join_response(conn, &jr, &payload.cert_sha256, &payload.lan_addrs, payload.port)
-                    .map_err(|e| e.to_string())?;
-                return load(conn).ok_or_else(|| "identity not stored".to_string());
-            }
+            Ok(r) if r.status().is_success() => return r.json::<JoinResp>().await.map_err(|e| e.to_string()),
             Ok(r) => last_err = format!("server rejected the join (HTTP {})", r.status()),
             Err(e) => last_err = e.to_string(),
         }
     }
     Err(last_err)
+}
+
+/// Fetch + persist in one call (convenience for tests / single-connection callers).
+/// Holds a `&Connection` across the await, so its future is `!Send` — fine for a
+/// current-thread test runtime, but a Tauri async command must instead call
+/// [`fetch_join`] then [`apply_join_response`] (see commands::join_school).
+pub async fn join_school(
+    conn: &Connection,
+    payload: &JoinPayload,
+    device_name: &str,
+    platform: &str,
+) -> Result<ClientIdentity, String> {
+    let jr = fetch_join(payload, device_name, platform).await?;
+    apply_join_response(conn, &jr, &payload.cert_sha256, &payload.lan_addrs, payload.port).map_err(|e| e.to_string())?;
+    load(conn).ok_or_else(|| "identity not stored".to_string())
 }
 
 /// Run one sync cycle as a client: build the LAN route(s) from the stored identity and
