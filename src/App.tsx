@@ -9,6 +9,7 @@ import AppShell from '@/components/desktop/AppShell'
 import type { Role } from '@/lib/nav'
 import WelcomeScreen from '@/screens/shared/WelcomeScreen'
 import SetupWizard from '@/screens/shared/SetupWizard'
+import RecoverScreen from '@/screens/shared/RecoverScreen'
 import PinUnlockScreen from '@/screens/shared/PinUnlockScreen'
 import ApprovalsScreen from '@/screens/desktop/ApprovalsScreen'
 import StaffAccessScreen from '@/screens/desktop/StaffAccessScreen'
@@ -122,6 +123,8 @@ export default function App() {
 
   switch (route.screen) {
     case 'welcome':
+      // Recover an existing school from a .vbak (pre-auth sub-route of Welcome).
+      if (base === '/recover') return <RecoverScreen />
       return (
         <>
           {activateErr && (

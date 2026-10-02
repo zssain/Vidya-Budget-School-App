@@ -290,6 +290,7 @@ export default function WelcomeScreen({
           type="button"
           onClick={() => {
             if (isSetup && onActivate) onActivate(code)
+            else if (isRecover) navigate('/recover')
           }}
           style={{
             height: '50px',

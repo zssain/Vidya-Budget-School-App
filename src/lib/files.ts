@@ -54,3 +54,17 @@ export async function pickOpenPath(): Promise<string | null> {
     return null
   }
 }
+
+/** Ask for a Vidya backup file (`.vbak`) to restore from. Null if cancelled. */
+export async function pickBackupPath(): Promise<string | null> {
+  try {
+    const r = await open({
+      multiple: false,
+      directory: false,
+      filters: [{ name: 'Vidya backup', extensions: ['vbak'] }],
+    })
+    return typeof r === 'string' ? r : null
+  } catch {
+    return null
+  }
+}
