@@ -195,10 +195,10 @@ pub fn upload_and_verify(
     backups_folder: &str,
     filename: &str,
     bytes: &[u8],
+    props: &std::collections::BTreeMap<String, String>,
 ) -> Result<bool, DriveError> {
     let tmp_name = format!("{filename}.uploading");
-    let props = std::collections::BTreeMap::new();
-    let file = drive.create(backups_folder, &tmp_name, bytes, &props)?;
+    let file = drive.create(backups_folder, &tmp_name, bytes, props)?;
     let readback = drive.download(&file.id)?;
     if readback != bytes {
         let _ = drive.delete(&file.id);
@@ -251,7 +251,9 @@ pub fn retain_local(dir: &Path, today: &str) -> BackupResult<Vec<String>> {
     }
     let delete = select_for_deletion(&records, today);
     for name in &delete {
-        std::fs::remove_file(dir.join(name)).map_err(|e| BackupError::Io(e.to_string()))?;
+        let vbak = dir.join(name);
+        std::fs::remove_file(&vbak).map_err(|e| BackupError::Io(e.to_string()))?;
+        let _ = std::fs::remove_file(meta_path(&vbak)); // drop the .meta sidecar too (best-effort)
     }
     Ok(delete)
 }
@@ -334,11 +336,21 @@ pub fn run_backup(
         });
     }
 
+    // Carry the (non-secret) KDF salt + school id so a fresh PC can derive the backup
+    // key from the recovery key and restore (§12): a plaintext `<file>.vbak.meta`
+    // sidecar locally, and the same in the Drive file's appProperties for
+    // restore-from-Drive. The key itself is NEVER stored.
+    let (salt_hex, school_id) = backup_meta_facts(src)?;
+    write_meta_sidecar(&dest, &salt_hex, &school_id)?;
+    let mut props = std::collections::BTreeMap::new();
+    props.insert("vidya_salt".to_string(), salt_hex);
+    props.insert("vidya_school".to_string(), school_id);
+
     // Optional Drive copy.
     let bytes = std::fs::read(&dest).map_err(|e| BackupError::Io(e.to_string()))?;
     let drive_state = match drive {
         None => DriveState::NotConfigured,
-        Some(t) => match upload_and_verify(t.client, t.backups_folder, &filename, &bytes) {
+        Some(t) => match upload_and_verify(t.client, t.backups_folder, &filename, &bytes, &props) {
             Ok(true) => DriveState::Verified,
             Ok(false) | Err(_) => DriveState::Unavailable,
         },
@@ -351,6 +363,56 @@ pub fn run_backup(
         local_verified,
         drive: drive_state,
     })
+}
+
+// ---- backup metadata (the restore salt) ----------------------------------
+
+/// Plaintext restore metadata written beside each `.vbak` (`<file>.vbak.meta`) and
+/// mirrored into the Drive file's appProperties. Non-secret: it carries the KDF
+/// **salt** (hex) + school id so a fresh PC can derive the backup key from the
+/// recovery key (§12). The key itself is never stored.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct BackupMeta {
+    pub v: u32,
+    pub salt: String,
+    pub school_id: String,
+}
+
+/// The `.meta` sidecar path for a `.vbak`.
+pub fn meta_path(vbak: &Path) -> PathBuf {
+    let name = vbak.file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+    vbak.with_file_name(format!("{name}.meta"))
+}
+
+/// Read (salt_hex, school_id) for the restore metadata from the live DB.
+fn backup_meta_facts(src: &Connection) -> BackupResult<(String, String)> {
+    src.query_row("SELECT backup_salt, id FROM school LIMIT 1", [], |r| {
+        let salt: Vec<u8> = r.get(0)?;
+        let id: String = r.get(1)?;
+        Ok((hex_encode(&salt), id))
+    })
+    .map_err(|e| BackupError::Verify(e.to_string()))
+}
+
+/// Write the `<file>.vbak.meta` sidecar (plaintext JSON).
+fn write_meta_sidecar(dest: &Path, salt_hex: &str, school_id: &str) -> BackupResult<()> {
+    let meta = BackupMeta { v: 1, salt: salt_hex.to_string(), school_id: school_id.to_string() };
+    let json = serde_json::to_string(&meta).map_err(|e| BackupError::Io(e.to_string()))?;
+    std::fs::write(meta_path(dest), json).map_err(|e| BackupError::Io(e.to_string()))
+}
+
+/// Read the restore metadata beside a `.vbak` (its `.meta` sidecar), if present.
+pub fn read_meta_sidecar(vbak: &Path) -> Option<BackupMeta> {
+    let raw = std::fs::read_to_string(meta_path(vbak)).ok()?;
+    serde_json::from_str(&raw).ok()
+}
+
+fn hex_encode(bytes: &[u8]) -> String {
+    let mut s = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        s.push_str(&format!("{b:02x}"));
+    }
+    s
 }
 
 // ---- small IO helpers ----------------------------------------------------
@@ -548,7 +610,7 @@ mod tests {
         let drive = FakeDrive::new();
         let layout = drive.provision_school(&[("t", "d")]);
         let client = drive.as_actor(PRINCIPAL);
-        let ok = upload_and_verify(&client, &layout.backups, "vidya-x-20260923-0600.vbak", b"BACKUPBYTES").unwrap();
+        let ok = upload_and_verify(&client, &layout.backups, "vidya-x-20260923-0600.vbak", b"BACKUPBYTES", &std::collections::BTreeMap::new()).unwrap();
         assert!(ok);
         // The final (renamed) file is present with the exact bytes.
         let files = client.list(&layout.backups).unwrap();
@@ -563,7 +625,7 @@ mod tests {
         drive.set_quota_full(true);
         let client = drive.as_actor(PRINCIPAL);
         assert!(matches!(
-            upload_and_verify(&client, &layout.backups, "b.vbak", b"x"),
+            upload_and_verify(&client, &layout.backups, "b.vbak", b"x", &std::collections::BTreeMap::new()),
             Err(DriveError::QuotaFull)
         ));
     }
@@ -595,6 +657,32 @@ mod tests {
         assert_eq!(r.drive, DriveState::Verified);
         // The Drive copy exists under the final name.
         assert!(client.list(&layout.backups).unwrap().iter().any(|f| f.name == r.filename));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn run_backup_writes_salt_meta_locally_and_to_drive_props() {
+        let src = source();
+        let dir = tmp_dir("run-meta");
+        let drive = FakeDrive::new();
+        let layout = drive.provision_school(&[("t", "d")]);
+        let client = drive.as_actor(PRINCIPAL);
+        let target = DriveTarget { client: &client, backups_folder: &layout.backups };
+        let r = run_backup(&src, "saraswati", BK_KEY, "2026-09-23T06:02:00Z", &dir, Some(target)).unwrap();
+        assert_eq!(r.drive, DriveState::Verified);
+
+        // Local `.vbak.meta` sidecar carries the (non-secret) salt + school id so a
+        // fresh PC can derive the backup key from the recovery key.
+        let vbak = dir.join(&r.filename);
+        let meta = read_meta_sidecar(&vbak).expect("meta sidecar written");
+        assert_eq!(meta.v, 1);
+        assert!(!meta.salt.is_empty(), "salt recorded (hex)");
+
+        // The Drive file carries the same salt in appProperties (restore-from-Drive).
+        let files = client.list(&layout.backups).unwrap();
+        let f = files.iter().find(|f| f.name == r.filename).expect("uploaded file");
+        assert_eq!(f.properties.get("vidya_salt"), Some(&meta.salt));
+        assert_eq!(f.properties.get("vidya_school"), Some(&meta.school_id));
         std::fs::remove_dir_all(&dir).ok();
     }
 

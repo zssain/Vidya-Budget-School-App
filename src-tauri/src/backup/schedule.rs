@@ -206,8 +206,15 @@ mod tests {
         run_and_record(&mut conn, dir.path(), backup_key).unwrap();
 
         // A backup file exists and a run was recorded (local-only → "partial").
-        let files: Vec<_> = std::fs::read_dir(dir.path().join("backups")).unwrap().flatten().collect();
-        assert_eq!(files.len(), 1, "one .vbak written");
+        // (A `.vbak.meta` salt sidecar is written alongside — count only the .vbak.)
+        let vbaks: Vec<_> = std::fs::read_dir(dir.path().join("backups"))
+            .unwrap()
+            .flatten()
+            .filter(|e| e.file_name().to_string_lossy().ends_with(".vbak"))
+            .collect();
+        assert_eq!(vbaks.len(), 1, "one .vbak written");
+        // The salt sidecar is present (restore-on-a-fresh-PC can derive the key).
+        assert!(dir.path().join("backups").join(format!("{}.meta", vbaks[0].file_name().to_string_lossy())).exists());
         let (status, dest): (String, Option<String>) = conn
             .query_row("SELECT status, destination FROM backup_run LIMIT 1", [], |r| Ok((r.get(0)?, r.get(1)?)))
             .unwrap();
