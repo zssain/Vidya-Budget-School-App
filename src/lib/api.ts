@@ -1647,6 +1647,21 @@ export const drive_status = () => invoke<DriveStatusDto>('drive_status')
 export const drive_connect = () => invoke<DriveStatusDto>('drive_connect')
 export const drive_disconnect = () => invoke<DriveStatusDto>('drive_disconnect')
 
+// Restore (Welcome → Recover an existing school)
+export interface RestoreSummaryDto {
+  school_name: string
+  backup_date: string
+  students: number
+  payments: number
+  last_receipt_no: string | null
+  chain_ok: boolean
+  stale: boolean
+}
+export const restore_summary = (path: string, recoveryKey: string) =>
+  invoke<RestoreSummaryDto>('restore_summary', { path, recoveryKey })
+export const restore_install = (path: string, recoveryKey: string) =>
+  invoke<void>('restore_install', { path, recoveryKey })
+
 // ---- Phase 4: staff & access, invitations, devices, sync, conflicts --------
 export interface StaffFullDto {
   id: string

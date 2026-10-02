@@ -23,10 +23,47 @@ use std::path::{Path, PathBuf};
 
 use rusqlite::{params, OptionalExtension};
 
-use super::{parse_backup_at, BackupError, BackupResult};
+use super::{parse_backup_at, read_meta_sidecar, BackupError, BackupResult};
 use crate::db;
-use crate::security::audit;
+use crate::security::{audit, recovery};
 use vidya_core::restore::RestoreSummary;
+
+fn hex_encode(bytes: &[u8]) -> String {
+    let mut s = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        s.push_str(&format!("{b:02x}"));
+    }
+    s
+}
+
+fn hex_decode(s: &str) -> Option<Vec<u8>> {
+    if s.len() % 2 != 0 {
+        return None;
+    }
+    (0..s.len()).step_by(2).map(|i| u8::from_str_radix(&s[i..i + 2], 16).ok()).collect()
+}
+
+/// Derive the backup-key hex from the recovery key + the `.vbak.meta` salt beside the
+/// backup (§12). The key is never stored; the salt is the non-secret KDF salt. Errors
+/// if the sidecar is missing or corrupt — the caller surfaces "needs the .meta file".
+pub fn backup_key_from_meta(vbak: &Path, recovery_key: &str) -> BackupResult<String> {
+    let meta = read_meta_sidecar(vbak)
+        .ok_or_else(|| BackupError::Unreadable("backup metadata (.meta) missing".into()))?;
+    let salt = hex_decode(&meta.salt)
+        .ok_or_else(|| BackupError::Unreadable("backup metadata salt invalid".into()))?;
+    let norm = recovery::normalize(recovery_key);
+    let key = recovery::derive_backup_key(&norm, &salt).map_err(BackupError::Verify)?;
+    Ok(hex_encode(&key))
+}
+
+/// Read the pre-install summary using the recovery key (derives the backup key from
+/// the `.meta` salt first). Returns the summary + the derived backup-key hex so the
+/// caller can pass it straight to [`install`] without re-deriving.
+pub fn summary_with_recovery(vbak: &Path, recovery_key: &str) -> BackupResult<(RestoreSummary, String)> {
+    let key_hex = backup_key_from_meta(vbak, recovery_key)?;
+    let summary = build_summary(vbak, &key_hex)?;
+    Ok((summary, key_hex))
+}
 
 /// Read the pre-install summary from a `.vbak` (§12). Opens read-only with the
 /// backup key; a wrong key / corrupt file → [`BackupError::Unreadable`]. The
@@ -369,6 +406,50 @@ mod tests {
             .filter(|n| n.contains("restore-staged"))
             .collect();
         assert!(stray.is_empty(), "no staged temp DB should remain: {stray:?}");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn summary_with_recovery_derives_key_from_the_meta_salt() {
+        let dir = tmp_dir("recovery");
+        let recovery = "ABCDE-FGHIJ-KLMNO-PQRST-UVWXY-23456";
+        let salt = [9u8; 16];
+        let key = recovery::derive_backup_key(&recovery::normalize(recovery), &salt).unwrap();
+        let key_hex = hex_encode(&key);
+
+        // A source school exported under the RECOVERY-derived key, with a matching
+        // `.meta` sidecar (what run_backup writes).
+        let src_path = dir.join("source.db");
+        let mut c = db::open_encrypted(&src_path, DB_KEY).unwrap();
+        db::run_migrations(&mut c).unwrap();
+        let now = "2026-09-23T06:00:00Z";
+        c.execute(
+            "INSERT INTO school(id,name,backup_salt,server_epoch,created_at,updated_at) VALUES ('s','Recovery School', ?2, 1, ?1, ?1)",
+            params![now, salt.to_vec()],
+        )
+        .unwrap();
+        {
+            let tx = c.transaction().unwrap();
+            audit::append(&tx, &audit::AuditEntry { at: now.into(), action: "seed".into(), ..Default::default() }).unwrap();
+            tx.commit().unwrap();
+        }
+        let vbak = dir.join("vidya-recovery-school-20260922-0600.vbak");
+        crate::backup::export_backup(&c, &vbak, &key_hex).unwrap();
+        std::fs::write(
+            crate::backup::meta_path(&vbak),
+            serde_json::to_string(&crate::backup::BackupMeta { v: 1, salt: hex_encode(&salt), school_id: "s".into() }).unwrap(),
+        )
+        .unwrap();
+
+        // The recovery key + the .meta salt derive the right backup key → summary reads.
+        let (summary, derived_hex) = summary_with_recovery(&vbak, recovery).unwrap();
+        assert_eq!(summary.school_name, "Recovery School");
+        assert_eq!(derived_hex, key_hex);
+        // A wrong recovery key derives a different key → the backup is unreadable.
+        assert!(summary_with_recovery(&vbak, "WRONG-WRONG-WRONG-WRONG-WRONG-00000").is_err());
+        // Missing .meta → a clear error (not a panic).
+        std::fs::remove_file(crate::backup::meta_path(&vbak)).unwrap();
+        assert!(matches!(backup_key_from_meta(&vbak, recovery), Err(BackupError::Unreadable(_))));
         std::fs::remove_dir_all(&dir).ok();
     }
 }

@@ -191,7 +191,9 @@
     "resolve_review_flag",
     "drive_status",
     "drive_connect",
-    "drive_disconnect"
+    "drive_disconnect",
+    "restore_summary",
+    "restore_install"
   ],
   "debugOnly": ["seed_demo_school"]
 }

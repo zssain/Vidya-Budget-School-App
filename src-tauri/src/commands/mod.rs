@@ -218,6 +218,9 @@ pub const COMMANDS: &[&str] = &[
     "drive_status",
     "drive_connect",
     "drive_disconnect",
+    // Restore (Welcome → Recover an existing school).
+    "restore_summary",
+    "restore_install",
     #[cfg(debug_assertions)]
     "seed_demo_school",
 ];
@@ -1464,6 +1467,99 @@ pub fn drive_connect(state: State<RtCtx>) -> CmdResult<DriveStatusDto> {
 pub fn drive_disconnect(state: State<RtCtx>) -> CmdResult<DriveStatusDto> {
     state.with_db(|c| crate::sync::drive::oauth::clear_tokens(c).map_err(|e| crate::error::CmdError::internal(e.to_string())))?;
     drive_status_dto(&state)
+}
+
+// ---- Restore (Welcome → Recover an existing school, §12) -------------------
+
+/// Pre-install summary of a `.vbak`, shown before the user confirms the restore.
+#[derive(serde::Serialize)]
+pub struct RestoreSummaryDto {
+    pub school_name: String,
+    pub backup_date: String,
+    pub students: u64,
+    pub payments: u64,
+    pub last_receipt_no: Option<String>,
+    pub chain_ok: bool,
+    /// True when the backup is more than a day old → the UI shows a gentle "this
+    /// backup is from <backup_date>" note (localised on the frontend).
+    pub stale: bool,
+}
+
+fn restore_error(e: crate::backup::BackupError) -> crate::error::CmdError {
+    use crate::backup::BackupError;
+    match e {
+        // wrong recovery key, corrupt file, or a missing `.meta` salt sidecar
+        BackupError::Unreadable(_) => {
+            crate::error::CmdError::new("RESTORE_UNREADABLE", "error.RESTORE_UNREADABLE", serde_json::Value::Null)
+        }
+        other => crate::error::CmdError::new(
+            "RESTORE_FAILED",
+            "error.RESTORE_FAILED",
+            serde_json::json!({ "detail": format!("{other:?}") }),
+        ),
+    }
+}
+
+/// Read a backup's facts (Welcome → Recover). The `recovery_key` + the `.vbak.meta`
+/// salt derive the backup key; a wrong key / missing sidecar → RESTORE_UNREADABLE.
+#[tauri::command]
+pub fn restore_summary(path: String, recovery_key: String) -> CmdResult<RestoreSummaryDto> {
+    let vbak = std::path::PathBuf::from(&path);
+    let (s, _key) = crate::backup::restore::summary_with_recovery(&vbak, &recovery_key).map_err(restore_error)?;
+    let now = crate::db::now_iso();
+    let today = now.get(0..10).unwrap_or("").to_string();
+    let stale = vidya_core::restore::staleness_warning(&s.backup_date, &today).is_some();
+    vidya_core::restore::validate_restore(&s).map_err(|e| {
+        crate::error::CmdError::new("RESTORE_INVALID", "error.RESTORE_INVALID", serde_json::json!({ "detail": format!("{e:?}") }))
+    })?;
+    Ok(RestoreSummaryDto {
+        school_name: s.school_name,
+        backup_date: s.backup_date,
+        students: s.students,
+        payments: s.payments,
+        last_receipt_no: s.last_receipt_no,
+        chain_ok: s.chain_ok,
+        stale,
+    })
+}
+
+/// Install a `.vbak` as this PC's school, then **restart** so the app reopens the
+/// restored DB under its new key (§12). Staged + atomic (safety copy kept), and it
+/// fences the previous PC (server_epoch + 1, every device needs to rejoin).
+#[tauri::command]
+pub fn restore_install(app: tauri::AppHandle, state: State<RtCtx>, path: String, recovery_key: String) -> CmdResult<()> {
+    let vbak = std::path::PathBuf::from(&path);
+    let backup_key_hex =
+        crate::backup::restore::backup_key_from_meta(&vbak, &recovery_key).map_err(restore_error)?;
+    let live_db = state.db_path();
+    let now = crate::db::now_iso();
+
+    // A fresh DB key for the restored copy (the backup is re-encrypted under it).
+    let new_key = crate::security::keys::random_key();
+    let new_hex = crate::security::keys::to_hex(&new_key);
+
+    // Close the current DB connection so the file can be swapped (Windows locks open
+    // files). We restart right after, so the dropped connection is never reused.
+    if let Ok(mut guard) = state.db.lock() {
+        let _ = guard.take();
+    }
+
+    crate::backup::restore::install(&vbak, &backup_key_hex, &live_db, &new_hex, &now).map_err(restore_error)?;
+
+    // Persist the new DB key (keychain on desktop, file on Android), then restart.
+    #[cfg(not(target_os = "android"))]
+    let key_store: Box<dyn crate::security::keys::KeyStore> =
+        Box::new(crate::security::keys::KeyringStore::new());
+    #[cfg(target_os = "android")]
+    let key_store: Box<dyn crate::security::keys::KeyStore> =
+        Box::new(crate::security::keys::FileKeyStore::new(state.data_dir.join("db-key")));
+    key_store
+        .set(&new_key)
+        .map_err(|e| crate::error::CmdError::internal(format!("key store: {e:?}")))?;
+
+    app.restart();
+    #[allow(unreachable_code)]
+    Ok(())
 }
 
 #[cfg(debug_assertions)]
