@@ -62,7 +62,32 @@ add the account under **Test users** (or publish the consent screen).
 
 ---
 
-## 3. What's automated vs manual
+## 3. Restoring a school on another PC
+
+A backup is only useful if you can restore it, so test the round-trip once:
+
+1. On a **fresh PC** (or after reinstalling), open Vidya → on the Welcome screen pick
+   **Recover an existing school** → **Continue**. You land on the Recover screen.
+2. Choose the backup, either way:
+   - **Restore from Google Drive** — sign in as the backup account; the newest
+     backups are listed; click **Use this**. (This is the normal path — a `.vbak`
+     downloaded from Drive's website on its own **cannot** be restored, because its
+     salt lives in the file's Drive properties, which a plain download does not carry.)
+   - **Choose a backup file (.vbak)** — only works when the file's **`.vbak.meta`**
+     sidecar is beside it (e.g. copied from another PC's `…/Vidya/backups/` folder).
+3. Enter the **recovery key** → **Check this backup** → confirm the school name, date
+   and counts look right → **Restore this school**.
+4. Vidya installs it and **restarts** into the restored school. The previous PC is
+   fenced off (its devices must rejoin); your prior data on this PC (if any) is kept
+   as a `vidya.db.pre-restore-…` safety copy.
+
+> The install→restart and the live Drive sign-in can only be confirmed on a real
+> build; everything underneath (key derivation, staged atomic install, fencing) is
+> covered by tests.
+
+---
+
+## 4. What's automated vs manual
 
 | Piece | Covered by |
 |---|---|
@@ -70,4 +95,7 @@ add the account under **Test users** (or publish the consent screen).
 | Drive REST error mapping, JSON→file mapping, multipart upload body, folder query | `sync::drive::google` unit tests |
 | Backup upload + verify-by-readback + prune, outcome (Verified/Partial) | `backup` tests with a fake Drive |
 | "Not connected → local-only, never fails" | `backup::schedule` test |
+| Salt carried to `.meta` + Drive appProperties | `backup` test |
+| Restore: key from recovery+salt, summary, staged atomic install + fencing | `backup::restore` tests |
 | **Live Google sign-in + real upload** | **manual (section 2)** |
+| **Restore → app restarts into the recovered school** | **manual (section 3)** |
