@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Vidya — Drive visibility test (Q-B)</title>
+  </head>
+  <body style="font: 16px system-ui, sans-serif; max-width: 720px; margin: 40px auto; padding: 0 16px; color: #0c1b38; line-height: 1.5">
+    <h1 style="font-size: 24px">Drive visibility test</h1>
+    <p>
+      This answers the one blocking question for Vidya's zero-cost iPhone sync
+      (<code>drive-file-spike.md</code>, "Q-B"): can the iPhone's <b>Web</b> OAuth client
+      read files the desktop app created in Google Drive?
+    </p>
+    <ol>
+      <li>First, on the Windows/Mac app, <b>connect Google Drive and run a backup</b> as
+        the school's Google account (creates <code>Vidya/backups/*.vbak</code>).</li>
+      <li>Then click the button below and <b>sign in as the same Google account</b>.</li>
+      <li>Read the verdict at the bottom.</li>
+    </ol>
+    <button id="run" style="font: 600 16px system-ui; padding: 10px 18px; border: 0; border-radius: 8px; background: #0c1b38; color: #fff; cursor: pointer">
+      Sign in to Google &amp; list what this Web client can see
+    </button>
+    <pre id="out" style="margin-top: 20px; white-space: pre-wrap; background: #f4f6f8; padding: 16px; border-radius: 8px; min-height: 40px"></pre>
+    <script type="module" src="/drive-test.ts"></script>
+  </body>
+</html>

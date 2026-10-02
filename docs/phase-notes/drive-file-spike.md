@@ -64,10 +64,22 @@ Uses the real Vidya clients + the school Google account:
    Q-B = NO.
 
 Because the Web client uses the browser token model (not a redirect), the OAuth
-Playground can't easily stand in for step 2. The clean way to run this is a tiny
-**"Drive visibility" test harness** that reuses code we already have (`src/lib/web/
-drive` from P19 + the desktop client from Phase A). **I can build that harness** so the
-owner just: run a desktop backup → open the test page → sign in once → see YES/NO.
+Playground can't stand in for step 2. A **dev-only test harness is now built** that
+reuses the real P19 web OAuth (`src/lib/web/drive/auth.ts`), so the result reflects
+exactly what the iPhone would see. To run it:
+
+```bash
+# one-time: add http://localhost:5273 to the Web client's Authorized JavaScript
+# origins, and ensure web-pwa/.env.local has VITE_GOOGLE_CLIENT_ID_WEB.
+npm run dev:web
+# then open http://localhost:5273/drive-test.html, click the button, and sign in
+# as the SAME Google account you used for the desktop backup.
+```
+
+The page lists every file this Web client can access and prints a **verdict**: if the
+desktop-created `*.vbak` files appear → **Q-B = YES**; if not (and a desktop backup did
+run as that account) → **Q-B = NO**. The harness (`web-pwa/drive-test.{html,ts}`) is
+**not** part of the production build — it is served only by `dev:web`.
 
 ## Design decision tree (what we build after the answer)
 
@@ -86,5 +98,6 @@ owner just: run a desktop backup → open the test page → sign in once → see
 
 The Drive-sync client and the iPhone sync wiring (Phase D) are **not** started until
 Q-B is answered by the test above — guessing here risks building the entire exchange
-on a false assumption. Next concrete step: **build the Drive-visibility test harness**
-(owner-runnable), get the YES/NO, then build down the matching branch.
+on a false assumption. The owner-runnable harness is built (`web-pwa/drive-test.html`);
+**the next step is for the owner to run it and report YES/NO**, then we build down the
+matching branch of the design tree.
