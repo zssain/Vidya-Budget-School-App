@@ -87,3 +87,36 @@ fn device_session_key(conn: &Connection, device_id: &str) -> Option<String> {
     .ok()
     .flatten()
 }
+
+/// Resolve (creating if needed) `Vidya/<school name> (<school id>)/exchange` and return
+/// its folder id. This MUST match the path clients use (web `src/lib/web/drive/sync.ts`)
+/// so both sides read/write the same exchange.
+pub fn resolve_exchange_folder(conn: &Connection, drive: &impl DriveApi) -> super::DriveResult<String> {
+    let (id, name): (String, String) = conn
+        .query_row("SELECT id, name FROM school LIMIT 1", [], |r| Ok((r.get(0)?, r.get(1)?)))
+        .map_err(|e| super::DriveError::Io(e.to_string()))?;
+    let vidya = drive.ensure_folder("root", "Vidya")?;
+    let school = drive.ensure_folder(&vidya, &format!("{name} ({id})"))?;
+    drive.ensure_folder(&school, "exchange")
+}
+
+/// One real-Drive pass for the school server: when Drive is connected, build the live
+/// client (reusing the Phase-A desktop Drive sign-in), resolve the exchange folder, and
+/// run [`server_drive_tick`]. SYNC — the Drive client blocks internally, so call it
+/// from a blocking thread (`spawn_blocking`), never an async task. Skips quietly when
+/// Drive is not connected or there is no school.
+pub fn server_drive_pass(conn: &mut Connection) -> Result<(), String> {
+    use super::{google::GoogleDrive, oauth};
+    if !oauth::is_connected(conn) {
+        return Ok(()); // the school hasn't connected Drive — LAN/local only
+    }
+    let client_id = crate::config::get().google_client_id_desktop.clone();
+    if client_id.is_empty() {
+        return Ok(());
+    }
+    let token = oauth::valid_access_token(conn, &client_id).map_err(|e| e.to_string())?;
+    let drive = GoogleDrive::new(token).map_err(|e| format!("{e:?}"))?;
+    let exchange = resolve_exchange_folder(conn, &drive).map_err(|e| format!("{e:?}"))?;
+    server_drive_tick(conn, &drive, &exchange, OffsetDateTime::now_utc()).map_err(|e| format!("{e:?}"))?;
+    Ok(())
+}

@@ -218,6 +218,43 @@ pub fn run() {
                     }
                 });
             }
+
+            // Phase C: the school SERVER's live Drive loop — answer PWA join requests,
+            // import clients' op bundles, write acks — when Drive is connected (else it
+            // skips, LAN/local only). Clients push/pull separately (C2). Each pass runs
+            // on a BLOCKING thread because the Drive client blocks internally.
+            #[cfg(not(target_os = "android"))]
+            {
+                let handle = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    let (mode, key_hex, db_path) = {
+                        let ctx = handle.state::<RtCtx>();
+                        (ctx.device_mode, ctx.db_key_hex.clone(), ctx.db_path())
+                    };
+                    if mode != DeviceMode::Server {
+                        return;
+                    }
+                    let Some(key_hex) = key_hex else {
+                        return;
+                    };
+                    let mut ticker = tokio::time::interval(std::time::Duration::from_secs(20));
+                    loop {
+                        ticker.tick().await;
+                        let (db_path, key_hex) = (db_path.clone(), key_hex.clone());
+                        let _ = tauri::async_runtime::spawn_blocking(move || {
+                            match db::open_encrypted(&db_path, &key_hex) {
+                                Ok(mut conn) => {
+                                    if let Err(e) = sync::drive::live::server_drive_pass(&mut conn) {
+                                        tracing::debug!("drive server pass: {e}");
+                                    }
+                                }
+                                Err(e) => tracing::warn!("drive server pass: open db: {e}"),
+                            }
+                        })
+                        .await;
+                    }
+                });
+            }
             Ok(())
         })
         .invoke_handler(invoke_handler())
