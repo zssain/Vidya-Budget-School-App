@@ -14,6 +14,7 @@ import type {
   ClassDto,
   CmdError,
   HomeworkNoteDto,
+  HomeworkNoteInput,
   SessionStaff,
   StaffDayDto,
   StaffDto,
@@ -40,6 +41,7 @@ import {
   type TimetableSlotRec,
 } from './timetable'
 import { buildHomeworkNotes, type HomeworkNoteRec } from './notes'
+import { audienceFor, newId, writeOp } from './op'
 
 /** A Web command handler: `(args) => result`. */
 export type WebHandler = (args?: Record<string, unknown>) => Promise<unknown>
@@ -181,6 +183,69 @@ export const WEB_COMMANDS: Record<string, WebHandler> = {
       subjects,
       staff: staffList,
     })
+  },
+  // Write a homework/notes entry (class teacher of the class). Emits a class:<id> op the
+  // sync loop seals with the key held at join; the school PC re-validates on import.
+  save_homework_note: async (args): Promise<HomeworkNoteDto> => {
+    const input = (args?.input ?? {}) as HomeworkNoteInput
+    const staff = await kvGet<SessionStaff>('staff')
+    const deviceId = (await kvGet<string>('device_id')) ?? ''
+    const schoolId = (await kvGet<string>('school_id')) ?? ''
+    const id = newId('hw')
+    const now = new Date().toISOString()
+    const attachments = input.attachments ?? []
+    const attachmentsJson = JSON.stringify(attachments)
+    // homework_note is NOT in the server's `is_synced` set, so apply_upsert does NOT
+    // add the §7 bookkeeping — the op payload must carry EVERY row column itself
+    // (verified by tests/web_op_apply.rs). The pushed op is 'confirmed' (committed);
+    // the local copy stays 'on_device' until the server's ack.
+    const payload = {
+      class_id: input.class_id,
+      class_subject_id: input.class_subject_id ?? null,
+      kind: input.kind,
+      text: input.text,
+      attachments_json: attachmentsJson,
+      shared_json: '[]',
+      created_by: staff?.id ?? '',
+      school_id: schoolId,
+      created_at: now,
+      updated_at: now,
+      updated_by_staff: staff?.id ?? '',
+      updated_by_device: deviceId,
+      sync_state: 'confirmed',
+    }
+    await writeOp({
+      table: 'homework_note',
+      recordId: id,
+      kind: 'insert',
+      audience: audienceFor('homework_note', input.class_id),
+      payload,
+      baseVersion: null,
+      localRow: { id, ...payload, sync_state: 'on_device' },
+      action: 'save_homework_note',
+    })
+    // Subject name for the returned card (if a class-subject was chosen).
+    let subjectName: string | null = null
+    if (input.class_subject_id) {
+      const [cs] = await listRecords<ClassSubjectRec>('class_subject', (c) => c.id === input.class_subject_id)
+      if (cs) {
+        const [sub] = await listRecords<SubjectRec>('subject', (s) => s.id === cs.subject_id)
+        subjectName = sub?.name ?? null
+      }
+    }
+    return {
+      id,
+      class_id: input.class_id,
+      class_subject_id: input.class_subject_id ?? null,
+      subject_name: subjectName,
+      kind: input.kind,
+      text: input.text,
+      attachments,
+      created_by: staff?.id ?? null,
+      created_by_name: staff?.name ?? null,
+      created_at: now,
+      can_delete: true,
+    }
   },
   // Verify the PIN (same lockout curve as the app, via WASM) → the unlocked state. On
   // failure, reject with the desktop's PIN_WRONG / PIN_LOCKED CmdError. staffId is
