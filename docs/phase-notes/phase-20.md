@@ -31,18 +31,48 @@ lock cycle on top of it.
   (relaunch / 5-min auto-lock → PIN gate → home). `unlock` rejects with the SAME
   CmdError the desktop throws (PIN_LOCKED `{until}` / PIN_WRONG `{remaining}`); pure
   `unlockError` mapper unit-tested.
-- **Remaining C3 (the big chunk):** the teacher-screen DATA + ACTION commands, each a
-  store-backed port with exact op/HLC/DTO parity (a wrong op shape silently breaks sync):
-  - read: `my_staff_day`, `my_timetable`, `list_classes`, `list_absent`,
-    `list_homework_notes`
-  - write (emit ops): `save_attendance_draft`, `save_homework_note`,
-    `delete_homework_note`, `email_homework_note`, `staff_check_in`, `staff_check_out`,
-    `request_leave`, `create_request`, `record_message`
+- **C3 READS — DONE ✅** each a faithful TS port of the Rust logic as a PURE function
+  (unit-tested) + a thin store-read shell. The teacher home + timetable + notes list now
+  render real synced data; the attendance class-picker works:
+  - `my_staff_day` (`2be11ca`, staffday.ts + 3 tests) — today/month/recent + leave balances.
+  - `my_timetable` (`614fc70`, timetable.ts + 3 tests) — SLOT_SELECT join + session periods.
+  - `list_classes` (`6c45e84`) — all classes by sort_order.
+  - `list_homework_notes` (`90c4292`, notes.ts + 2 tests) — NOTE_SELECT join + 24 h
+    can_delete.
   - `server_status` is intentionally LEFT rejecting — on the PWA it is a LAN-reachability
     probe MyAttendanceScreen catches to choose the Drive route (correct behaviour).
+  - Deferred read: `list_absent` — a heavy guardian/consent/message-preview read; it
+    belongs with the messaging write (`record_message`).
+
+- **C3 WRITES — SCOPED, NOT built (a real blocker surfaced, not worked around).** The
+  write path is NOT a mechanical "build op + push": `vidya_core::audience::audience_for`
+  decides each op's sealing audience, and the pushing device must HOLD that audience key
+  (`server::service::audience_keys_for`). A **teacher holds only `class:<classes they
+  class-teach>`** (by `class_teacher_id`) — no `admin`, no `finance`. Consequences for a
+  teacher's iPhone on the Drive route:
+  - **Drive-portable (class teacher, own class):** `save_homework_note` /
+    `delete_homework_note` / `save_attendance_draft` → `class:<class_id>`; a leave
+    `request` / `create_request` → requester-scoped `class:<own>` (the write SITE sets
+    this; `audience_for("request")` deliberately errors). A subject teacher who is not the
+    class's `class_teacher` does NOT hold `class:<id>` and cannot seal — matches the app.
+  - **NOT Drive-sealable by a teacher — needs an [OWNER]/design decision first:**
+    `staff_check_in` / `staff_check_out` write `staff_attendance`, which `audience_for`
+    maps to **no audience** (`unknown_table`); `record_message` writes `message` →
+    **admin**. A teacher holds neither key. These either stay LAN-only (direct to the
+    server, which assigns the audience on import) or need a policy change. Do not fake a
+    Drive write for them.
+  - **Op-builder still to build:** one shared helper to emit an `Op` (store.ts shape) —
+    `op_id`, `hlc` via WASM `hlc_next` over a per-device HLC clock in kv, `device_id` +
+    `staff_id` + `server_epoch` from the client identity, `base_version` read from the
+    current row, `kind`, `payload` — committed in ONE IndexedDB transaction (row + outbox
+    op + audit) via the existing `writeRecord`. `audience_for` is NOT in the WASM; either
+    expose it there or reimplement it in TS to match byte-for-byte.
+  - **Verify before trusting:** a cross-language test — the web builds an op, a Rust test
+    feeds it through `server::service::push` / `sync::drive::exchange::import_all` and
+    asserts it applies + re-validates. Without that, a wrong op shape silently breaks sync.
 
 **Verification each step:** `npm run verify` (typecheck + i18n parity + hex + contrast +
-logs + api-consistency + 49 vitest) green; the Rust side `cargo build/clippy -p vidya
+logs + api-consistency + 57 vitest) green; the Rust side `cargo build/clippy -p vidya
 --lib` + `cargo test --test drive_server_tick` green.
 
 **Still owner-only (hardware/Google):** `drive-test.html` (Q-B) — the whole Drive DATA
