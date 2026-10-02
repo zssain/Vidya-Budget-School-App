@@ -149,10 +149,26 @@ pub async fn client_sync_tick(conn: &mut Connection) -> Result<String, String> {
     use crate::sync::engine::{sync_once_routed, Route};
     use crate::sync::transport::HttpsTransport;
     let id = load(conn).ok_or("this device has not joined a school")?;
-    let mut routes = Vec::new();
+
+    // Candidate (addr, port) targets: the mDNS-discovered CURRENT address first (so
+    // sync survives the server's LAN IP/port changing on DHCP/reboot), then the
+    // invite's stored addresses as a fallback. All are pinned to the stored FULL
+    // fingerprint — the mDNS record only carries a short prefix, used just to confirm
+    // it is the same server.
+    let mut targets: Vec<(String, u16)> = Vec::new();
+    #[cfg(not(target_os = "android"))]
+    if let Some(found) = discover_current(&id.school_id, &id.server_fingerprint).await {
+        targets.push(found);
+    }
     for addr in &id.server_addrs {
+        targets.push((addr.clone(), id.server_port));
+    }
+    targets.dedup();
+
+    let mut routes = Vec::new();
+    for (addr, port) in &targets {
         if let Ok(t) = HttpsTransport::new(
-            format!("https://{addr}:{}", id.server_port),
+            format!("https://{addr}:{port}"),
             id.device_token.clone(),
             &id.server_fingerprint,
         ) {
@@ -164,6 +180,28 @@ pub async fn client_sync_tick(conn: &mut Connection) -> Result<String, String> {
     }
     let (_outcome, label) = sync_once_routed(conn, &routes).await.map_err(|e| format!("{e:?}"))?;
     Ok(label.to_string())
+}
+
+/// Discover the school server's current LAN address via mDNS (desktop), confirming the
+/// advertised fingerprint prefix matches our pinned one. Returns `(addr, port)` or
+/// `None` (not found / different cert / mDNS unavailable). Runs the blocking browse on
+/// a blocking thread.
+#[cfg(not(target_os = "android"))]
+async fn discover_current(school_id: &str, full_fingerprint: &str) -> Option<(String, u16)> {
+    let school = school_id.to_string();
+    let found = tokio::task::spawn_blocking(move || {
+        crate::sync::mdns::discover(&school, std::time::Duration::from_secs(2)).ok().flatten()
+    })
+    .await
+    .ok()
+    .flatten()?;
+    // The TXT record carries only a 16-char fingerprint prefix; confirm it matches the
+    // full pinned fingerprint before trusting the address (defence against spoofing).
+    if !found.fp16.is_empty() && full_fingerprint.starts_with(&found.fp16) {
+        Some((found.addr, found.port))
+    } else {
+        None
+    }
 }
 
 #[cfg(test)]
