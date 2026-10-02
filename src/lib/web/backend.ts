@@ -8,7 +8,15 @@
 // this file imports cleanly under vitest/Node and in the Tauri bundle (where it is
 // dead code — `isWeb` is false there).
 
-import type { AppState, AppStateResponse, CmdError, SessionStaff, StaffDayDto, StaffDto } from '../api'
+import type {
+  AppState,
+  AppStateResponse,
+  CmdError,
+  SessionStaff,
+  StaffDayDto,
+  StaffDto,
+  TeacherTimetableDto,
+} from '../api'
 import { hasJoined } from './join'
 import { createPin, hasPin, isUnlocked, lock, type UnlockResult, unlock as pinUnlock } from './lock'
 import { kvGet, listRecords } from './store'
@@ -21,6 +29,14 @@ import {
   type StaffAttendanceRec,
   truthy,
 } from './staffday'
+import {
+  buildTeacherTimetable,
+  type ClassRec,
+  type ClassSubjectRec,
+  type PeriodRec,
+  type SubjectRec,
+  type TimetableSlotRec,
+} from './timetable'
 
 /** A Web command handler: `(args) => result`. */
 export type WebHandler = (args?: Record<string, unknown>) => Promise<unknown>
@@ -110,6 +126,29 @@ export const WEB_COMMANDS: Record<string, WebHandler> = {
       session: sessions.find((s) => truthy(s.is_current)) ?? null,
       leaveTypes,
       leaveRecords,
+    })
+  },
+  // The teacher's own weekly timetable (periods + their slots), joined like SLOT_SELECT.
+  my_timetable: async (): Promise<TeacherTimetableDto> => {
+    const staff = await kvGet<SessionStaff>('staff')
+    const [slots, classes, classSubjects, subjects, periods, sessions] = await Promise.all([
+      listRecords<TimetableSlotRec>('timetable_slot'),
+      listRecords<ClassRec>('class'),
+      listRecords<ClassSubjectRec>('class_subject'),
+      listRecords<SubjectRec>('subject'),
+      listRecords<PeriodRec>('period'),
+      listRecords<SessionRec & { id: string }>('academic_session'),
+    ])
+    const session = sessions.find((s) => truthy(s.is_current))
+    return buildTeacherTimetable({
+      staffId: staff?.id ?? '',
+      staffName: staff?.name ?? '',
+      sessionId: session?.id ?? null,
+      slots,
+      classes,
+      classSubjects,
+      subjects,
+      periods,
     })
   },
   // Verify the PIN (same lockout curve as the app, via WASM) → the unlocked state. On
