@@ -13,6 +13,7 @@ import type {
   AppStateResponse,
   ClassDto,
   CmdError,
+  HomeworkNoteDto,
   SessionStaff,
   StaffDayDto,
   StaffDto,
@@ -38,6 +39,7 @@ import {
   type SubjectRec,
   type TimetableSlotRec,
 } from './timetable'
+import { buildHomeworkNotes, type HomeworkNoteRec } from './notes'
 
 /** A Web command handler: `(args) => result`. */
 export type WebHandler = (args?: Record<string, unknown>) => Promise<unknown>
@@ -158,6 +160,26 @@ export const WEB_COMMANDS: Record<string, WebHandler> = {
       classSubjects,
       subjects,
       periods,
+    })
+  },
+  // Homework/notes history for a class (newest first), joined to subject + author.
+  list_homework_notes: async (args): Promise<HomeworkNoteDto[]> => {
+    const staff = await kvGet<SessionStaff>('staff')
+    const classId = String(args?.classId ?? '')
+    const [notes, classSubjects, subjects, staffList] = await Promise.all([
+      listRecords<HomeworkNoteRec>('homework_note'),
+      listRecords<ClassSubjectRec>('class_subject'),
+      listRecords<SubjectRec>('subject'),
+      listRecords<{ id: string; name: string }>('staff'),
+    ])
+    return buildHomeworkNotes({
+      classId,
+      staffId: staff?.id ?? '',
+      nowMs: Date.now(),
+      notes,
+      classSubjects,
+      subjects,
+      staff: staffList,
     })
   },
   // Verify the PIN (same lockout curve as the app, via WASM) → the unlocked state. On
