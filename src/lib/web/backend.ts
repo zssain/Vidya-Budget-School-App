@@ -8,10 +8,19 @@
 // this file imports cleanly under vitest/Node and in the Tauri bundle (where it is
 // dead code — `isWeb` is false there).
 
-import type { AppState, AppStateResponse, CmdError, SessionStaff, StaffDto } from '../api'
+import type { AppState, AppStateResponse, CmdError, SessionStaff, StaffDayDto, StaffDto } from '../api'
 import { hasJoined } from './join'
 import { createPin, hasPin, isUnlocked, lock, type UnlockResult, unlock as pinUnlock } from './lock'
-import { kvGet } from './store'
+import { kvGet, listRecords } from './store'
+import {
+  buildStaffDay,
+  type LeaveRecordRec,
+  type LeaveTypeRec,
+  type SchoolRec,
+  type SessionRec,
+  type StaffAttendanceRec,
+  truthy,
+} from './staffday'
 
 /** A Web command handler: `(args) => result`. */
 export type WebHandler = (args?: Record<string, unknown>) => Promise<unknown>
@@ -79,6 +88,29 @@ export const WEB_COMMANDS: Record<string, WebHandler> = {
   list_staff: async (): Promise<StaffDto[]> => {
     const staff = await kvGet<SessionStaff>('staff')
     return staff ? [staff] : []
+  },
+  // The teacher-home dashboard: today's check-in state, this month's counts, the
+  // recent days and leave balances — aggregated from the records sync populated,
+  // identical to the Rust my_staff_day. Empty/zero until data has synced (honest).
+  my_staff_day: async (args): Promise<StaffDayDto> => {
+    const staff = await kvGet<SessionStaff>('staff')
+    const today = String(args?.today ?? '')
+    const [attendance, schools, sessions, leaveTypes, leaveRecords] = await Promise.all([
+      listRecords<StaffAttendanceRec>('staff_attendance'),
+      listRecords<SchoolRec & { id: string }>('school'),
+      listRecords<SessionRec & { id: string }>('academic_session'),
+      listRecords<LeaveTypeRec>('leave_type'),
+      listRecords<LeaveRecordRec>('leave_record'),
+    ])
+    return buildStaffDay({
+      staffId: staff?.id ?? '',
+      today,
+      attendance,
+      school: schools[0],
+      session: sessions.find((s) => truthy(s.is_current)) ?? null,
+      leaveTypes,
+      leaveRecords,
+    })
   },
   // Verify the PIN (same lockout curve as the app, via WASM) → the unlocked state. On
   // failure, reject with the desktop's PIN_WRONG / PIN_LOCKED CmdError. staffId is
