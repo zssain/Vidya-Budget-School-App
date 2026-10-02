@@ -1,5 +1,57 @@
 # Phase 20 handoff — making sync/Drive actually live (desktop Drive backup; sync audit; Drive spike)
 
+## ⟳ Session 2 — live Drive sync (the P12 blocker) + iPhone PWA onboarding
+
+All on `v2/p20-live-sync`, verified, **not pushed**. This session built the whole
+live-sync spine end to end: the school-PC Drive loop, then the iPhone's join + sync +
+lock cycle on top of it.
+
+**Phase C1 — the school-PC live Drive client (the carried P12 blocker) — DONE ✅**
+- `src-tauri/src/sync/drive/live.rs` `server_drive_tick` (`fe82447`): one pass answers
+  pending PWA join requests in `exchange/joins/` (writes the sealed response), then
+  `import_all` + a sealed `write_ack` per device. `tests/drive_server_tick.rs` proves a
+  pass answers a join + provisions the web device + is idempotent (fake Drive).
+- `server_drive_pass` + the background loop (`c89dca2`): on a Server with Drive
+  connected, every 20 s (own DB conn, blocking thread) it builds the real `GoogleDrive`
+  (reusing the Phase-A desktop sign-in), resolves `Vidya/<school> (<id>)/exchange` (the
+  SAME path clients use), and runs the tick. The real Google round-trip is owner-verified.
+
+**Phase C2 — iPhone PWA join + Drive sync loop — DONE ✅**
+- `app_state` on the web backend + a pure boot-route mapper (`72899d1`): the PWA leaves
+  the status screen and routes (join → PIN gate → home). Fixed the raw-key display bug
+  (`error.NOT_AVAILABLE_ON_WEB` en/hi).
+- `src/screens/web/JoinScreen.tsx` + App wiring (`4240e8c`): invite fragment → Connect
+  Google Drive (GIS, `drive.file`, no secret) → write request → poll for the school PC's
+  sealed response → set PIN. An idempotent effect starts the foreground Drive sync loop
+  whenever the PWA is unlocked. This closes the loop with C1: PWA requests → school PC
+  answers → PWA opens + syncs. Join/seal contract covered by the Rust + web suites.
+
+**Phase C3 — port the phone commands — STARTED 🟡**
+- `list_staff` + `unlock` (`725a433`): the PIN lock/unlock cycle now works on the PWA
+  (relaunch / 5-min auto-lock → PIN gate → home). `unlock` rejects with the SAME
+  CmdError the desktop throws (PIN_LOCKED `{until}` / PIN_WRONG `{remaining}`); pure
+  `unlockError` mapper unit-tested.
+- **Remaining C3 (the big chunk):** the teacher-screen DATA + ACTION commands, each a
+  store-backed port with exact op/HLC/DTO parity (a wrong op shape silently breaks sync):
+  - read: `my_staff_day`, `my_timetable`, `list_classes`, `list_absent`,
+    `list_homework_notes`
+  - write (emit ops): `save_attendance_draft`, `save_homework_note`,
+    `delete_homework_note`, `email_homework_note`, `staff_check_in`, `staff_check_out`,
+    `request_leave`, `create_request`, `record_message`
+  - `server_status` is intentionally LEFT rejecting — on the PWA it is a LAN-reachability
+    probe MyAttendanceScreen catches to choose the Drive route (correct behaviour).
+
+**Verification each step:** `npm run verify` (typecheck + i18n parity + hex + contrast +
+logs + api-consistency + 49 vitest) green; the Rust side `cargo build/clippy -p vidya
+--lib` + `cargo test --test drive_server_tick` green.
+
+**Still owner-only (hardware/Google):** `drive-test.html` (Q-B) — the whole Drive DATA
+path for the iPhone rests on it; a desktop Drive backup+restore round-trip; a two-PC LAN
+sync; and the iPhone end-to-end (join approved by a connected school PC). The two cheap
+checks (Q-B + desktop Drive) de-risk the entire remaining C3 port — worth doing first.
+
+---
+
 ## ⟳ Session update — desktop restore + LAN client now COMPLETE
 
 Since the sections below were first written, two more owner-ordered pieces landed
