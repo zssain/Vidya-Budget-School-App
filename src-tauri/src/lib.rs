@@ -65,6 +65,9 @@ fn build_ctx(data_dir: std::path::PathBuf) -> RtCtx {
         Box::new(security::keys::FileKeyStore::new(data_dir.join("db-key")));
 
     let mut db_key_hex: Option<String> = None;
+    // Phase B: a device that has joined a school runs as a Client; otherwise it is the
+    // single-PC Server. Decided here from the persisted client identity.
+    let mut device_mode = DeviceMode::Server;
     let (db, key_missing) = match security::keys::ensure_key(key_store.as_ref(), db_exists) {
         Ok(key) => {
             let hex = security::keys::to_hex(&key);
@@ -82,6 +85,9 @@ fn build_ctx(data_dir: std::path::PathBuf) -> RtCtx {
                         // into role_permission (derived from vidya-core; idempotent).
                         if let Err(e) = roles::seed_role_permissions(&mut conn) {
                             tracing::warn!("role permission seed: {e}");
+                        }
+                        if crate::sync::client::is_client(&conn) {
+                            device_mode = DeviceMode::Client;
                         }
                         (Some(conn), false)
                     }
@@ -108,7 +114,7 @@ fn build_ctx(data_dir: std::path::PathBuf) -> RtCtx {
         session: Mutex::new(None),
         machine_id,
         device_id: Mutex::new(None),
-        device_mode: DeviceMode::Server, // single-PC school (this phase)
+        device_mode,
         http: reqwest::Client::new(),
         recovery: Mutex::new(None),
         data_dir,
@@ -176,6 +182,39 @@ pub fn run() {
                             backup::schedule::scheduler_tick(&ctx);
                         })
                         .await;
+                    }
+                });
+            }
+
+            // Phase B: a joined CLIENT device syncs with its school server on a timer.
+            // The Server (and un-joined PCs) skip this. It uses its OWN DB connection
+            // (like the server does) so it never holds the shared lock across the
+            // network awaits. Offline ticks just log quietly.
+            {
+                let handle = app.handle().clone();
+                tauri::async_runtime::spawn(async move {
+                    let ctx = handle.state::<RtCtx>();
+                    if ctx.device_mode != DeviceMode::Client {
+                        return;
+                    }
+                    let Some(key_hex) = ctx.db_key_hex.clone() else {
+                        return;
+                    };
+                    let db_path = ctx.db_path();
+                    let mut conn = match db::open_encrypted(&db_path, &key_hex) {
+                        Ok(c) => c,
+                        Err(e) => {
+                            tracing::warn!("client sync: open db failed: {e}");
+                            return;
+                        }
+                    };
+                    let mut ticker = tokio::time::interval(std::time::Duration::from_secs(15));
+                    loop {
+                        ticker.tick().await;
+                        match sync::client::client_sync_tick(&mut conn).await {
+                            Ok(route) => tracing::debug!("client synced via {route}"),
+                            Err(e) => tracing::debug!("client sync tick: {e}"),
+                        }
                     }
                 });
             }
