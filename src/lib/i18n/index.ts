@@ -36,6 +36,7 @@ import exams from './strings/exams'
 import staffhr from './strings/staffhr'
 import about from './strings/about'
 import recover from './strings/recover'
+import join from './strings/join'
 
 export type Lang = 'en' | 'hi' | 'te'
 export interface Bundle {
@@ -47,7 +48,7 @@ export interface Bundle {
   te?: Record<string, string>
 }
 
-const bundles: Bundle[] = [common, welcome, principalHome, collectFee, teacherHome, attendance, errors, p04, shell, students, fees, receipts, daybook, attendanceReg, shared, academics, reports, settings, calendar, guardians, customFields, privacy, circulars, accounts, store, timetable, notes, reportcard, exams, staffhr, about, recover]
+const bundles: Bundle[] = [common, welcome, principalHome, collectFee, teacherHome, attendance, errors, p04, shell, students, fees, receipts, daybook, attendanceReg, shared, academics, reports, settings, calendar, guardians, customFields, privacy, circulars, accounts, store, timetable, notes, reportcard, exams, staffhr, about, recover, join]
 const en: Record<string, string> = Object.assign({}, ...bundles.map((b) => b.en))
 const hi: Record<string, string> = Object.assign({}, ...bundles.map((b) => b.hi))
 const te: Record<string, string> = Object.assign({}, ...bundles.map((b) => b.te ?? {}))

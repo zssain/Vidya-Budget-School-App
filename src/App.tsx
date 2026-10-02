@@ -10,6 +10,10 @@ import type { Role } from '@/lib/nav'
 import WelcomeScreen from '@/screens/shared/WelcomeScreen'
 import SetupWizard from '@/screens/shared/SetupWizard'
 import RecoverScreen from '@/screens/shared/RecoverScreen'
+import JoinScreen from '@/screens/web/JoinScreen'
+import { isWeb } from '@/lib/platform'
+import { GoogleDrive } from '@/lib/web/drive/google'
+import { startSync } from '@/lib/web/drive/sync'
 import PinUnlockScreen from '@/screens/shared/PinUnlockScreen'
 import ApprovalsScreen from '@/screens/desktop/ApprovalsScreen'
 import StaffAccessScreen from '@/screens/desktop/StaffAccessScreen'
@@ -97,6 +101,14 @@ export default function App() {
     if (!isDevRoute) void refreshAppState()
   }, [isDevRoute])
 
+  // On the PWA, run the foreground Drive sync loop whenever the app is unlocked —
+  // covers first join and every relaunch after the PIN gate. startSync is idempotent
+  // (no-ops if already running); a lapsed Drive token is handled inside the loop.
+  const unlocked = store.app?.state.kind === 'unlocked'
+  useEffect(() => {
+    if (isWeb && unlocked) startSync(new GoogleDrive())
+  }, [unlocked])
+
   // DEV-only fixture routes (compiled out of release; used by the fidelity test).
   if (import.meta.env.DEV) {
     if (base === '/__gallery') return <Gallery />
@@ -131,6 +143,9 @@ export default function App() {
 
   switch (route.screen) {
     case 'welcome':
+      // The iPhone PWA onboards by JOINING a school (Drive), not by setting one up:
+      // connect Drive → request → poll → set PIN → home (Phase 20, C2).
+      if (isWeb) return <JoinScreen />
       // Recover an existing school from a .vbak (pre-auth sub-route of Welcome).
       if (base === '/recover') return <RecoverScreen />
       return (
