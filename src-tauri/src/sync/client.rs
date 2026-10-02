@@ -135,6 +135,32 @@ pub async fn join_school(
     Err(last_err)
 }
 
+/// Run one sync cycle as a client: build the LAN route(s) from the stored identity and
+/// sync over the pinned TLS transport. Returns the route label that worked (e.g. "On
+/// school Wi-Fi"). Used by the background sync loop (B3) and a manual "Sync now".
+/// (mDNS re-discovery of a changed server IP is a later refinement; the invite's
+/// advertised addresses are used here.)
+pub async fn client_sync_tick(conn: &mut Connection) -> Result<String, String> {
+    use crate::sync::engine::{sync_once_routed, Route};
+    use crate::sync::transport::HttpsTransport;
+    let id = load(conn).ok_or("this device has not joined a school")?;
+    let mut routes = Vec::new();
+    for addr in &id.server_addrs {
+        if let Ok(t) = HttpsTransport::new(
+            format!("https://{addr}:{}", id.server_port),
+            id.device_token.clone(),
+            &id.server_fingerprint,
+        ) {
+            routes.push(Route::Lan(t));
+        }
+    }
+    if routes.is_empty() {
+        return Err("no reachable server route".into());
+    }
+    let (_outcome, label) = sync_once_routed(conn, &routes).await.map_err(|e| format!("{e:?}"))?;
+    Ok(label.to_string())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

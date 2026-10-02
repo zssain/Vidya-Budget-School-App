@@ -85,6 +85,11 @@ async fn client_joins_over_pinned_tls_then_authenticates_a_pull() {
         let transport = HttpsTransport::new(&base, &identity.device_token, &fingerprint).unwrap();
         let pulled = transport.pull(0, 10).await;
         assert!(pulled.is_ok(), "authenticated pull over pinned TLS: {pulled:?}");
+
+        // The background sync tick builds its LAN route from the STORED identity (no
+        // transport handed in) and completes a real cycle over the pinned TLS.
+        let label = client::client_sync_tick(&mut c).await.expect("client sync tick over LAN");
+        assert_eq!(label, "On school Wi-Fi");
     }
 
     stop.notify_waiters();
