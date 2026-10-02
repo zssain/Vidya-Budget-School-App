@@ -25,6 +25,7 @@ pub mod fake;
 pub mod google;
 pub mod join;
 pub mod keys;
+pub mod live;
 pub mod oauth;
 pub mod pull;
 
