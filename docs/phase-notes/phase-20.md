@@ -44,32 +44,36 @@ lock cycle on top of it.
   - Deferred read: `list_absent` — a heavy guardian/consent/message-preview read; it
     belongs with the messaging write (`record_message`).
 
-- **C3 WRITES — SCOPED, NOT built (a real blocker surfaced, not worked around).** The
-  write path is NOT a mechanical "build op + push": `vidya_core::audience::audience_for`
-  decides each op's sealing audience, and the pushing device must HOLD that audience key
-  (`server::service::audience_keys_for`). A **teacher holds only `class:<classes they
-  class-teach>`** (by `class_teacher_id`) — no `admin`, no `finance`. Consequences for a
-  teacher's iPhone on the Drive route:
-  - **Drive-portable (class teacher, own class):** `save_homework_note` /
-    `delete_homework_note` / `save_attendance_draft` → `class:<class_id>`; a leave
-    `request` / `create_request` → requester-scoped `class:<own>` (the write SITE sets
-    this; `audience_for("request")` deliberately errors). A subject teacher who is not the
-    class's `class_teacher` does NOT hold `class:<id>` and cannot seal — matches the app.
-  - **NOT Drive-sealable by a teacher — needs an [OWNER]/design decision first:**
-    `staff_check_in` / `staff_check_out` write `staff_attendance`, which `audience_for`
-    maps to **no audience** (`unknown_table`); `record_message` writes `message` →
-    **admin**. A teacher holds neither key. These either stay LAN-only (direct to the
-    server, which assigns the audience on import) or need a policy change. Do not fake a
-    Drive write for them.
-  - **Op-builder still to build:** one shared helper to emit an `Op` (store.ts shape) —
-    `op_id`, `hlc` via WASM `hlc_next` over a per-device HLC clock in kv, `device_id` +
-    `staff_id` + `server_epoch` from the client identity, `base_version` read from the
-    current row, `kind`, `payload` — committed in ONE IndexedDB transaction (row + outbox
-    op + audit) via the existing `writeRecord`. `audience_for` is NOT in the WASM; either
-    expose it there or reimplement it in TS to match byte-for-byte.
-  - **Verify before trusting:** a cross-language test — the web builds an op, a Rust test
-    feeds it through `server::service::push` / `sync::drive::exchange::import_all` and
-    asserts it applies + re-validates. Without that, a wrong op shape silently breaks sync.
+- **C3 WRITES — the op-builder is built + verified; the PORTABLE surface is much smaller
+  than the screen list, and that is an APP-ARCHITECTURE fact, not a PWA gap.**
+  - **Built + verified:** the op-builder (`src/lib/web/op.ts`: `audienceFor` — a
+    byte-for-byte copy of `vidya_core::audience::audience_for`; `buildOp`; `writeOp` =
+    row + outbox op + audit in one IndexedDB tx, HLC from a per-device kv clock via WASM
+    `hlc_next`) and the first real write **`save_homework_note`** (`75f9a05`). A
+    cross-language test (`src-tauri/tests/web_op_apply.rs`) feeds a web-shaped op through
+    the REAL `sync::apply::apply_op` and asserts a complete, Confirmed, idempotent row —
+    it already caught that `homework_note` is not in the server `is_synced` set, so the
+    payload must carry its own §7 bookkeeping.
+  - **The decisive finding (why "port the rest" is NOT a mechanical job):** a change only
+    syncs if its command calls `write::with_write` (→ an `op_log`/`outbox` op) AND seals
+    to an audience the teacher HOLDS (`class:<own class-teacher classes>` only). Auditing
+    the teacher commands:
+    - `save_homework_note` → `with_write`, `class:<id>` → **syncs from the PWA ✓ (done).**
+    - `staff_check_in` / `staff_check_out` → `with_write` but `audience:"admin"` → a
+      teacher can't seal it → **LAN-only** (works connected to the server; not over Drive).
+    - `save_attendance_draft` / `submit_attendance`, `create_request` / `request_leave`,
+      `delete_homework_note`, `record_message` → **direct `conn.execute`, NO `with_write`
+      → they emit NO op at all.** They persist only on the device that runs them (the
+      server, authoritatively; clients read the result via pull). There is also no delete
+      path in `apply_op`. So these do NOT sync from a client in the current codebase.
+  - **Consequence:** the PWA can faithfully WRITE only `save_homework_note` today. Making
+    attendance / leave / requests / messages / deletes sync from any client (iPhone or
+    Android) requires **core app work + [OWNER] decisions** — convert those commands to
+    `with_write`, assign each a teacher-holdable audience (or a tombstone path for
+    deletes) — not a PWA-only port. Do NOT emit PWA ops for them: a write that looks
+    saved but never reaches the server (or seals to a key the teacher lacks) is fake
+    success. They remain correctly unavailable on web (the `NOT_AVAILABLE_ON_WEB` notice)
+    until that core work is scheduled.
 
 **Verification each step:** `npm run verify` (typecheck + i18n parity + hex + contrast +
 logs + api-consistency + 57 vitest) green; the Rust side `cargo build/clippy -p vidya
