@@ -9,7 +9,7 @@
 //! deferred in P04; this module is its foundation.
 
 use crate::kv;
-use crate::sync::protocol::{AudienceKey, JoinResp};
+use crate::sync::protocol::{AudienceKey, JoinPayload, JoinReq, JoinResp};
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 
@@ -94,6 +94,45 @@ pub fn is_client(conn: &Connection) -> bool {
 /// Forget the client identity (e.g. revoked / leave a school).
 pub fn clear(conn: &Connection) -> rusqlite::Result<()> {
     kv::delete(conn, KV_CLIENT)
+}
+
+/// Join a school as a client (Phase B): POST `/v1/join` to the school server over the
+/// invite's **pinned** TLS cert, trying each advertised LAN address in turn, then
+/// persist the returned identity. Returns the stored [`ClientIdentity`]. Async — call
+/// from a command (off the server's own runtime).
+pub async fn join_school(
+    conn: &Connection,
+    payload: &JoinPayload,
+    device_name: &str,
+    platform: &str,
+) -> Result<ClientIdentity, String> {
+    let req = JoinReq {
+        invite_code: payload.code.clone(),
+        device_name: device_name.to_string(),
+        platform: platform.to_string(),
+        google_email: None,
+    };
+    let tls = crate::server::cert::client_config(&payload.cert_sha256)?;
+    let http = reqwest::Client::builder()
+        .use_preconfigured_tls(tls)
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    let mut last_err = "no server address in the invitation".to_string();
+    for addr in &payload.lan_addrs {
+        let url = format!("https://{addr}:{}/v1/join", payload.port);
+        match http.post(&url).json(&req).send().await {
+            Ok(r) if r.status().is_success() => {
+                let jr: JoinResp = r.json().await.map_err(|e| e.to_string())?;
+                apply_join_response(conn, &jr, &payload.cert_sha256, &payload.lan_addrs, payload.port)
+                    .map_err(|e| e.to_string())?;
+                return load(conn).ok_or_else(|| "identity not stored".to_string());
+            }
+            Ok(r) => last_err = format!("server rejected the join (HTTP {})", r.status()),
+            Err(e) => last_err = e.to_string(),
+        }
+    }
+    Err(last_err)
 }
 
 #[cfg(test)]
