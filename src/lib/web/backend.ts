@@ -11,6 +11,7 @@
 import type {
   AppState,
   AppStateResponse,
+  ClassDto,
   CmdError,
   SessionStaff,
   StaffDayDto,
@@ -127,6 +128,14 @@ export const WEB_COMMANDS: Record<string, WebHandler> = {
       leaveTypes,
       leaveRecords,
     })
+  },
+  // All classes (the attendance class-picker), ordered by sort_order — list_classes.
+  list_classes: async (): Promise<ClassDto[]> => {
+    type ClassRow = { id: string; display: string; name: string; section: string | null; sort_order?: number | null }
+    const classes = await listRecords<ClassRow>('class')
+    return classes
+      .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0))
+      .map((c) => ({ id: c.id, display: c.display, name: c.name, section: c.section ?? null }))
   },
   // The teacher's own weekly timetable (periods + their slots), joined like SLOT_SELECT.
   my_timetable: async (): Promise<TeacherTimetableDto> => {
