@@ -8,9 +8,9 @@
 // this file imports cleanly under vitest/Node and in the Tauri bundle (where it is
 // dead code — `isWeb` is false there).
 
-import type { AppState, AppStateResponse, CmdError, SessionStaff } from '../api'
+import type { AppState, AppStateResponse, CmdError, SessionStaff, StaffDto } from '../api'
 import { hasJoined } from './join'
-import { createPin, hasPin, isUnlocked, lock } from './lock'
+import { createPin, hasPin, isUnlocked, lock, type UnlockResult, unlock as pinUnlock } from './lock'
 import { kvGet } from './store'
 
 /** A Web command handler: `(args) => result`. */
@@ -38,6 +38,21 @@ export function webAppState(f: {
   return { kind: 'locked' }
 }
 
+/** Map a failed PIN `unlock` to the SAME CmdError the desktop throws, so the shared
+ *  PinUnlockScreen shows identical copy: PIN_LOCKED `{until}` (an RFC3339 instant) when
+ *  locked out, else PIN_WRONG `{remaining}`. Pure → unit-tested. `nowMs` is injected so
+ *  the `until` instant is deterministic in tests. */
+export function unlockError(res: UnlockResult, nowMs: number): CmdError {
+  if (res.locked_seconds != null) {
+    const until = new Date(nowMs + res.locked_seconds * 1000).toISOString()
+    return { code: 'PIN_LOCKED', message_key: 'error.PIN_LOCKED', vars: { until } }
+  }
+  if (res.remaining != null) {
+    return { code: 'PIN_WRONG', message_key: 'error.PIN_WRONG', vars: { remaining: res.remaining } }
+  }
+  return { code: 'LOCKED', message_key: 'error.LOCKED', vars: {} }
+}
+
 /**
  * The commands the Web backend serves. Step 3 wires the local-store foundation
  * (PIN create/lock via WASM Argon2id + the encrypted IndexedDB store); the rest of
@@ -59,6 +74,23 @@ export const WEB_COMMANDS: Record<string, WebHandler> = {
   },
   create_pin: async (args) => {
     await createPin(String(args?.pin ?? ''))
+  },
+  // The one staff member who joined on this device (the PIN screen's user picker).
+  list_staff: async (): Promise<StaffDto[]> => {
+    const staff = await kvGet<SessionStaff>('staff')
+    return staff ? [staff] : []
+  },
+  // Verify the PIN (same lockout curve as the app, via WASM) → the unlocked state. On
+  // failure, reject with the desktop's PIN_WRONG / PIN_LOCKED CmdError. staffId is
+  // ignored: a PWA holds exactly one joined identity.
+  unlock: async (args): Promise<AppStateResponse> => {
+    const res = await pinUnlock(String(args?.pin ?? ''))
+    if (!res.ok) throw unlockError(res, Date.now())
+    const staff = await kvGet<SessionStaff>('staff')
+    return {
+      state: webAppState({ joined: true, hasPin: true, unlocked: true, staff }),
+      licence_status: null,
+    }
   },
   lock: async () => {
     lock()
