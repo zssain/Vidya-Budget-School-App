@@ -221,6 +221,8 @@ pub const COMMANDS: &[&str] = &[
     // Restore (Welcome → Recover an existing school).
     "restore_summary",
     "restore_install",
+    "restore_drive_list",
+    "restore_drive_fetch",
     #[cfg(debug_assertions)]
     "seed_demo_school",
 ];
@@ -1560,6 +1562,89 @@ pub fn restore_install(app: tauri::AppHandle, state: State<RtCtx>, path: String,
     app.restart();
     #[allow(unreachable_code)]
     Ok(())
+}
+
+// ---- Restore from Google Drive (reuses the local-file restore path) --------
+
+/// One restorable backup found in the school's Drive `Vidya/backups/`.
+#[derive(serde::Serialize)]
+pub struct RestoreDriveEntryDto {
+    pub name: String,
+    pub backup_date: String,
+    pub file_id: String,
+}
+
+fn drive_err(e: crate::sync::drive::DriveError) -> crate::error::CmdError {
+    crate::error::CmdError::new("DRIVE_LIST_FAILED", "error.DRIVE_LIST_FAILED", serde_json::json!({ "detail": format!("{e:?}") }))
+}
+
+/// Sign in to Google (Desktop client — the SAME client that wrote the backups, so
+/// drive.file sees them) and list the `.vbak` files in `Vidya/backups/`, newest first.
+#[tauri::command]
+pub fn restore_drive_list(state: State<RtCtx>) -> CmdResult<Vec<RestoreDriveEntryDto>> {
+    use crate::sync::drive::{google::GoogleDrive, oauth, DriveApi};
+    let client_id = crate::config::get().google_client_id_desktop.clone();
+    if client_id.is_empty() {
+        return Err(crate::error::CmdError::new("DRIVE_NOT_CONFIGURED", "error.DRIVE_NOT_CONFIGURED", serde_json::Value::Null));
+    }
+    let tokens = oauth::run_connect(&client_id).map_err(|e| {
+        crate::error::CmdError::new("DRIVE_CONNECT_FAILED", "error.DRIVE_CONNECT_FAILED", serde_json::json!({ "detail": e.to_string() }))
+    })?;
+    // Cache the token so restore_drive_fetch reuses it (this DB is replaced on restore).
+    let _ = state.with_db(|c| oauth::store_tokens(c, &tokens).map_err(|e| crate::error::CmdError::internal(e.to_string())));
+
+    let client = GoogleDrive::new(tokens.access_token).map_err(drive_err)?;
+    let vidya = client.ensure_folder("root", "Vidya").map_err(drive_err)?;
+    let backups = client.ensure_folder(&vidya, "backups").map_err(drive_err)?;
+    let mut out: Vec<RestoreDriveEntryDto> = client
+        .list(&backups)
+        .map_err(drive_err)?
+        .into_iter()
+        .filter(|f| f.name.ends_with(".vbak"))
+        .filter_map(|f| {
+            crate::backup::parse_backup_at(&f.name).map(|at| RestoreDriveEntryDto {
+                backup_date: at.get(0..10).unwrap_or("").to_string(),
+                name: f.name,
+                file_id: f.id,
+            })
+        })
+        .collect();
+    out.sort_by(|a, b| b.backup_date.cmp(&a.backup_date)); // newest first
+    Ok(out)
+}
+
+/// Download a chosen Drive backup to a temp `.vbak` + write its `.meta` sidecar from
+/// the file's appProperties (the salt), then return the temp path — which the normal
+/// restore_summary / restore_install then operate on.
+#[tauri::command]
+pub fn restore_drive_fetch(state: State<RtCtx>, file_id: String, name: String) -> CmdResult<String> {
+    use crate::sync::drive::{google::GoogleDrive, oauth, DriveApi};
+    let client_id = crate::config::get().google_client_id_desktop.clone();
+    let token = state.with_db(|c| {
+        oauth::valid_access_token(c, &client_id).map_err(|e| {
+            crate::error::CmdError::new("DRIVE_CONNECT_FAILED", "error.DRIVE_CONNECT_FAILED", serde_json::json!({ "detail": e.to_string() }))
+        })
+    })?;
+    let client = GoogleDrive::new(token).map_err(drive_err)?;
+    let meta = client.metadata(&file_id).map_err(drive_err)?;
+    let salt = meta.properties.get("vidya_salt").cloned().unwrap_or_default();
+    let school = meta.properties.get("vidya_school").cloned().unwrap_or_default();
+    if salt.is_empty() {
+        // No salt in appProperties → the key can't be derived (old/foreign file).
+        return Err(crate::error::CmdError::new("RESTORE_UNREADABLE", "error.RESTORE_UNREADABLE", serde_json::Value::Null));
+    }
+    let bytes = client.download(&file_id).map_err(drive_err)?;
+
+    let tmp_dir = state.data_dir.join("restore-tmp");
+    std::fs::create_dir_all(&tmp_dir).map_err(|e| crate::error::CmdError::internal(e.to_string()))?;
+    let safe = name.rsplit(['/', '\\']).next().unwrap_or("backup.vbak");
+    let safe = if safe.ends_with(".vbak") { safe.to_string() } else { format!("{safe}.vbak") };
+    let vbak = tmp_dir.join(&safe);
+    std::fs::write(&vbak, &bytes).map_err(|e| crate::error::CmdError::internal(e.to_string()))?;
+    let meta_json = serde_json::to_string(&crate::backup::BackupMeta { v: 1, salt, school_id: school })
+        .map_err(|e| crate::error::CmdError::internal(e.to_string()))?;
+    std::fs::write(crate::backup::meta_path(&vbak), meta_json).map_err(|e| crate::error::CmdError::internal(e.to_string()))?;
+    Ok(vbak.to_string_lossy().to_string())
 }
 
 #[cfg(debug_assertions)]

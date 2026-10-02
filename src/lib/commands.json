@@ -193,7 +193,9 @@
     "drive_connect",
     "drive_disconnect",
     "restore_summary",
-    "restore_install"
+    "restore_install",
+    "restore_drive_list",
+    "restore_drive_fetch"
   ],
   "debugOnly": ["seed_demo_school"]
 }

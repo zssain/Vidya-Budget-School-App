@@ -5,7 +5,7 @@
 // core + commands are tested; this screen is their UI. Colours via design tokens.
 import { useState } from 'react'
 import * as api from '@/lib/api'
-import type { CmdError, RestoreSummaryDto } from '@/lib/api'
+import type { CmdError, RestoreSummaryDto, RestoreDriveEntryDto } from '@/lib/api'
 import { pickBackupPath } from '@/lib/files'
 import { navigate } from '@/lib/router'
 import { t } from '@/lib/i18n'
@@ -26,6 +26,7 @@ export default function RecoverScreen() {
   const [path, setPath] = useState<string | null>(null)
   const [recoveryKey, setRecoveryKey] = useState('')
   const [summary, setSummary] = useState<RestoreSummaryDto | null>(null)
+  const [driveList, setDriveList] = useState<RestoreDriveEntryDto[] | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -39,6 +40,25 @@ export default function RecoverScreen() {
       setSummary(null)
       setError(null)
     }
+  }
+
+  const listDrive = () => {
+    setBusy(true)
+    setError(null)
+    api.restore_drive_list().then(setDriveList).catch(showErr).finally(() => setBusy(false))
+  }
+
+  const pickDrive = (entry: RestoreDriveEntryDto) => {
+    setBusy(true)
+    setError(null)
+    api
+      .restore_drive_fetch(entry.file_id, entry.name)
+      .then((p) => {
+        setPath(p)
+        setDriveList(null)
+      })
+      .catch(showErr)
+      .finally(() => setBusy(false))
   }
 
   const check = () => {
@@ -81,10 +101,32 @@ export default function RecoverScreen() {
         {error && <div style={{ ...CARD, padding: 14, marginBottom: 16, borderColor: 'var(--danger)', color: 'var(--danger)', fontSize: 14 }}>{error}</div>}
 
         {!summary ? (
+          driveList ? (
+            <div style={CARD}>
+              <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 10 }}>{t('recover.driveListTitle')}</div>
+              {driveList.length === 0 ? (
+                <p style={{ fontSize: 13, color: 'var(--muted)', margin: 0 }}>{t('recover.driveEmpty')}</p>
+              ) : (
+                driveList.map((e) => (
+                  <div key={e.file_id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, padding: '10px 0', borderTop: '1px solid var(--track)' }}>
+                    <div style={{ minWidth: 0 }}>
+                      <div style={{ fontSize: 14 }}>{t('recover.fromDate', { date: e.backup_date })}</div>
+                      <div style={{ fontSize: 12, color: 'var(--muted)', wordBreak: 'break-all' }}>{e.name}</div>
+                    </div>
+                    <button type="button" onClick={() => pickDrive(e)} disabled={busy} style={btn('var(--accent)', '#fff')}>{t('recover.useThis')}</button>
+                  </div>
+                ))
+              )}
+              <button type="button" onClick={() => setDriveList(null)} disabled={busy} style={{ ...btn('transparent', 'var(--ink)'), marginTop: 14 }}>{t('recover.back')}</button>
+            </div>
+          ) : (
           <div style={{ ...CARD, display: 'flex', flexDirection: 'column', gap: 18 }}>
             <div>
               <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8 }}>{t('recover.step1')}</div>
-              <button type="button" onClick={choose} style={btn('transparent', 'var(--ink)')}>{t('recover.chooseFile')}</button>
+              <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+                <button type="button" onClick={choose} style={btn('transparent', 'var(--ink)')}>{t('recover.chooseFile')}</button>
+                <button type="button" onClick={listDrive} disabled={busy} style={btn('transparent', 'var(--ink)')}>{busy ? t('recover.driveSignin') : t('recover.fromDrive')}</button>
+              </div>
               <div style={{ fontSize: 13, color: fileName ? 'var(--ink)' : 'var(--muted)', marginTop: 8, wordBreak: 'break-all' }}>{fileName ?? t('recover.noFile')}</div>
             </div>
             <div>
@@ -95,6 +137,7 @@ export default function RecoverScreen() {
               {busy ? t('recover.checking') : t('recover.check')}
             </button>
           </div>
+          )
         ) : (
           <div style={CARD}>
             <div style={{ fontFamily: SERIF, fontSize: 22, marginBottom: 2 }}>{summary.school_name || '—'}</div>

@@ -1662,6 +1662,15 @@ export const restore_summary = (path: string, recoveryKey: string) =>
 export const restore_install = (path: string, recoveryKey: string) =>
   invoke<void>('restore_install', { path, recoveryKey })
 
+export interface RestoreDriveEntryDto {
+  name: string
+  backup_date: string
+  file_id: string
+}
+export const restore_drive_list = () => invoke<RestoreDriveEntryDto[]>('restore_drive_list')
+export const restore_drive_fetch = (fileId: string, name: string) =>
+  invoke<string>('restore_drive_fetch', { fileId, name })
+
 // ---- Phase 4: staff & access, invitations, devices, sync, conflicts --------
 export interface StaffFullDto {
   id: string
