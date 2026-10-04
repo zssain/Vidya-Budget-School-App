@@ -1646,6 +1646,11 @@ export interface DriveStatusDto {
 export const drive_status = () => invoke<DriveStatusDto>('drive_status')
 export const drive_connect = () => invoke<DriveStatusDto>('drive_connect')
 export const drive_disconnect = () => invoke<DriveStatusDto>('drive_disconnect')
+// Mobile (Android) Drive connect: start returns the auth URL to open in a Custom Tab;
+// the deep-link callback URL is passed to drive_exchange to finish. Desktop uses
+// drive_connect (loopback) instead.
+export const drive_connect_start = () => invoke<string>('drive_connect_start')
+export const drive_exchange = (callbackUrl: string) => invoke<DriveStatusDto>('drive_exchange', { callbackUrl })
 
 // Restore (Welcome → Recover an existing school)
 export interface RestoreSummaryDto {

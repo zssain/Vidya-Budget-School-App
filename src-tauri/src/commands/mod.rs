@@ -218,6 +218,8 @@ pub const COMMANDS: &[&str] = &[
     "drive_status",
     "drive_connect",
     "drive_disconnect",
+    "drive_connect_start",
+    "drive_exchange",
     // Restore (Welcome → Recover an existing school).
     "restore_summary",
     "restore_install",
@@ -1480,6 +1482,38 @@ pub fn drive_connect(state: State<RtCtx>) -> CmdResult<DriveStatusDto> {
 #[tauri::command]
 pub fn drive_disconnect(state: State<RtCtx>) -> CmdResult<DriveStatusDto> {
     state.with_db(|c| crate::sync::drive::oauth::clear_tokens(c).map_err(|e| crate::error::CmdError::internal(e.to_string())))?;
+    drive_status_dto(&state)
+}
+
+/// Begin a MOBILE (Android) Google Drive connect: returns the authorization URL to open
+/// in a Custom Tab. Android can't use the desktop loopback, so it uses Google's
+/// installed-app custom-scheme redirect, captured by the deep-link plugin; the callback
+/// is completed by [`drive_exchange`]. Uses the Android OAuth client id.
+#[tauri::command]
+pub fn drive_connect_start(state: State<RtCtx>) -> CmdResult<String> {
+    use crate::sync::drive::oauth;
+    let client_id = crate::config::get().google_client_id_android.clone();
+    if client_id.is_empty() {
+        return Err(crate::error::CmdError::new("DRIVE_NOT_CONFIGURED", "error.DRIVE_NOT_CONFIGURED", serde_json::Value::Null));
+    }
+    state.with_db(|c| {
+        oauth::begin_mobile_connect(c, &client_id).map_err(|e| {
+            crate::error::CmdError::new("DRIVE_CONNECT_FAILED", "error.DRIVE_CONNECT_FAILED", serde_json::json!({ "detail": e.to_string() }))
+        })
+    })
+}
+
+/// Finish a mobile Google Drive connect from the deep-link callback URL (Google's
+/// redirect to the app's custom scheme). Verifies the anti-CSRF state, exchanges the
+/// code, stores the tokens, and returns the new status.
+#[tauri::command]
+pub fn drive_exchange(state: State<RtCtx>, callback_url: String) -> CmdResult<DriveStatusDto> {
+    use crate::sync::drive::oauth;
+    state.with_db(|c| {
+        oauth::finish_mobile_connect(c, &callback_url).map_err(|e| {
+            crate::error::CmdError::new("DRIVE_CONNECT_FAILED", "error.DRIVE_CONNECT_FAILED", serde_json::json!({ "detail": e.to_string() }))
+        })
+    })?;
     drive_status_dto(&state)
 }
 
