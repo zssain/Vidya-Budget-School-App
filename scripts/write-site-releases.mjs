@@ -14,8 +14,8 @@
 //     repo        : owner/name (for the download URL)
 //     out-file    : path to write (e.g. site/releases.json)
 
-import { readFileSync, writeFileSync, statSync, readdirSync, existsSync } from 'node:fs'
-import { join } from 'node:path'
+import { readFileSync, writeFileSync, statSync, readdirSync, existsSync, mkdirSync } from 'node:fs'
+import { join, dirname } from 'node:path'
 
 const [dir, version, releasedOn, repo, outFile] = process.argv.slice(2)
 if (!dir || !version || !releasedOn || !repo || !outFile) {
@@ -83,5 +83,6 @@ const manifest = {
     },
   ],
 }
+mkdirSync(dirname(outFile), { recursive: true }) // first release: site/ may not exist on the default branch yet
 writeFileSync(outFile, JSON.stringify(manifest, null, 2) + '\n')
 console.log(`wrote ${outFile} — ${platforms.length} platform artifact(s) for v${version}`)
