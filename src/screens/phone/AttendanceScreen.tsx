@@ -173,8 +173,8 @@ export default function AttendanceScreen({
     <div
       style={{
         position: 'relative',
-        width: '390px',
-        height: '844px',
+        width: '100%',
+        height: '100%',
         display: 'flex',
         flexDirection: 'column',
         background: '#F5F7F6',

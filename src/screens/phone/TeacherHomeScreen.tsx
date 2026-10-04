@@ -173,8 +173,8 @@ export default function TeacherHomeScreen({ data }: { data: TeacherHomeData }) {
   return (
     <div
       style={{
-        width: '390px',
-        height: '844px',
+        width: '100%',
+        height: '100%',
         display: 'flex',
         flexDirection: 'column',
         background: 'radial-gradient(110% 45% at 85% 0%, #1A3560 0%, #0C1B38 60%)',

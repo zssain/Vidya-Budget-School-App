@@ -483,12 +483,14 @@ export default function WelcomeScreen({
   return (
     <div
       style={{
-        width: '1440px',
-        height: '960px',
+        // Desktop keeps the fixed 1440x960 mock frame; phone fills the real viewport
+        // (the old fixed size made the app render as a giant zoomed-out box on Android).
+        width: isPhone ? '100%' : '1440px',
+        height: isPhone ? '100dvh' : '960px',
         boxSizing: 'border-box',
-        padding: '20px',
+        padding: isPhone ? 'env(safe-area-inset-top) 12px env(safe-area-inset-bottom)' : '20px',
         display: 'flex',
-        gap: '20px',
+        gap: isPhone ? '0' : '20px',
         background: '#E2EAEB',
         color: '#13233F',
         fontFamily: "'Geist', 'Noto Sans Devanagari', system-ui, sans-serif",
