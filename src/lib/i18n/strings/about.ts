@@ -16,6 +16,13 @@ const en: Record<string, string> = {
   'about.developer': 'Developed by Zuhair Hussain',
   'about.copyright': '© 2026 Zuhair Hussain',
 
+  // Android: connect Google Drive for off-Wi-Fi sync (Android build only).
+  'about.drive.title': 'Google Drive sync',
+  'about.drive.desc': 'Connect your school Google account to sync when you are away from the school Wi-Fi.',
+  'about.drive.connect': 'Connect Google Drive',
+  'about.drive.connecting': 'Opening Google sign-in…',
+  'about.drive.failed': 'Could not start Google sign-in. Please try again.',
+
   // iPhone PWA honest-limits section (shown only when platform === 'web').
   'about.iphone.title': 'About this iPhone app',
   'about.iphone.intro':
@@ -47,6 +54,12 @@ const hi: Record<string, string> = {
   'about.website': 'वेबसाइट',
   'about.developer': 'ज़ुहैर हुसैन द्वारा विकसित',
   'about.copyright': '© 2026 Zuhair Hussain',
+
+  'about.drive.title': 'Google Drive सिंक',
+  'about.drive.desc': 'स्कूल Wi-Fi से दूर होने पर सिंक के लिए अपना स्कूल Google खाता कनेक्ट करें।',
+  'about.drive.connect': 'Google Drive कनेक्ट करें',
+  'about.drive.connecting': 'Google साइन-इन खोल रहा है…',
+  'about.drive.failed': 'Google साइन-इन शुरू नहीं हो सका। कृपया फिर से कोशिश करें।',
 
   'about.iphone.title': 'इस iPhone ऐप के बारे में',
   'about.iphone.intro':

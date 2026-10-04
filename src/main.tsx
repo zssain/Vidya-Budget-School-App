@@ -21,6 +21,11 @@ import '@fontsource/noto-sans-telugu/telugu-600.css'
 import './styles/app.css'
 import { loadAccent } from './lib/theme'
 import { loadLang } from './lib/i18n'
+import { initDriveDeepLink } from './lib/mobileDrive'
+
+// Android: catch the Google Drive OAuth redirect (deep link) → finish the sign-in.
+// No-op on the PWA (which uses GIS) and harmless on desktop.
+void initDriveDeepLink()
 
 loadAccent()
 loadLang()

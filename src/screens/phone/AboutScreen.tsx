@@ -5,10 +5,12 @@
 // push yet, on-device storage retention). All copy via t(); colours via CSS tokens.
 // Unlike the pixel-exact mock screens this is new, so it fills the viewport
 // responsively (100dvh) rather than the fixed 390x844 mock frame.
+import { useState } from 'react'
 import { Icon } from '@/components/Icon'
 import { t } from '@/lib/i18n'
 import { navigate } from '@/lib/router'
 import { isWeb } from '@/lib/platform'
+import { connectDriveMobile } from '@/lib/mobileDrive'
 
 // Injected by Vite's `define` (both the Tauri and web-pwa configs); same guard as
 // SettingsScreen so a non-string value falls back to a dash.
@@ -50,6 +52,13 @@ const CARD: React.CSSProperties = {
 
 export default function AboutScreen() {
   const version = typeof __APP_VERSION__ === 'string' ? __APP_VERSION__ : '—'
+  const [driveMsg, setDriveMsg] = useState<string | null>(null)
+  const onConnectDrive = () => {
+    setDriveMsg(t('about.drive.connecting'))
+    connectDriveMobile()
+      .then(() => setDriveMsg(null))
+      .catch(() => setDriveMsg(t('about.drive.failed')))
+  }
   return (
     <div
       style={{
@@ -93,6 +102,22 @@ export default function AboutScreen() {
           <InfoRow label={t('about.support')} value="mohammedzuhairhussain28@gmail.com" />
           <InfoRow label={t('about.website')} value="neverworks.org" />
         </div>
+
+        {/* Android: connect Google Drive for off-Wi-Fi sync (not the PWA — it uses GIS). */}
+        {!isWeb && (
+          <div style={CARD}>
+            <h2 style={{ fontSize: 15, fontWeight: 600, margin: '16px 0 6px' }}>{t('about.drive.title')}</h2>
+            <p style={{ margin: '0 0 12px', fontSize: 13, lineHeight: 1.5, color: 'var(--muted)' }}>{t('about.drive.desc')}</p>
+            <button
+              type="button"
+              onClick={onConnectDrive}
+              style={{ height: 44, borderRadius: 8, border: 0, background: 'var(--accent)', color: 'var(--surface)', fontSize: 14, fontWeight: 500, padding: '0 16px', cursor: 'pointer' }}
+            >
+              {t('about.drive.connect')}
+            </button>
+            {driveMsg && <p style={{ margin: '10px 0 0', fontSize: 13, color: 'var(--muted)' }}>{driveMsg}</p>}
+          </div>
+        )}
 
         {/* iPhone honest-limits — only on the PWA. */}
         {isWeb && (
