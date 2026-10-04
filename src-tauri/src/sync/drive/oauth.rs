@@ -242,6 +242,77 @@ pub fn valid_access_token(conn: &Connection, client_id: &str) -> OauthResult<Str
     Ok(access)
 }
 
+// ---- interactive connect (mobile: custom-scheme redirect via deep link) -----
+//
+// Desktop uses a loopback redirect (below). Android cannot bind a loopback the system
+// browser can reach, so it uses Google's "installed app" **custom-scheme** redirect —
+// the reversed client id — captured by tauri-plugin-deep-link. The flow is split in
+// two (the deep-link callback is event-driven, not a blocking server): the app calls
+// [`begin_mobile_connect`] to get the auth URL (opened in a Custom Tab), then feeds the
+// deep-link callback URL to [`finish_mobile_connect`]. The REST client + token
+// exchange + storage are shared with desktop. Device-verified (the deep-link routing
+// itself only works on a real Android build).
+
+/// The redirect URI for an Android OAuth client: `…-xyz.apps.googleusercontent.com`
+/// → `com.googleusercontent.apps.…-xyz:/oauth2redirect` (Google's documented reversed
+/// client id scheme for installed apps).
+pub fn android_redirect_uri(client_id: &str) -> String {
+    let id = client_id.strip_suffix(".apps.googleusercontent.com").unwrap_or(client_id);
+    format!("com.googleusercontent.apps.{id}:/oauth2redirect")
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+struct PendingConnect {
+    verifier: String,
+    state: String,
+    client_id: String,
+    redirect_uri: String,
+}
+const KV_PENDING: &str = "drive_oauth_pending";
+
+/// Begin a mobile connect: stash PKCE + anti-CSRF `state`, return the authorization URL
+/// for the app to open in a Custom Tab. Finished by [`finish_mobile_connect`].
+pub fn begin_mobile_connect(conn: &Connection, client_id: &str) -> OauthResult<String> {
+    let p = pkce();
+    let state = random_b64url(16);
+    let redirect_uri = android_redirect_uri(client_id);
+    let url = auth_url(client_id, &redirect_uri, &p.challenge, &state);
+    let pending = PendingConnect { verifier: p.verifier, state, client_id: client_id.to_string(), redirect_uri };
+    kv::set(conn, KV_PENDING, &pending).map_err(|e| OauthError::Io(e.to_string()))?;
+    Ok(url)
+}
+
+/// Finish a mobile connect from the deep-link callback URL: verify `state`, exchange the
+/// code (PKCE), store the tokens. Sync — owns a short-lived runtime (call off any
+/// ambient Tokio runtime).
+pub fn finish_mobile_connect(conn: &Connection, callback_url: &str) -> OauthResult<DriveTokens> {
+    let pending: PendingConnect =
+        kv::get(conn, KV_PENDING).ok().flatten().ok_or_else(|| OauthError::Denied("no pending connect".into()))?;
+    let url = reqwest::Url::parse(callback_url).map_err(|_| OauthError::Denied("bad callback url".into()))?;
+    let (mut code, mut state) = (None, None);
+    for (k, v) in url.query_pairs() {
+        match k.as_ref() {
+            "code" => code = Some(v.into_owned()),
+            "state" => state = Some(v.into_owned()),
+            "error" => return Err(OauthError::Denied(v.into_owned())),
+            _ => {}
+        }
+    }
+    let code = code.ok_or_else(|| OauthError::Denied("no code in callback".into()))?;
+    if state.as_deref() != Some(pending.state.as_str()) {
+        return Err(OauthError::Denied("state mismatch".into()));
+    }
+    let rt = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| OauthError::Io(e.to_string()))?;
+    let client = reqwest::Client::new();
+    let tokens = rt.block_on(exchange_code(&client, &pending.client_id, &code, &pending.verifier, &pending.redirect_uri))?;
+    let _ = kv::delete(conn, KV_PENDING);
+    store_tokens(conn, &tokens).map_err(|e| OauthError::Io(e.to_string()))?;
+    Ok(tokens)
+}
+
 // ---- interactive connect (loopback) ----------------------------------------
 
 /// Parse the HTTP request line of the loopback redirect, returning `(code, state)`
@@ -348,6 +419,28 @@ mod tests {
         let expect = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(Sha256::digest(p.verifier.as_bytes()));
         assert_eq!(p.challenge, expect);
         assert!(!p.challenge.contains('=') && !p.challenge.contains('+') && !p.challenge.contains('/'));
+    }
+
+    #[test]
+    fn android_redirect_is_reversed_client_id() {
+        assert_eq!(
+            android_redirect_uri("665784308071-abc.apps.googleusercontent.com"),
+            "com.googleusercontent.apps.665784308071-abc:/oauth2redirect"
+        );
+        // A bare id (already reversed / unexpected) is passed through, not corrupted.
+        assert_eq!(android_redirect_uri("plain-id"), "com.googleusercontent.apps.plain-id:/oauth2redirect");
+    }
+
+    #[test]
+    fn mobile_connect_roundtrip_state_is_enforced() {
+        let mut c = crate::db::open_in_memory("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef").unwrap();
+        crate::db::run_migrations(&mut c).unwrap();
+        let url = begin_mobile_connect(&c, "665784308071-abc.apps.googleusercontent.com").unwrap();
+        assert!(url.contains("code_challenge_method=S256"));
+        assert!(url.contains("com.googleusercontent.apps.665784308071-abc"));
+        // A callback with the wrong state is rejected (anti-CSRF), before any network.
+        let bad = finish_mobile_connect(&c, "com.googleusercontent.apps.x:/oauth2redirect?code=C&state=WRONG");
+        assert!(matches!(bad, Err(OauthError::Denied(_))));
     }
 
     #[test]
