@@ -164,11 +164,14 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
-      # setup-android@v3's own `sdkmanager --licenses` fails on the current runner
-      # image (exit 1 mid-accept), so disable it and accept + install manually below.
+      # setup-android@v3 defaults fail on the current runner two ways: its own
+      # `sdkmanager --licenses` errors mid-accept, and its default package set includes
+      # the obsolete `tools` package ("Failed to find package 'tools'" → exit 1). So
+      # disable both and accept + install exactly what we need manually below.
       - uses: android-actions/setup-android@v3
         with:
           accept-android-sdk-licenses: false
+          packages: ''
       - name: Accept SDK licenses + ensure API 36 packages + NDK
         run: |
           SDK="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
