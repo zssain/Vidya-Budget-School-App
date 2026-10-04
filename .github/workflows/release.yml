@@ -226,13 +226,20 @@ jobs:
       - name: Rename APKs (flag debug-signed test builds)
         run: |
           VER="${GITHUB_REF_NAME#v}"
-          SUFFIX=""; [ "${{ steps.ks.outputs.signed }}" = "false" ] && SUFFIX="-UNSIGNED-TEST"
+          SUFFIX=""
+          if [ "${{ steps.ks.outputs.signed }}" = "false" ]; then SUFFIX="-UNSIGNED-TEST"; fi
           mkdir -p out
           BASE=src-tauri/gen/android/app/build/outputs/apk
-          for abi in arm64-v8a armeabi-v7a; do
-            f=$(find "$BASE" -name "*${abi}*.apk" | head -1)
-            [ -n "$f" ] && cp "$f" "out/Vidya_${VER}_${abi}${SUFFIX}.apk"
-          done
+          # tauri --split-per-abi output dirs are arm64 / arm / x86_64 / x86 (files like
+          # app-arm64-release.apk); map to the Play-style ABI names for the release.
+          copy_abi() {
+            f=$(find "$BASE/$1/release" -name "*.apk" 2>/dev/null | head -1)
+            if [ -n "$f" ]; then cp "$f" "out/Vidya_${VER}_$2${SUFFIX}.apk"; echo "copied $f -> $2"; fi
+          }
+          copy_abi arm64 arm64-v8a
+          copy_abi arm armeabi-v7a
+          copy_abi x86_64 x86_64
+          echo "=== out/ ==="; ls -la out
       - name: Size gate
         run: node scripts/size-report.mjs
       - name: Attach to DRAFT release
