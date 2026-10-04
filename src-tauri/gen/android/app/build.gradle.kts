@@ -13,6 +13,17 @@ val tauriProperties = Properties().apply {
     }
 }
 
+// Release signing: CI writes gen/android/keystore.properties (storeFile/storePassword/
+// keyAlias/keyPassword) from the ANDROID_KEYSTORE_* secrets. Without it (local dev) the
+// release build stays unsigned. A release APK MUST be signed or Android refuses to
+// install it ("package appears to be invalid").
+val keystoreProperties = Properties().apply {
+    val propFile = rootProject.file("keystore.properties")
+    if (propFile.exists()) {
+        propFile.inputStream().use { load(it) }
+    }
+}
+
 android {
     compileSdk = 36
     namespace = "in.vidyabudget.app"
@@ -26,6 +37,14 @@ android {
         // Ship only the two target ABIs (docs/00-SYSTEM-CONTEXT.md §2).
         ndk {
             abiFilters += listOf("arm64-v8a", "armeabi-v7a")
+        }
+    }
+    signingConfigs {
+        create("release") {
+            keystoreProperties.getProperty("storeFile")?.let { storeFile = file(it) }
+            storePassword = keystoreProperties.getProperty("storePassword")
+            keyAlias = keystoreProperties.getProperty("keyAlias")
+            keyPassword = keystoreProperties.getProperty("keyPassword")
         }
     }
     buildTypes {
@@ -42,6 +61,11 @@ android {
             }
         }
         getByName("release") {
+            // Sign only when the keystore is configured (CI); otherwise the release APK
+            // stays unsigned (local dev) rather than failing the build.
+            if (keystoreProperties.getProperty("storeFile") != null) {
+                signingConfig = signingConfigs.getByName("release")
+            }
             isMinifyEnabled = true
             isShrinkResources = true
             // Store native libs uncompressed and page-aligned inside the APK so
