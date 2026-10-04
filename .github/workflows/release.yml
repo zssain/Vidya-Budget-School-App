@@ -152,7 +152,11 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
+      # Pin cmdline-tools: the runner's preinstalled 16.0 regressed sdkmanager (exit 1)
+      # inside setup-android@v3; 11076708 is a known-stable revision.
       - uses: android-actions/setup-android@v3
+        with:
+          cmdline-tools-version: '11076708'
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-linux-android,armv7-linux-androideabi

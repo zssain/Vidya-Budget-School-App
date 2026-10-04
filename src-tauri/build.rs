@@ -28,17 +28,12 @@ fn check_release_config() {
     let json: serde_json::Value = serde_json::from_str(&raw)
         .unwrap_or_else(|e| panic!("build-config/release.json is not valid JSON: {e}"));
     // `relay_url` is OPTIONAL (the off-by-default "Instant sync" module, §14) and
-    // there is no `licence_api` in v2 (licences verify offline — prompts/P12
-    // Step 6). Every string value below is required.
-    for key in ["google_client_id_desktop", "google_client_id_android"] {
-        let val = json.get(key).and_then(|v| v.as_str()).unwrap_or("");
-        if val.trim().is_empty() {
-            panic!(
-                "release build config value '{key}' is empty in build-config/release.json — \
-                 fill it before a release build (prompts/P12 Step 6)"
-            );
-        }
-    }
+    // there is no `licence_api` in v2 (licences verify offline — prompts/P12 Step 6).
+    // `google_client_id_desktop` / `google_client_id_android` are also OPTIONAL: an
+    // empty value means Google Drive is simply unavailable in that build (the app shows
+    // a clean "not set up in this build" state — never a fake success), so a school can
+    // ship the full local + LAN product before it has an OAuth client. Only the licence
+    // public key below is strictly required.
 
     // At least one licence public key is required, and NONE may be the dev key
     // (prompts/P09 §5, P12 Step 6.4). Mint a production keypair with
