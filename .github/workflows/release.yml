@@ -221,8 +221,11 @@ jobs:
           else
             echo "signed=false" >> "$GITHUB_OUTPUT"
           fi
-      - name: Build split APKs
-        run: npm run tauri android build -- --apk --split-per-abi
+      # Only the ARM ABIs (real phones): arm64-v8a 17 MB, armeabi-v7a 28 MB — both under
+      # the §2 40 MB budget. The x86/x86_64 (emulator-only) APKs are ~45 MB and over
+      # budget, and aren't needed for phone distribution.
+      - name: Build split APKs (ARM only)
+        run: npm run tauri android build -- --apk --split-per-abi --target aarch64 --target armv7
       - name: Rename APKs (flag debug-signed test builds)
         run: |
           VER="${GITHUB_REF_NAME#v}"
