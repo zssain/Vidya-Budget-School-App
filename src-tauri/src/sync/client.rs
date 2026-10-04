@@ -182,6 +182,65 @@ pub async fn client_sync_tick(conn: &mut Connection) -> Result<String, String> {
     Ok(label.to_string())
 }
 
+/// One Drive sync pass as a CLIENT (§8.3 route 3): push our outbox as sealed `.vop`
+/// bundles, pull peers' bundles for audiences we hold a key for (provisional apply),
+/// and apply the server's ack (dropping confirmed ops from the outbox). This is the
+/// off-LAN route — used when the school server is unreachable but the internet + a
+/// connected Google Drive are. SYNC — the Drive client blocks internally, so call from
+/// a blocking context. Composes the already-built exchange engine; the real Drive
+/// round-trip is device-verified.
+pub fn client_drive_tick(conn: &mut Connection) -> Result<(), String> {
+    use crate::sync::drive::{exchange, google::GoogleDrive, oauth, pull, DriveApi};
+    use base64::Engine;
+
+    if !oauth::is_connected(conn) {
+        return Ok(()); // Drive not connected on this device — LAN only
+    }
+    let id = load(conn).ok_or("this device has not joined a school")?;
+
+    // The audience keys this device holds (audience+version → 32-byte key), from join.
+    let mut held: exchange::HeldKeys = std::collections::BTreeMap::new();
+    for ak in &id.audience_keys {
+        if let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(&ak.key_b64) {
+            if let Ok(k) = <[u8; 32]>::try_from(bytes.as_slice()) {
+                held.insert((ak.audience.clone(), ak.version), k);
+            }
+        }
+    }
+
+    // Refresh the access token with the client id that minted it (Android vs desktop).
+    #[cfg(target_os = "android")]
+    let client_id = crate::config::get().google_client_id_android.clone();
+    #[cfg(not(target_os = "android"))]
+    let client_id = crate::config::get().google_client_id_desktop.clone();
+    if client_id.is_empty() {
+        return Ok(());
+    }
+    let token = oauth::valid_access_token(conn, &client_id).map_err(|e| e.to_string())?;
+    let drive = GoogleDrive::new(token).map_err(|e| format!("{e:?}"))?;
+
+    // Resolve Vidya/<school> (<id>)/exchange — the SAME path the server (C1) + PWA use.
+    let vidya = drive.ensure_folder("root", "Vidya").map_err(|e| format!("{e:?}"))?;
+    let school = drive
+        .ensure_folder(&vidya, &format!("{} ({})", id.school_name, id.school_id))
+        .map_err(|e| format!("{e:?}"))?;
+    let exchange_folder = drive.ensure_folder(&school, "exchange").map_err(|e| format!("{e:?}"))?;
+
+    // 1) push our outbox, 2) pull peers' bundles, 3) read our ack + confirm the outbox.
+    let ops_folder = drive
+        .ensure_folder(&exchange_folder, &format!("ops-{}", id.device_id))
+        .map_err(|e| format!("{e:?}"))?;
+    exchange::push_outbox(conn, &drive, &ops_folder, &held).map_err(|e| format!("{e:?}"))?;
+    pull::pull_provisional(conn, &drive, &exchange_folder, &id.device_id, &held).map_err(|e| format!("{e:?}"))?;
+    let acks_folder = drive.ensure_folder(&exchange_folder, "acks").map_err(|e| format!("{e:?}"))?;
+    if let Some(ack) = exchange::read_ack(&drive, &acks_folder, &id.device_id, &id.session_key).map_err(|e| format!("{e:?}"))? {
+        for res in &ack.results {
+            let _ = conn.execute("DELETE FROM outbox WHERE op_id=?1", rusqlite::params![res.op_id]);
+        }
+    }
+    Ok(())
+}
+
 /// Discover the school server's current LAN address via mDNS (desktop), confirming the
 /// advertised fingerprint prefix matches our pinned one. Returns `(addr, port)` or
 /// `None` (not found / different cert / mDNS unavailable). Runs the blocking browse on

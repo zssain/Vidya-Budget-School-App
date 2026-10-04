@@ -213,7 +213,24 @@ pub fn run() {
                         ticker.tick().await;
                         match sync::client::client_sync_tick(&mut conn).await {
                             Ok(route) => tracing::debug!("client synced via {route}"),
-                            Err(e) => tracing::debug!("client sync tick: {e}"),
+                            Err(e) => {
+                                // LAN unreachable → fall back to the Drive route (§8.3) when
+                                // Drive is connected. Blocking (the Drive client blocks), so
+                                // run on a blocking thread with its own DB connection.
+                                tracing::debug!("client sync (LAN): {e} — trying Drive");
+                                let (dbp, kh) = (db_path.clone(), key_hex.clone());
+                                let _ = tauri::async_runtime::spawn_blocking(move || {
+                                    match db::open_encrypted(&dbp, &kh) {
+                                        Ok(mut c) => {
+                                            if let Err(e) = sync::client::client_drive_tick(&mut c) {
+                                                tracing::debug!("client drive tick: {e}");
+                                            }
+                                        }
+                                        Err(e) => tracing::warn!("client drive tick: open db: {e}"),
+                                    }
+                                })
+                                .await;
+                            }
                         }
                     }
                 });
