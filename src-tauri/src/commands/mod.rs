@@ -789,8 +789,18 @@ pub fn day_book(state: State<RtCtx>, date: String) -> CmdResult<DayBookDto> {
 /// (§7); the caller falls back to window.print() if this errors.
 #[tauri::command]
 pub fn print_page(window: tauri::WebviewWindow) -> CmdResult<()> {
-    window.print().map_err(|_| crate::error::CmdError::internal("print_unavailable"))?;
-    Ok(())
+    // Printing is a desktop (school-PC) capability; `WebviewWindow::print()` does not
+    // exist on Android, where this command is simply unavailable.
+    #[cfg(not(target_os = "android"))]
+    {
+        window.print().map_err(|_| crate::error::CmdError::internal("print_unavailable"))?;
+        Ok(())
+    }
+    #[cfg(target_os = "android")]
+    {
+        let _ = window;
+        Err(crate::error::CmdError::internal("print_unavailable"))
+    }
 }
 
 // ----------------------------------------------------------- attendance ------
