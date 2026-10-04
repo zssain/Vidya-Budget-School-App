@@ -53,17 +53,29 @@ jobs:
           GOOGLE_CLIENT_ID_DESKTOP: ${{ vars.GOOGLE_CLIENT_ID_DESKTOP }}
           GOOGLE_CLIENT_ID_ANDROID: ${{ vars.GOOGLE_CLIENT_ID_ANDROID }}
         run: bash scripts/write-release-config.sh
-      # Signing + notarization run ONLY if the Apple secrets are present; absent →
-      # unsigned build, no error.
+      # Signing + notarization run ONLY when a real certificate exists. The APPLE_* vars
+      # must be UNSET (not empty) when absent — an empty APPLE_CERTIFICATE still makes
+      # Tauri attempt `security import` and fail. So the secrets come in under SIGN_*
+      # names and are promoted to APPLE_* only when the certificate is non-empty; absent
+      # → an unsigned build Just Works.
       - name: Build universal DMG
         env:
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        run: npm run tauri build -- --target universal-apple-darwin --bundles dmg app
+          SIGN_CERT: ${{ secrets.APPLE_CERTIFICATE }}
+          SIGN_CERT_PW: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          SIGN_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
+          SIGN_APPLE_ID: ${{ secrets.APPLE_ID }}
+          SIGN_APPLE_PW: ${{ secrets.APPLE_PASSWORD }}
+          SIGN_TEAM: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          if [ -n "$SIGN_CERT" ]; then
+            export APPLE_CERTIFICATE="$SIGN_CERT"
+            export APPLE_CERTIFICATE_PASSWORD="$SIGN_CERT_PW"
+            export APPLE_SIGNING_IDENTITY="$SIGN_IDENTITY"
+            export APPLE_ID="$SIGN_APPLE_ID"
+            export APPLE_PASSWORD="$SIGN_APPLE_PW"
+            export APPLE_TEAM_ID="$SIGN_TEAM"
+          fi
+          npm run tauri build -- --target universal-apple-darwin --bundles dmg app
       - name: Rename (flag unsigned)
         run: |
           VER="${GITHUB_REF_NAME#v}"
@@ -152,11 +164,21 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
-      # Pin cmdline-tools: the runner's preinstalled 16.0 regressed sdkmanager (exit 1)
-      # inside setup-android@v3; 11076708 is a known-stable revision.
+      # setup-android@v3's own `sdkmanager --licenses` fails on the current runner
+      # image (exit 1 mid-accept), so disable it and accept + install manually below.
       - uses: android-actions/setup-android@v3
         with:
-          cmdline-tools-version: '11076708'
+          accept-android-sdk-licenses: false
+      - name: Accept SDK licenses + ensure API 36 packages + NDK
+        run: |
+          SDK="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          yes | "$SDK" --licenses >/dev/null 2>&1 || true
+          "$SDK" "platform-tools" "platforms;android-36" "build-tools;36.0.0" >/dev/null 2>&1 || true
+          # Tauri needs the NDK; use the runner's preinstalled one.
+          NDK="${ANDROID_NDK_LATEST_HOME:-${ANDROID_NDK_ROOT:-}}"
+          echo "NDK_HOME=$NDK" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_HOME=$NDK" >> "$GITHUB_ENV"
+          echo "using NDK at: $NDK"
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-linux-android,armv7-linux-androideabi
