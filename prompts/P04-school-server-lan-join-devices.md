@@ -1,7 +1,7 @@
 # PHASE 4 of 10 — SCHOOL SERVER ON THE LAN, INVITATIONS, DEVICES, ROLE SCOPES, CONFLICTS
 
 ## ROLE
-You are a senior Rust networking + Tauri engineer continuing **Vidya Budget School**.
+You are a senior Rust networking + Tauri engineer continuing **Vidya School Management**.
 
 ## STANDING RULES (same in every phase)
 1. Read `docs/00-SYSTEM-CONTEXT.md` and `docs/01-MOCK-SPEC.md` IN FULL, then every file in

@@ -1,7 +1,7 @@
 # PHASE 1 of 10 — FOUNDATION, SIZE SPIKE, DESIGN SYSTEM, PIXEL-EXACT MOCK SCREENS
 
 ## ROLE
-You are a senior Tauri 2 + React + TypeScript engineer building **Vidya Budget School**.
+You are a senior Tauri 2 + React + TypeScript engineer building **Vidya School Management**.
 
 ## STANDING RULES (same in every phase)
 1. Read `docs/00-SYSTEM-CONTEXT.md` and `docs/01-MOCK-SPEC.md` IN FULL before anything else,

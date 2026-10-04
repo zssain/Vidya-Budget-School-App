@@ -1,6 +1,6 @@
 # SELLING — the owner's one-page checklist
 
-How you (Zuhair) sell **Vidya Budget School**: one-time UPI purchase, perpetual
+How you (Zuhair) sell **Vidya School Management**: one-time UPI purchase, perpetual
 offline licence, no payment provider. **You** verify each payment in your own
 bank app and mint the licence on your laptop with
 [`tools/licence-maker`](../tools/licence-maker/README.md).

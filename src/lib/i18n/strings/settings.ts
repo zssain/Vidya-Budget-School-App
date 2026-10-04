@@ -65,7 +65,7 @@ const en: Record<string, string> = {
 
   'settings.about.title': 'About',
   'settings.about.version': 'Version',
-  'settings.about.product': 'Vidya Budget School',
+  'settings.about.product': 'Vidya School Management',
   'settings.about.tagline': 'School management, built to work offline first.',
   'settings.about.developer': 'Developed by Zuhair Hussain',
   'settings.about.copyright': '© 2026 Zuhair Hussain',
@@ -197,7 +197,7 @@ const hi: Record<string, string> = {
 
   'settings.about.title': 'परिचय',
   'settings.about.version': 'संस्करण',
-  'settings.about.product': 'Vidya Budget School',
+  'settings.about.product': 'Vidya School Management',
   'settings.about.tagline': 'स्कूल प्रबंधन, ऑफ़लाइन-पहले काम करने के लिए बना।',
   'settings.about.developer': 'Zuhair Hussain द्वारा विकसित',
   'settings.about.copyright': '© 2026 Zuhair Hussain',

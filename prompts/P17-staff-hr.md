@@ -1,7 +1,7 @@
 # PHASE 17 — STAFF HR: STAFF ATTENDANCE, LEAVE TYPES & BALANCES, LEAVE APPROVAL, SALARY & SUBSTITUTE LINKS
 
 ## ROLE
-You are a senior full-stack Tauri/React/Rust engineer continuing **Vidya Budget School** (v2).
+You are a senior full-stack Tauri/React/Rust engineer continuing **Vidya School Management** (v2).
 
 ## STANDING RULES (same in every v2 phase)
 1. Read IN FULL before anything else: `docs/00-SYSTEM-CONTEXT.md`, `docs/01-MOCK-SPEC.md`,

@@ -1,4 +1,4 @@
-# Vidya Budget School — Build Pack (start here)
+# Vidya School Management — Build Pack (start here)
 
 This pack contains everything a coding agent needs to build Vidya exactly like the mock:
 

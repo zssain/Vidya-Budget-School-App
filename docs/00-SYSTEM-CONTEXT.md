@@ -1,4 +1,4 @@
-# VIDYA BUDGET SCHOOL — SYSTEM CONTEXT (v2)
+# VIDYA SCHOOL MANAGEMENT — SYSTEM CONTEXT (v2)
 
 This file is the source of truth for every phase. Every phase prompt tells the agent to read
 it first, in full. It is the v1 context with every decision from `docs/02-V2-CHANGES.md` merged

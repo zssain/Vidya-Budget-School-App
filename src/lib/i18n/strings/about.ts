@@ -8,7 +8,7 @@ import type { Bundle } from '../index'
 const en: Record<string, string> = {
   'about.title': 'About',
   'about.back': 'Back',
-  'about.product': 'Vidya Budget School',
+  'about.product': 'Vidya School Management',
   'about.tagline': 'School management, built to work offline first.',
   'about.version': 'Version',
   'about.support': 'Support',
@@ -40,7 +40,7 @@ const en: Record<string, string> = {
 const hi: Record<string, string> = {
   'about.title': 'परिचय',
   'about.back': 'वापस',
-  'about.product': 'Vidya Budget School',
+  'about.product': 'Vidya School Management',
   'about.tagline': 'स्कूल प्रबंधन, पहले ऑफ़लाइन काम करने के लिए बनाया गया।',
   'about.version': 'संस्करण',
   'about.support': 'सहायता',

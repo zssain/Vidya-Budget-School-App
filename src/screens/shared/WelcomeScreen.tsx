@@ -66,7 +66,7 @@ export default function WelcomeScreen({
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
         <img
           src={getLang() === 'hi' ? wordmarkHi : wordmark}
-          alt="Vidya Budget School"
+          alt="Vidya School Management"
           style={{ width: '190px', height: '62px', display: 'block' }}
         />
         <a

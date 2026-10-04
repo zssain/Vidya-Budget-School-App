@@ -9,7 +9,7 @@ import type { Bundle } from '../index'
 const en: Record<string, string> = {
   // Sidebar
   'home.school': 'Saraswati Public School',
-  'home.logoAlt': 'Vidya Budget School',
+  'home.logoAlt': 'Vidya School Management',
   'home.nav.section.overview': 'Overview',
   'home.nav.home': 'Home',
   'home.nav.approvals': 'Approvals',
@@ -76,7 +76,7 @@ const en: Record<string, string> = {
 const hi: Record<string, string> = {
   // Sidebar
   'home.school': 'सरस्वती पब्लिक स्कूल',
-  'home.logoAlt': 'Vidya Budget School',
+  'home.logoAlt': 'Vidya School Management',
   'home.nav.section.overview': 'अवलोकन',
   'home.nav.home': 'होम',
   'home.nav.approvals': 'स्वीकृतियाँ',

@@ -1,5 +1,5 @@
 /**
- * Vidya Budget School — full clickable prototype (React, single file).
+ * Vidya School Management — full clickable prototype (React, single file).
  * Visual source of truth: design/screens/*.dc.html (the approved mock) and docs/01-MOCK-SPEC.md.
  * Every colour, font size, radius and animation below is copied from the mock.
  *
@@ -280,7 +280,7 @@ function Sidebar({ role = 'principal', active = 'home', badge = 4 }) {
   return (
     <aside style={{ width: 256, flexShrink: 0, background: C.navy, color: C.white, display: 'flex', flexDirection: 'column', padding: '26px 16px 20px', gap: 22 }}>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 4, padding: '0 10px' }}>
-        <img src={A.logoDark} alt="Vidya Budget School" style={{ width: 160, height: 52, display: 'block' }} />
+        <img src={A.logoDark} alt="Vidya School Management" style={{ width: 160, height: 52, display: 'block' }} />
         <span style={{ fontSize: 12, color: C.onNavyMuted }}>Saraswati Public School</span>
       </div>
       <nav aria-label="Main" style={{ display: 'flex', flexDirection: 'column', gap: role === 'principal' ? 14 : 2 }}>
@@ -369,7 +369,7 @@ function Split({ children, right, w = 1440, h = 960 }) {
     <div className="vd" style={{ width: w, height: h, padding: 20, display: 'flex', gap: 20, background: C.outer, color: C.ink, fontFamily: SANS, fontSize: 14 }}>
       <section style={{ width: 600, flexShrink: 0, background: C.welcome, borderRadius: 22, boxShadow: '0 1px 2px rgba(11,26,51,0.06)', padding: '36px 56px', display: 'flex', flexDirection: 'column' }}>
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-          <img src={A.logoLight} alt="Vidya Budget School" style={{ width: 190, height: 62, display: 'block' }} />
+          <img src={A.logoLight} alt="Vidya School Management" style={{ width: 190, height: 62, display: 'block' }} />
           <a href="#" style={{ fontSize: 13, color: C.muted, textDecoration: 'none', display: 'flex', alignItems: 'center', gap: 6 }}><Icon name="help" size={15} sw={1.75} />Help</a>
         </div>
         <div style={{ flexGrow: 1, display: 'flex', flexDirection: 'column', justifyContent: 'center', gap: 22, maxWidth: 420, ...rise('vRise14') }}>{children}</div>
@@ -900,7 +900,7 @@ export function ReceiptScreen() {
       <div style={{ flexGrow: 1, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
         <div data-hl="paper" style={{ width: 560, background: C.white, boxShadow: '0 30px 60px rgba(11,26,51,0.18)', padding: '36px 40px', display: 'flex', flexDirection: 'column', gap: 14, ...rise('vIn8', 0, 380) }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-            <img src={A.logoLight} alt="Vidya Budget School" style={{ width: 150, height: 49 }} />
+            <img src={A.logoLight} alt="Vidya School Management" style={{ width: 150, height: 49 }} />
             <div style={{ textAlign: 'right', display: 'flex', flexDirection: 'column', gap: 2 }}><span style={{ fontFamily: SERIF, fontSize: 20 }}>Saraswati Public School</span><span style={{ fontSize: 12, color: C.muted }}>12-2-823, Mehdipatnam, Hyderabad</span></div>
           </div>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', borderTop: `2px solid ${C.navy}`, paddingTop: 14 }}>
@@ -964,7 +964,7 @@ function Counts({ items, hl }) {
 function PhoneLogoTop() {
   return (
     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-      <img src={A.logoDark} alt="Vidya Budget School" style={{ width: 132, height: 43, display: 'block' }} />
+      <img src={A.logoDark} alt="Vidya School Management" style={{ width: 132, height: 43, display: 'block' }} />
       <div style={{ display: 'flex', gap: 8 }}>
         <button type="button" aria-label="Notifications" style={{ position: 'relative', width: 44, height: 44, borderRadius: 22, border: '1px solid rgba(255,255,255,0.14)', background: 'rgba(255,255,255,0.04)', color: C.white, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Icon name="bell" size={19} /><span style={{ position: 'absolute', top: 10, right: 11, width: 7, height: 7, borderRadius: 4, background: C.gold }} /></button>
         <button type="button" aria-label="Account" style={{ width: 44, height: 44, borderRadius: 22, border: 0, background: C.navyRaised, color: C.goldLight, fontWeight: 600, fontSize: 14 }}>MI</button>
@@ -989,7 +989,7 @@ export function JoinScreen({ step = 'code' }) {
   );
   return (
     <Phone bg={C.welcome}>
-      <div style={{ padding: '22px 22px 0' }}><img src={A.logoLight} alt="Vidya Budget School" style={{ width: 150, height: 49, display: 'block' }} /></div>
+      <div style={{ padding: '22px 22px 0' }}><img src={A.logoLight} alt="Vidya School Management" style={{ width: 150, height: 49, display: 'block' }} /></div>
       <div style={{ flexGrow: 1, padding: '28px 22px 24px', display: 'flex', flexDirection: 'column', gap: 20, ...rise('vRise14') }}>
         {step === 'code' && (
           <>
@@ -1929,7 +1929,7 @@ export default function VidyaPrototype() {
     <div style={{ display: 'flex', minHeight: '100vh', fontFamily: SANS, background: C.outer, color: C.ink }}>
       <GlobalStyle />
       <nav style={{ width: 260, background: C.navy, color: C.white, padding: '24px 16px', display: 'flex', flexDirection: 'column', gap: 18, flexShrink: 0 }}>
-        <img src={A.logoDark} alt="Vidya Budget School" style={{ width: 160, height: 52 }} />
+        <img src={A.logoDark} alt="Vidya School Management" style={{ width: 160, height: 52 }} />
         {groups.map((g) => (
           <div key={g} style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
             <div style={{ fontSize: 10, fontWeight: 600, letterSpacing: '0.16em', textTransform: 'uppercase', color: C.onNavyLabel, padding: '0 10px 6px' }}>{g}</div>

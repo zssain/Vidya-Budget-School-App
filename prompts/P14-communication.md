@@ -1,7 +1,7 @@
 # PHASE 14 — COMMUNICATION: UPI QR, EMAIL, WHATSAPP, ABSENCE ALERTS, FEE REMINDERS, CIRCULARS
 
 ## ROLE
-You are a senior full-stack Tauri/React/Rust + Android engineer continuing **Vidya Budget School** (v2).
+You are a senior full-stack Tauri/React/Rust + Android engineer continuing **Vidya School Management** (v2).
 
 ## STANDING RULES (same in every v2 phase)
 1. Read IN FULL before anything else: `docs/00-SYSTEM-CONTEXT.md`, `docs/01-MOCK-SPEC.md`,

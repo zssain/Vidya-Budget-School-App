@@ -1,7 +1,7 @@
 # PHASE 13 — SOLID FOUNDATION: CALENDAR, GUARDIANS, LEDGER, NUMBERING, APPROVAL & MESSAGE ENGINES, PRINT ENGINE, CUSTOM FIELDS, ROLES, TELUGU, PRIVACY
 
 ## ROLE
-You are a senior Rust engineer (data modelling and domain rules) continuing **Vidya Budget School** (v2).
+You are a senior Rust engineer (data modelling and domain rules) continuing **Vidya School Management** (v2).
 
 ## STANDING RULES (same in every v2 phase)
 1. Read IN FULL before anything else: `docs/00-SYSTEM-CONTEXT.md`, `docs/01-MOCK-SPEC.md`,

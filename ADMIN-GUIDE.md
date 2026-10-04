@@ -1,4 +1,4 @@
-# Vidya Budget School — Principal's Guide
+# Vidya School Management — Principal's Guide
 
 This guide is for you, the Principal. It explains, in plain words, everything you
 look after: activating the school, keeping the recovery key safe, inviting your

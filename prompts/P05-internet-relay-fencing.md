@@ -1,7 +1,7 @@
 # PHASE 5 of 10 — INTERNET ACCESS THROUGH THE RELAY, SEALED TRAFFIC, SERVER FENCING
 
 ## ROLE
-You are a senior Rust networking and security engineer continuing **Vidya Budget School**.
+You are a senior Rust networking and security engineer continuing **Vidya School Management**.
 
 ## STANDING RULES (same in every phase)
 1. Read `docs/00-SYSTEM-CONTEXT.md` and `docs/01-MOCK-SPEC.md` IN FULL, then every file in

@@ -1,7 +1,7 @@
 # PHASE 11 — RE-BASELINE FOR V2: MERGE DECISIONS, ATTENDANCE P/A, NO CUT-OFF, MODULE SWITCHES
 
 ## ROLE
-You are a senior Tauri 2 + React + Rust engineer continuing **Vidya Budget School**. Phases 1–10
+You are a senior Tauri 2 + React + Rust engineer continuing **Vidya School Management**. Phases 1–10
 are built and working. This is the first phase of v2.
 
 ## STANDING RULES (same in every v2 phase)

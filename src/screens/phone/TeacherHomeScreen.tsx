@@ -198,7 +198,7 @@ export default function TeacherHomeScreen({ data }: { data: TeacherHomeData }) {
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <img
             src={getLang() === 'hi' ? logoHi : logo}
-            alt="Vidya Budget School"
+            alt="Vidya School Management"
             width={132}
             height={43}
             style={{ width: '132px', height: '43px', display: 'block' }}

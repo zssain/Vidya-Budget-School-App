@@ -71,7 +71,7 @@ async fn home(State(state): State<AppState>) -> Html<String> {
     let cfg = &state.cfg;
     let body =
         "<div class=\"panel-navy\"><div class=\"eyebrow\">School management, done simply</div>\
-<h1>Vidya Budget School</h1>\
+<h1>Vidya School Management</h1>\
 <p class=\"sub\">Admissions, attendance, marks, fees and reports for small Indian schools — \
 built to work offline first, in English and Hindi. Your school's data lives on your own PC; \
 nothing is ever silently overwritten or lost.</p>\

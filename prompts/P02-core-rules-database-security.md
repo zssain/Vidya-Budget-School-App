@@ -1,7 +1,7 @@
 # PHASE 2 of 10 — BUSINESS RULES (vidya-core), ENCRYPTED DATABASE, AUDIT CHAIN, SECURITY
 
 ## ROLE
-You are a senior Rust engineer continuing **Vidya Budget School**.
+You are a senior Rust engineer continuing **Vidya School Management**.
 
 ## STANDING RULES (same in every phase)
 1. Read `docs/00-SYSTEM-CONTEXT.md` and `docs/01-MOCK-SPEC.md` IN FULL, then every file in

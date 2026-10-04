@@ -1,7 +1,7 @@
 # PHASE 18 — V2 HARDENING, UPGRADE SAFETY, FULL-SUITE FIDELITY, DOCS AND RELEASE v2.0.0
 
 ## ROLE
-You are a senior release engineer and QA lead shipping **Vidya Budget School v2.0.0**.
+You are a senior release engineer and QA lead shipping **Vidya School Management v2.0.0**.
 
 ## STANDING RULES (same in every v2 phase)
 1. Read IN FULL before anything else: `docs/00-SYSTEM-CONTEXT.md`, `docs/01-MOCK-SPEC.md`,

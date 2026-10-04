@@ -5,7 +5,7 @@ contract in context §10). Never shipped inside the school apps.
 
 ## ROLE
 You are a senior backend + security engineer building the company services for **Vidya
-Budget School**.
+School Management**.
 
 ## STANDING RULES
 1. Read `docs/00-SYSTEM-CONTEXT.md` (esp. §1, §2, §10, §17) and `docs/01-MOCK-SPEC.md`, then

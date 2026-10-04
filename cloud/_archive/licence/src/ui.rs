@@ -123,9 +123,9 @@ pub fn page(cfg: &Config, title: &str, active: &str, body: &str) -> String {
     format!(
         "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">\
 <meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">\
-<title>{title} · Vidya Budget School</title><style>{CSS}</style></head><body>\
+<title>{title} · Vidya School Management</title><style>{CSS}</style></head><body>\
 <header class=\"site\"><div class=\"wrap\">\
-<a href=\"/\"><img class=\"logo\" src=\"/assets/logo-on-light.svg\" alt=\"Vidya Budget School\"></a>\
+<a href=\"/\"><img class=\"logo\" src=\"/assets/logo-on-light.svg\" alt=\"Vidya School Management\"></a>\
 <nav class=\"site\">{home}{pricing}{downloads}{support}{account}</nav></div></header>\
 <main><div class=\"wrap\">{body}</div></main>\
 {footer}</body></html>",
@@ -142,7 +142,7 @@ pub fn page(cfg: &Config, title: &str, active: &str, body: &str) -> String {
 fn footer(cfg: &Config) -> String {
     format!(
         "<footer class=\"site\"><div class=\"wrap\">\
-<div>© {company} · Vidya Budget School</div>\
+<div>© {company} · Vidya School Management</div>\
 <div>Support: {email} · {phone} · <a href=\"{terms}\">Terms</a></div>\
 </div></footer>",
         company = escape(&cfg.company_name),

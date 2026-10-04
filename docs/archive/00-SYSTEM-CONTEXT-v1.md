@@ -1,4 +1,4 @@
-# VIDYA BUDGET SCHOOL — SYSTEM CONTEXT
+# VIDYA SCHOOL MANAGEMENT — SYSTEM CONTEXT
 
 This file is the source of truth for every phase. Every phase prompt tells the agent to read
 it first, in full.

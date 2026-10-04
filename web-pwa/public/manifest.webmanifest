@@ -1,7 +1,7 @@
 {
-  "name": "Vidya Budget School",
+  "name": "Vidya School Management",
   "short_name": "Vidya",
-  "description": "Staff app for Vidya Budget School — attendance, marks, homework & notes, staff check-in, leave and fee collection, offline.",
+  "description": "Staff app for Vidya School Management — attendance, marks, homework & notes, staff check-in, leave and fee collection, offline.",
   "id": "/",
   "start_url": "/",
   "scope": "/",

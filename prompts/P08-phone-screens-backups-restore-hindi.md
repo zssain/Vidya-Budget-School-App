@@ -1,7 +1,7 @@
 # PHASE 8 of 10 — TEACHER PHONE SCREENS, BACKUPS, RESTORE, NEW SESSION, SETTINGS, STORAGE, HINDI
 
 ## ROLE
-You are a senior full-stack Tauri/React/Rust engineer finishing **Vidya Budget School**.
+You are a senior full-stack Tauri/React/Rust engineer finishing **Vidya School Management**.
 
 ## STANDING RULES (same in every phase)
 1. Read `docs/00-SYSTEM-CONTEXT.md` and `docs/01-MOCK-SPEC.md` IN FULL, then every file in

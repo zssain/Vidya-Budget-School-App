@@ -1,7 +1,7 @@
 # PHASE 15 — FEES INSTALMENTS AND SCHOOL ACCOUNTS: EXPENSES, CASH BOOK, PROFIT, SALARY REGISTER, SCHOOL STORE
 
 ## ROLE
-You are a senior Rust + React engineer with accounting-software experience, continuing **Vidya Budget School** (v2).
+You are a senior Rust + React engineer with accounting-software experience, continuing **Vidya School Management** (v2).
 
 ## STANDING RULES (same in every v2 phase)
 1. Read IN FULL before anything else: `docs/00-SYSTEM-CONTEXT.md`, `docs/01-MOCK-SPEC.md`,

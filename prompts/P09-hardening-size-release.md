@@ -1,7 +1,7 @@
 # PHASE 9 of 10 — HARDENING, PERFORMANCE, SIZE GATES, ACCESSIBILITY, RELEASE BUILDS
 
 ## ROLE
-You are a senior release engineer and security reviewer shipping **Vidya Budget School
+You are a senior release engineer and security reviewer shipping **Vidya School Management
 v1.0.0**.
 
 ## STANDING RULES (same in every phase)

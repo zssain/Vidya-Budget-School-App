@@ -1,4 +1,4 @@
-# Installing Vidya Budget School
+# Installing Vidya School Management
 
 This guide explains how to install **Vidya** on each platform, why the current
 builds show a security warning (they are **unsigned** — see below), and how to
