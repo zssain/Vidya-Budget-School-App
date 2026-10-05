@@ -180,6 +180,17 @@ export default function App() {
               }}
             >
               {t((activateErr ?? joinErr)!.message_key, (activateErr ?? joinErr)!.vars as Record<string, string | number>)}
+              {(() => {
+                // Show the raw technical detail (e.g. the exact connection/TLS error)
+                // so a failed join/activation is diagnosable from a screenshot alone —
+                // no cable or logcat needed. Only rendered when the error carries one.
+                const detail = ((activateErr ?? joinErr)!.vars as { detail?: unknown } | null)?.detail
+                return typeof detail === 'string' && detail.length > 0 ? (
+                  <div style={{ marginTop: 6, fontSize: 11, opacity: 0.85, wordBreak: 'break-word', fontFamily: 'monospace' }}>
+                    {detail}
+                  </div>
+                ) : null
+              })()}
             </div>
           )}
           <WelcomeScreen data={welcomeFixture} onActivate={handleActivate} onJoin={handleJoin} />

@@ -110,6 +110,15 @@ pub async fn fetch_join(payload: &JoinPayload, device_name: &str, platform: &str
     let tls = crate::server::cert::client_config(&payload.cert_sha256)?;
     let http = reqwest::Client::builder()
         .use_preconfigured_tls(tls)
+        // The school server is a LAN IP reached directly. Never route the join through a
+        // system/PAC proxy — some Wi-Fi networks (and Android) advertise one, and reqwest
+        // would honour it, breaking a direct LAN connection even though the network itself
+        // is reachable (ping/TCP succeed). This is the classic "same Wi-Fi but can't
+        // connect" cause on mobile.
+        .no_proxy()
+        // Fail fast with a clear error instead of hanging on a weak Wi-Fi link.
+        .connect_timeout(std::time::Duration::from_secs(10))
+        .timeout(std::time::Duration::from_secs(30))
         .build()
         .map_err(|e| e.to_string())?;
 
