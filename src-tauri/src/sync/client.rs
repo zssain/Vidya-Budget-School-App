@@ -125,12 +125,22 @@ pub async fn fetch_join(payload: &JoinPayload, device_name: &str, platform: &str
     let mut last_err = "no server address in the invitation".to_string();
     for addr in &payload.lan_addrs {
         let url = format!("https://{addr}:{}/v1/join", payload.port);
+        // eprintln → stderr → Android logcat (tag RustStdoutStderr), the one reliable
+        // channel for reading a join failure off a device (console.error does not reach
+        // a release WebView's logcat, and screencap can't capture the WebView surface).
+        eprintln!("[vidya-join] POST {url}");
         match http.post(&url).json(&req).send().await {
-            Ok(r) if r.status().is_success() => return r.json::<JoinResp>().await.map_err(|e| e.to_string()),
-            Ok(r) => last_err = format!("server rejected the join at {url} (HTTP {})", r.status()),
-            // Include the FULL error source chain so a device log shows the ROOT cause
+            Ok(r) if r.status().is_success() => {
+                eprintln!("[vidya-join] OK {url}");
+                return r.json::<JoinResp>().await.map_err(|e| e.to_string());
+            }
+            Ok(r) => {
+                last_err = format!("server rejected the join at {url} (HTTP {})", r.status());
+                eprintln!("[vidya-join] {last_err}");
+            }
+            // Include the FULL error source chain so the log shows the ROOT cause
             // (connection refused / TLS handshake / timed out), not just reqwest's terse
-            // summary. This is what surfaces in `adb logcat` on a failed join.
+            // summary.
             Err(e) => {
                 let mut msg = format!("{url}: {e}");
                 let mut src = std::error::Error::source(&e);
@@ -140,9 +150,11 @@ pub async fn fetch_join(payload: &JoinPayload, device_name: &str, platform: &str
                     src = s.source();
                 }
                 last_err = msg;
+                eprintln!("[vidya-join] ERR {last_err}");
             }
         }
     }
+    eprintln!("[vidya-join] FAILED (all addresses): {last_err}");
     Err(last_err)
 }
 

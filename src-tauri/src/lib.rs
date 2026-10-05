@@ -130,6 +130,13 @@ fn build_ctx(data_dir: std::path::PathBuf) -> RtCtx {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // Install the ring crypto provider as the process-wide rustls default. Our TLS
+    // configs already build with ring explicitly, but reqwest's rustls-tls path (and
+    // any other rustls user) can reach for the process default; installing it once at
+    // startup avoids a "no process-level CryptoProvider available" failure on a
+    // platform where none is otherwise present. Idempotent — ignore "already set".
+    let _ = rustls::crypto::ring::default_provider().install_default();
+
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
