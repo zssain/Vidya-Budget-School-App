@@ -151,7 +151,24 @@ export default function App() {
       return (
         <>
           {(activateErr || joinErr) && (
-            <div style={{ position: 'fixed', top: 0, left: 0, right: 0, zIndex: 10, background: 'var(--pill-unpaid-bg)', color: 'var(--pill-unpaid-fg)', textAlign: 'center', padding: '10px 16px', fontSize: 13 }}>
+            <div
+              role="alert"
+              style={{
+                position: 'fixed',
+                top: 'calc(env(safe-area-inset-top) + 10px)',
+                left: 12,
+                right: 12,
+                zIndex: 10,
+                background: 'var(--pill-unpaid-bg)',
+                color: 'var(--pill-unpaid-fg)',
+                textAlign: 'center',
+                padding: '12px 16px',
+                fontSize: 13,
+                lineHeight: 1.45,
+                borderRadius: 12,
+                boxShadow: '0 6px 20px rgba(11,26,51,0.20)',
+              }}
+            >
               {t((activateErr ?? joinErr)!.message_key, (activateErr ?? joinErr)!.vars as Record<string, string | number>)}
             </div>
           )}
