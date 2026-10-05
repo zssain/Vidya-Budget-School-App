@@ -108,6 +108,31 @@ impl HttpsTransport {
         format!("{}{}", self.base_url.trim_end_matches('/'), path)
     }
 
+    /// Fetch the join **bootstrap snapshot**: the school's setup data (school, session,
+    /// terms, classes, staff, timetable, the teacher's students…) that was created with
+    /// direct writes and is NOT in the op log, so a joined client cannot get it from a
+    /// normal pull. Returns the role-scoped canonical rows (NDJSON on the wire). Called
+    /// once right after join (and as a self-heal when the local school row is missing).
+    pub async fn snapshot(&self) -> Result<Vec<Change>, TransportError> {
+        let resp = self
+            .client
+            .post(self.url("/v1/sync/snapshot"))
+            .bearer_auth(&self.token)
+            .send()
+            .await
+            .map_err(|_| TransportError::Unreachable)?;
+        if let Some(e) = Self::map_status(resp.status().as_u16()) {
+            return Err(e);
+        }
+        let body = resp.text().await.map_err(|e| TransportError::Other(e.to_string()))?;
+        let changes = body
+            .lines()
+            .filter(|l| !l.trim().is_empty())
+            .filter_map(|l| serde_json::from_str::<Change>(l).ok())
+            .collect();
+        Ok(changes)
+    }
+
     fn map_status(status: u16) -> Option<TransportError> {
         match status {
             200 => None,

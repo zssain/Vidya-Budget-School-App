@@ -24,8 +24,10 @@ pub const FEE_TABLES: &[&str] =
 /// Tables an accountant device must never receive (attendance/marks).
 pub const MARK_TABLES: &[&str] = &["attendance_sheet", "attendance_mark", "marks_sheet", "mark_entry"];
 
-/// Columns of `staff` a non-Principal device may see (names only, no secrets).
-const STAFF_PUBLIC: &[&str] = &["id", "name", "role", "state"];
+/// Columns of `staff` a non-Principal device may see (names only, no secrets). Includes the
+/// structural NOT-NULL bookkeeping columns (created_at/updated_at) so a joined device can
+/// INSERT these rows during its first-join bootstrap; still strips pin_hash, mobile, email.
+const STAFF_PUBLIC: &[&str] = &["id", "name", "role", "state", "created_at", "updated_at"];
 
 /// Columns of `guardian` a teacher device may see (name + mobile of their
 /// students; not email, §8.2). Principal + accountant see the full row.

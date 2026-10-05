@@ -68,6 +68,10 @@ fn build_ctx(data_dir: std::path::PathBuf) -> RtCtx {
     // Phase B: a device that has joined a school runs as a Client; otherwise it is the
     // single-PC Server. Decided here from the persisted client identity.
     let mut device_mode = DeviceMode::Server;
+    // A joined client auto-signs-in as the staff it joined as (the device holds the join
+    // token; there is no local PIN). Seeding the session here makes `require_session` work
+    // for its commands and lets `state::compute` report Unlocked. Stays None on the server.
+    let mut client_session: Option<crate::state::SessionStaff> = None;
     let (db, key_missing) = match security::keys::ensure_key(key_store.as_ref(), db_exists) {
         Ok(key) => {
             let hex = security::keys::to_hex(&key);
@@ -86,8 +90,13 @@ fn build_ctx(data_dir: std::path::PathBuf) -> RtCtx {
                         if let Err(e) = roles::seed_role_permissions(&mut conn) {
                             tracing::warn!("role permission seed: {e}");
                         }
-                        if crate::sync::client::is_client(&conn) {
+                        if let Some(cid) = crate::sync::client::load(&conn) {
                             device_mode = DeviceMode::Client;
+                            client_session = Some(crate::state::SessionStaff {
+                                id: cid.staff_id,
+                                name: cid.staff_name,
+                                role: cid.staff_role,
+                            });
                         }
                         (Some(conn), false)
                     }
@@ -111,7 +120,7 @@ fn build_ctx(data_dir: std::path::PathBuf) -> RtCtx {
 
     RtCtx {
         db: Mutex::new(db),
-        session: Mutex::new(None),
+        session: Mutex::new(client_session),
         machine_id,
         device_id: Mutex::new(None),
         device_mode,

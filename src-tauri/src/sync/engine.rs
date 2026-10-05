@@ -121,6 +121,24 @@ fn upsert_canonical(conn: &Connection, table: &str, payload: &serde_json::Value)
     Ok(())
 }
 
+/// Apply a join **bootstrap snapshot** (canonical rows from `/v1/sync/snapshot`) into the
+/// client DB, reusing the same upsert path as pull. Used once right after join so a joined
+/// device has the school's setup data (school/session/classes/staff/…) that was never
+/// op-logged. Returns the number of rows applied.
+pub fn apply_snapshot(conn: &Connection, changes: &[crate::sync::protocol::Change]) -> rusqlite::Result<usize> {
+    let mut n = 0;
+    for ch in changes {
+        // A snapshot row can be partial — privacy-filtered staff/guardian rows carry only
+        // their public columns, which can violate NOT NULL on a fresh INSERT. Apply each row
+        // independently and skip the ones that don't fit, so one row never aborts the whole
+        // bootstrap and the essential data (school/classes/students/timetable/…) always lands.
+        if upsert_canonical(conn, &ch.table, &ch.payload).is_ok() {
+            n += 1;
+        }
+    }
+    Ok(n)
+}
+
 fn apply_pull(conn: &Connection, pull: &PullResp) -> rusqlite::Result<usize> {
     for ch in &pull.changes {
         upsert_canonical(conn, &ch.table, &ch.payload)?;

@@ -1724,9 +1724,18 @@ pub async fn join_school(app: tauri::AppHandle, state: State<'_, RtCtx>, invite:
     let resp = crate::sync::client::fetch_join(&payload, &name, platform)
         .await
         .map_err(|e| crate::error::CmdError::new("JOIN_FAILED", "error.JOIN_FAILED", serde_json::json!({ "detail": e })))?;
+    // Pull the bootstrap snapshot over the SAME pinned transport while we hold no DB handle
+    // (keeps this future `Send`, as a Tauri async command requires). The school's setup data
+    // (school/session/classes/staff/timetable/…) is NOT op-logged, so without this a joined
+    // device has no data and falls back to the welcome screen. Best-effort: a failure here is
+    // non-fatal — the client sync loop re-attempts the snapshot when the school row is missing.
+    let bootstrap = crate::sync::client::fetch_bootstrap(&resp.device_token, &payload.lan_addrs, payload.port, &payload.cert_sha256)
+        .await
+        .unwrap_or_default();
     let conn = crate::db::open_encrypted(&db_path, &key_hex).map_err(|e| crate::error::CmdError::internal(e.to_string()))?;
     crate::sync::client::apply_join_response(&conn, &resp, &payload.cert_sha256, &payload.lan_addrs, payload.port)
         .map_err(|e| crate::error::CmdError::internal(e.to_string()))?;
+    crate::sync::client::apply_bootstrap(&conn, &bootstrap).map_err(|e| crate::error::CmdError::internal(e.to_string()))?;
     drop(conn);
 
     // Desktop/Windows/macOS relaunch cleanly into Client mode. On Android,

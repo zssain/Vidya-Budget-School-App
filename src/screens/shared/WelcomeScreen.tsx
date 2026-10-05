@@ -304,7 +304,6 @@ export default function WelcomeScreen({
                   gap: 8,
                 }}
               >
-                <Icon name="help" size={16} strokeWidth={1.75} />
                 {t('welcome.field.scanQr')}
               </button>
             )}

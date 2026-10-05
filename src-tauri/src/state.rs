@@ -91,6 +91,23 @@ pub fn compute(conn: &Connection, session: Option<SessionStaff>) -> rusqlite::Re
     let lic_status = licence_status(conn)?;
     let has_school = school_exists(conn)?;
 
+    // A joined CLIENT device (it stored a client identity at join). It never ran the setup
+    // wizard and has no principal/PIN of its own — it runs as the staff it joined as. Once
+    // the join bootstrap snapshot has populated the school data it goes straight to its home;
+    // until then it shows the locked/loading state while the sync loop fetches the snapshot.
+    // (Auto-unlocked: the device is authenticated by its join token and the OS lock screen
+    // guards the phone; a per-teacher PIN can be layered on later.) This branch never fires
+    // on the school server, which has no client identity.
+    if let Some(cid) = crate::sync::client::load(conn) {
+        // Always signed in as the joined staff — the device is authenticated by its join
+        // token, so there is no PIN gate (which would be a dead end here: a client has no
+        // local principal/PIN). Right after join the bootstrap snapshot has populated the
+        // school data; in the rare case it has not landed yet, the home shows empty and the
+        // 15s sync loop self-heals. A per-teacher PIN lock can be layered on later.
+        let staff = session.unwrap_or(SessionStaff { id: cid.staff_id, name: cid.staff_name, role: cid.staff_role });
+        return Ok(AppStateResponse { state: AppState::Unlocked { staff }, licence_status: lic_status });
+    }
+
     // Off-path states take precedence once a school exists.
     if has_school {
         if lic_status.as_deref() == Some("moved") {

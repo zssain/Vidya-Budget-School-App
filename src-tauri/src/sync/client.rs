@@ -173,6 +173,41 @@ pub async fn join_school(
     load(conn).ok_or_else(|| "identity not stored".to_string())
 }
 
+/// Fetch the join **bootstrap snapshot** over the pinned LAN transport (no DB handle → the
+/// future is `Send`, as a Tauri async command requires). Tries each advertised address and
+/// returns the server's role-scoped canonical rows (the school/session/classes/staff/… that
+/// setup created directly and never op-logged). Apply with [`apply_bootstrap`].
+pub async fn fetch_bootstrap(
+    token: &str,
+    addrs: &[String],
+    port: u16,
+    fingerprint: &str,
+) -> Result<Vec<crate::sync::protocol::Change>, String> {
+    use crate::sync::transport::HttpsTransport;
+    let mut last_err = "no server address in the invitation".to_string();
+    for addr in addrs {
+        let base = format!("https://{addr}:{port}");
+        match HttpsTransport::new(&base, token.to_string(), fingerprint) {
+            Ok(t) => match t.snapshot().await {
+                Ok(changes) => return Ok(changes),
+                Err(e) => last_err = format!("{e:?}"),
+            },
+            Err(e) => last_err = e,
+        }
+    }
+    Err(last_err)
+}
+
+/// Apply a fetched bootstrap snapshot into this client's DB.
+pub fn apply_bootstrap(conn: &Connection, changes: &[crate::sync::protocol::Change]) -> rusqlite::Result<usize> {
+    crate::sync::engine::apply_snapshot(conn, changes)
+}
+
+/// True once the local DB holds the school row (i.e. the bootstrap snapshot landed).
+fn has_local_school(conn: &Connection) -> bool {
+    conn.query_row("SELECT 1 FROM school LIMIT 1", [], |_| Ok(())).is_ok()
+}
+
 /// Run one sync cycle as a client: build the LAN route(s) from the stored identity and
 /// sync over the pinned TLS transport. Returns the route label that worked (e.g. "On
 /// school Wi-Fi"). Used by the background sync loop (B3) and a manual "Sync now".
@@ -182,6 +217,15 @@ pub async fn client_sync_tick(conn: &mut Connection) -> Result<String, String> {
     use crate::sync::engine::{sync_once_routed, Route};
     use crate::sync::transport::HttpsTransport;
     let id = load(conn).ok_or("this device has not joined a school")?;
+
+    // Self-heal the bootstrap: if the join-time snapshot never landed (e.g. the device was
+    // briefly offline right after join), the local school row is missing and every screen
+    // would be empty. Fetch + apply the snapshot now before the normal op sync.
+    if !has_local_school(conn) {
+        if let Ok(changes) = fetch_bootstrap(&id.device_token, &id.server_addrs, id.server_port, &id.server_fingerprint).await {
+            let _ = apply_bootstrap(conn, &changes);
+        }
+    }
 
     // Candidate (addr, port) targets: the mDNS-discovered CURRENT address first (so
     // sync survives the server's LAN IP/port changing on DHCP/reboot), then the
