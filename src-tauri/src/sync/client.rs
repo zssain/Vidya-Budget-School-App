@@ -118,8 +118,20 @@ pub async fn fetch_join(payload: &JoinPayload, device_name: &str, platform: &str
         let url = format!("https://{addr}:{}/v1/join", payload.port);
         match http.post(&url).json(&req).send().await {
             Ok(r) if r.status().is_success() => return r.json::<JoinResp>().await.map_err(|e| e.to_string()),
-            Ok(r) => last_err = format!("server rejected the join (HTTP {})", r.status()),
-            Err(e) => last_err = e.to_string(),
+            Ok(r) => last_err = format!("server rejected the join at {url} (HTTP {})", r.status()),
+            // Include the FULL error source chain so a device log shows the ROOT cause
+            // (connection refused / TLS handshake / timed out), not just reqwest's terse
+            // summary. This is what surfaces in `adb logcat` on a failed join.
+            Err(e) => {
+                let mut msg = format!("{url}: {e}");
+                let mut src = std::error::Error::source(&e);
+                while let Some(s) = src {
+                    msg.push_str(" | ");
+                    msg.push_str(&s.to_string());
+                    src = s.source();
+                }
+                last_err = msg;
+            }
         }
     }
     Err(last_err)
