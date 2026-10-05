@@ -41,6 +41,7 @@ export default function WelcomeScreen({
 }) {
   const [mode, setMode] = useState<Mode>(initial ?? 'setup')
   const [code, setCode] = useState('')
+  const [invite, setInvite] = useState('') // the join invitation link/code (separate from the setup activation code)
 
   const isSetup = mode === 'setup'
   const isJoin = mode === 'join'
@@ -55,9 +56,10 @@ export default function WelcomeScreen({
         flexShrink: isPhone ? undefined : 0,
         flexGrow: isPhone ? 1 : undefined,
         background: '#F6F8F7',
-        borderRadius: '22px',
-        boxShadow: '0 1px 2px rgba(11,26,51,0.06)',
-        padding: '36px 56px',
+        borderRadius: isPhone ? '0' : '22px',
+        boxShadow: isPhone ? 'none' : '0 1px 2px rgba(11,26,51,0.06)',
+        padding: isPhone ? '24px 20px' : '36px 56px',
+        overflowY: isPhone ? 'auto' : undefined,
         boxSizing: 'border-box',
         display: 'flex',
         flexDirection: 'column',
@@ -253,6 +255,11 @@ export default function WelcomeScreen({
             </label>
             <input
               id="inv"
+              value={invite}
+              onChange={(e) => setInvite(e.target.value)}
+              autoCapitalize="off"
+              autoCorrect="off"
+              spellCheck={false}
               placeholder={t('welcome.field.invPlaceholder')}
               style={{
                 height: '48px',
@@ -292,8 +299,8 @@ export default function WelcomeScreen({
         <button
           type="button"
           onClick={() => {
-            if (isSetup && onActivate) onActivate(code)
-            else if (isJoin && onJoin) onJoin(code)
+            if (isSetup && onActivate) onActivate(code.trim())
+            else if (isJoin && onJoin) onJoin(invite.trim())
             else if (isRecover) navigate('/recover')
           }}
           style={{
