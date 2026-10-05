@@ -91,6 +91,7 @@ export default function App() {
   useLang() // re-render the whole tree when the language changes (Settings)
   const [activateErr, setActivateErr] = useState<CmdError | null>(null)
   const [joinErr, setJoinErr] = useState<CmdError | null>(null)
+  const [joinedNeedsReopen, setJoinedNeedsReopen] = useState(false)
 
   // Guarded by import.meta.env.DEV so the route strings are dead-code-eliminated
   // from release bundles (prompts/P09 §2 — no dev routes in shipped artifacts).
@@ -123,6 +124,10 @@ export default function App() {
     return <StatusScreen messageKey="app.name" />
   }
 
+  // Android: a successful join cannot auto-relaunch the process, so ask the user to
+  // reopen Vidya — the next launch boots into the joined school as a Client.
+  if (joinedNeedsReopen) return <StatusScreen messageKey="welcome.joinedReopen" />
+
   const route = routeForState(store.app.state)
 
   // v2 (Phase 12): the field carries the offline licence key (or loaded .vlic text).
@@ -134,11 +139,16 @@ export default function App() {
       .catch((e) => setActivateErr(e as CmdError))
   }
 
-  // Join a school as a client from an invitation link. On success the backend
-  // restarts the app into Client mode; only an error returns here.
+  // Join a school as a client from an invitation link. On desktop the backend
+  // restarts the app into Client mode (this promise never resolves there). On
+  // Android the process cannot self-relaunch, so the backend returns success and we
+  // ask the user to reopen Vidya — the next launch comes up in the joined school.
   const handleJoin = (invite: string) => {
     setJoinErr(null)
-    api.join_school(invite, '').catch((e) => setJoinErr(e as CmdError))
+    api
+      .join_school(invite, '')
+      .then(() => setJoinedNeedsReopen(true))
+      .catch((e) => setJoinErr(e as CmdError))
   }
 
   switch (route.screen) {

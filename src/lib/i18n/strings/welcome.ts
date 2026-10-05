@@ -38,6 +38,8 @@ const en: Record<string, string> = {
   'welcome.cta.setup': 'Activate and continue',
   'welcome.cta.join': 'Join school',
   'welcome.cta.recover': 'Start recovery',
+  // Shown on Android after a successful join (the app can't relaunch itself).
+  'welcome.joinedReopen': 'You have joined the school. Please close Vidya and open it again to finish signing in.',
   // Sign-in row
   'welcome.signin.prompt': 'Already set up on this device? ',
   'welcome.signin.link': 'Sign in',
@@ -85,6 +87,7 @@ const hi: Record<string, string> = {
   'welcome.cta.setup': 'एक्टिवेट करें और जारी रखें',
   'welcome.cta.join': 'स्कूल में शामिल हों',
   'welcome.cta.recover': 'पुनर्प्राप्ति शुरू करें',
+  'welcome.joinedReopen': 'आप स्कूल से जुड़ गए हैं। साइन-इन पूरा करने के लिए कृपया Vidya को बंद करके दोबारा खोलें।',
   'welcome.signin.prompt': 'इस डिवाइस पर पहले से सेट है? ',
   'welcome.signin.link': 'साइन इन करें',
   'welcome.footer.copyright': '© 2026 Zuhair Hussain',

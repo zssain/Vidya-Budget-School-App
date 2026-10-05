@@ -1729,6 +1729,14 @@ pub async fn join_school(app: tauri::AppHandle, state: State<'_, RtCtx>, invite:
         .map_err(|e| crate::error::CmdError::internal(e.to_string()))?;
     drop(conn);
 
+    // Desktop/Windows/macOS relaunch cleanly into Client mode. On Android,
+    // `app.restart()` exits the process WITHOUT relaunching (the app vanishes to the
+    // home screen — it looks like a crash), so we DON'T call it there: we return
+    // success and the UI asks the user to reopen Vidya. The next launch reads the
+    // persisted client identity (`is_client`) and boots as a Client.
+    #[cfg(target_os = "android")]
+    let _ = &app;
+    #[cfg(not(target_os = "android"))]
     app.restart();
     #[allow(unreachable_code)]
     Ok(())
