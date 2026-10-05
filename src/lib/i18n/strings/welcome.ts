@@ -29,6 +29,7 @@ const en: Record<string, string> = {
   'welcome.field.invLabel': 'Invitation link',
   'welcome.field.invPlaceholder': 'Paste the link your Principal sent',
   'welcome.field.invHint': 'Paste the full link from the Principal — it starts with vidya://join.',
+  'welcome.field.scanQr': 'Scan QR code',
   // Recover note
   'welcome.recover.title': 'Owner verification needed',
   'welcome.recover.body':
@@ -77,6 +78,7 @@ const hi: Record<string, string> = {
   'welcome.field.invLabel': 'आमंत्रण लिंक',
   'welcome.field.invPlaceholder': 'प्रधानाचार्य द्वारा भेजा गया लिंक पेस्ट करें',
   'welcome.field.invHint': 'प्रधानाचार्य से मिला पूरा लिंक पेस्ट करें — यह vidya://join से शुरू होता है।',
+  'welcome.field.scanQr': 'QR कोड स्कैन करें',
   'welcome.recover.title': 'मालिक का सत्यापन आवश्यक',
   'welcome.recover.body':
     'कुछ भी पुनर्स्थापित करने से पहले हम स्कूल के लाइसेंस की पुष्टि करेंगे और आपका बैकअप जाँचेंगे।',

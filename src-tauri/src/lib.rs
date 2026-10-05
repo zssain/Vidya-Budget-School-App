@@ -135,6 +135,11 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_deep_link::init())
         .setup(|app| {
+            // Android-only: the QR/barcode scanner (join-by-QR). Registered at runtime so
+            // the desktop build never links the mobile-only plugin.
+            #[cfg(target_os = "android")]
+            app.handle().plugin(tauri_plugin_barcode_scanner::init())?;
+
             let data_dir = app
                 .path()
                 .app_data_dir()

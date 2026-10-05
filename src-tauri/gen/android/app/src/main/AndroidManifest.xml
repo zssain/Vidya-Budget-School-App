@@ -1,15 +1,18 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <!-- Exactly the permissions Vidya needs: internet + LAN reachability + mDNS
-         multicast for school-server discovery. No CAMERA (the QR scanner was
-         deferred; invites open by link/8-char code). (prompts/P09 §2.) -->
+         multicast for school-server discovery. CAMERA is used only to scan the
+         invite QR when joining (optional feature). (prompts/P09 §2.) -->
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     <uses-permission android:name="android.permission.CHANGE_WIFI_MULTICAST_STATE" />
+    <uses-permission android:name="android.permission.CAMERA" />
 
     <!-- AndroidTV support -->
     <uses-feature android:name="android.software.leanback" android:required="false" />
+    <!-- Camera is optional (QR scan) — don't exclude non-camera devices. -->
+    <uses-feature android:name="android.hardware.camera" android:required="false" />
 
     <application
         android:icon="@mipmap/ic_launcher"

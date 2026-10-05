@@ -1,0 +1,13 @@
+{
+  "$schema": "../gen/schemas/android-schema.json",
+  "identifier": "mobile",
+  "description": "Android-only: the QR/barcode scanner used to join a school by scanning the Principal's invite QR. Ignored on desktop (platforms filter).",
+  "platforms": ["android"],
+  "windows": ["main"],
+  "permissions": [
+    "barcode-scanner:allow-scan",
+    "barcode-scanner:allow-cancel",
+    "barcode-scanner:allow-check-permissions",
+    "barcode-scanner:allow-request-permissions"
+  ]
+}

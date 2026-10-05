@@ -12,7 +12,8 @@ import { useState } from 'react'
 import { Icon } from '@/components/Icon'
 import { t, getLang } from '@/lib/i18n'
 import { navigate } from '@/lib/router'
-import { isPhone } from '@/lib/platform'
+import { isPhone, platform } from '@/lib/platform'
+import { scanInviteQr } from '@/lib/mobileDrive'
 import wordmark from '@/assets/vidya-horizontal-on-light.svg'
 import wordmarkHi from '@/assets/vidya-horizontal-hindi-on-light.svg'
 import doorMark from '@/assets/dwaar-mark-on-dark.svg'
@@ -275,6 +276,38 @@ export default function WelcomeScreen({
               }}
             />
             <span style={{ fontSize: '12px', color: '#56657A' }}>{t('welcome.field.invHint')}</span>
+            {platform === 'android' && (
+              <button
+                type="button"
+                onClick={() => {
+                  scanInviteQr()
+                    .then((link) => {
+                      if (link) {
+                        setInvite(link)
+                        onJoin?.(link.trim())
+                      }
+                    })
+                    .catch(() => undefined)
+                }}
+                style={{
+                  marginTop: 4,
+                  height: 44,
+                  borderRadius: 6,
+                  border: '1.5px solid var(--accent)',
+                  background: '#FFFFFF',
+                  color: 'var(--accent)',
+                  fontSize: 14,
+                  fontWeight: 500,
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: 8,
+                }}
+              >
+                <Icon name="help" size={16} strokeWidth={1.75} />
+                {t('welcome.field.scanQr')}
+              </button>
+            )}
           </div>
         ) : null}
         {isRecover ? (

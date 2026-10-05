@@ -111,3 +111,7 @@ keyring = { version = "3", default-features = false, features = [
   "apple-native",
   "windows-native",
 ] }
+
+# --- Android-only: QR/barcode scanner for joining by QR (§13 allow-listed) ---
+[target.'cfg(target_os = "android")'.dependencies]
+tauri-plugin-barcode-scanner = "2"

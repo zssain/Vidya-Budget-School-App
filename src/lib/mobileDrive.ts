@@ -18,6 +18,19 @@ export async function connectDriveMobile(): Promise<void> {
   await openUrl(url)
 }
 
+/** Android: scan the Principal's invite QR. Returns the scanned text (a vidya://join
+ *  link) or null if cancelled. Tauri mobile only (the camera plugin). */
+export async function scanInviteQr(): Promise<string | null> {
+  const { scan, Format, requestPermissions, checkPermissions } = await import('@tauri-apps/plugin-barcode-scanner')
+  const perm = await checkPermissions()
+  if (perm !== 'granted') {
+    const asked = await requestPermissions()
+    if (asked !== 'granted') throw new Error('CAMERA_DENIED')
+  }
+  const res = await scan({ windowed: false, formats: [Format.QRCode] })
+  return res?.content ?? null
+}
+
 let registered = false
 /** Register the OAuth deep-link callback once (Tauri app only — never the PWA). When
  *  Google redirects back to the app's custom scheme, hand the URL to drive_exchange. */
