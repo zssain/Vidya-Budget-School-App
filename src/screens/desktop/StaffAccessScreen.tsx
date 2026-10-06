@@ -158,11 +158,17 @@ export default function StaffAccessScreen() {
       {/* Invite result (code + link + QR) */}
       {invite && (
         <div role="dialog" style={{ position: 'fixed', inset: 0, background: 'rgba(11,26,51,0.45)', display: 'grid', placeItems: 'center', zIndex: 20 }} onClick={() => setInvite(null)}>
-          <div style={{ ...CARD, padding: 24, width: 380, textAlign: 'center' }} onClick={(e) => e.stopPropagation()}>
+          <div style={{ ...CARD, padding: 24, width: 380, textAlign: 'center', maxHeight: '90vh', overflowY: 'auto' }} onClick={(e) => e.stopPropagation()}>
             <div style={{ fontSize: 11, fontWeight: 600, letterSpacing: '0.14em', textTransform: 'uppercase', color: 'var(--accent)' }}>{t('sa.inviteCode')}</div>
             <div style={{ fontFamily: 'monospace', fontSize: 26, letterSpacing: '0.1em', margin: '8px 0 16px' }}>{invite.code}</div>
             <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 12 }} dangerouslySetInnerHTML={{ __html: invite.qr_svg }} />
             <div style={{ fontSize: 12, color: 'var(--muted)', wordBreak: 'break-all', marginBottom: 8 }}>{invite.link}</div>
+
+            <div style={{ marginTop: 14, paddingTop: 14, borderTop: '1px solid var(--line-strong)', fontSize: 11, fontWeight: 600, letterSpacing: '0.14em', textTransform: 'uppercase', color: 'var(--accent)' }}>{t('sa.webInvite')}</div>
+            <div style={{ fontSize: 12, color: 'var(--muted)', margin: '6px 0 10px' }}>{t('sa.webInviteHint')}</div>
+            <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 10 }} dangerouslySetInnerHTML={{ __html: invite.web_qr_svg }} />
+            <div style={{ fontSize: 12, color: 'var(--muted)', wordBreak: 'break-all', marginBottom: 8 }}>{invite.web_link}</div>
+
             <div style={{ fontSize: 12, color: 'var(--muted)' }}>{t('sa.fingerprint')}: {invite.short_fingerprint || '—'}</div>
             <div style={{ marginTop: 16, display: 'flex', gap: 10, justifyContent: 'center' }}>
               <button onClick={() => { guard(api.revoke_invite(invite.staff_id)); setInvite(null) }} style={btn('transparent', 'var(--danger)')}>{t('sa.revokeInvite')}</button>

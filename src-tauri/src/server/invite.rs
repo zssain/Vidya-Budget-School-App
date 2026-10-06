@@ -11,12 +11,39 @@ const SCHEME_PREFIX: &str = "vidya://join?d=";
 /// Deep-link payload hard cap (§5).
 const MAX_LINK_BYTES: usize = 2048;
 
+/// The deployed PWA origin (no trailing slash) that staff open on an iPhone to join
+/// the school as an installable web app: Safari → Add to Home Screen, then the join
+/// finishes through Drive (the browser can't reach the LAN server). Change this one
+/// constant when the PWA URL changes — or point a stable custom domain at the same
+/// host — and add the new origin to the Web OAuth client's Authorized JavaScript
+/// origins (docs/DEPLOY-PWA.md §1).
+const PWA_BASE_URL: &str = "https://vidyaschoolmanagement-1d29vhmfi-zssains-projects.vercel.app";
+
 /// Build the `vidya://join?d=…` deep link for an invite payload.
 pub fn build_join_link(payload: &JoinPayload) -> Result<String, String> {
     let json = serde_json::to_vec(payload).map_err(|e| e.to_string())?;
     let link = format!("{SCHEME_PREFIX}{}", URL_SAFE_NO_PAD.encode(&json));
     if link.len() > MAX_LINK_BYTES {
         return Err(format!("join link too large ({} > {MAX_LINK_BYTES} bytes)", link.len()));
+    }
+    Ok(link)
+}
+
+/// Build the PWA web-invite URL `https://<pwa>/#d=<base64url JSON>`. Unlike the native
+/// `vidya://` link (parsed by the Android/desktop apps), the PWA reads a **minimal**
+/// payload — `{invite_code, school_name, school_id}` — carried in the URL **fragment**
+/// so the static host never receives it. The field is `invite_code` (not `code`) and
+/// no LAN facts are included, because the browser joins through Drive, not the LAN.
+pub fn build_web_join_link(payload: &JoinPayload) -> Result<String, String> {
+    let json = serde_json::to_vec(&serde_json::json!({
+        "invite_code": payload.code,
+        "school_name": payload.school_name,
+        "school_id": payload.school_id,
+    }))
+    .map_err(|e| e.to_string())?;
+    let link = format!("{PWA_BASE_URL}/#d={}", URL_SAFE_NO_PAD.encode(&json));
+    if link.len() > MAX_LINK_BYTES {
+        return Err(format!("web join link too large ({} > {MAX_LINK_BYTES} bytes)", link.len()));
     }
     Ok(link)
 }
@@ -71,6 +98,22 @@ mod tests {
         assert!(link.len() <= MAX_LINK_BYTES);
         let back = parse_join_link(&link).unwrap();
         assert_eq!(back, payload());
+    }
+
+    #[test]
+    fn web_join_link_carries_invite_code_in_fragment() {
+        let link = build_web_join_link(&payload()).unwrap();
+        assert!(link.starts_with(PWA_BASE_URL));
+        let d = link.split("/#d=").nth(1).expect("has #d= fragment");
+        let json = URL_SAFE_NO_PAD.decode(d.as_bytes()).unwrap();
+        let v: serde_json::Value = serde_json::from_slice(&json).unwrap();
+        // The PWA requires exactly these three keys (field is invite_code, not code).
+        assert_eq!(v["invite_code"], "VIDYA123");
+        assert_eq!(v["school_name"], "Saraswati Public School");
+        assert_eq!(v["school_id"], "sch-demo");
+        // Minimal payload — no LAN facts leak into the browser link.
+        assert!(v.get("lan_addrs").is_none());
+        assert!(v.get("cert_sha256").is_none());
     }
 
     #[test]

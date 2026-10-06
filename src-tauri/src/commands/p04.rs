@@ -130,6 +130,10 @@ pub struct InviteDto {
     pub code: String,
     pub link: String,
     pub qr_svg: String,
+    /// PWA web-invite URL (`https://<pwa>/#d=…`) for iPhone/web staff; the native
+    /// `link`/`qr_svg` above are the `vidya://` deep link for the Android app.
+    pub web_link: String,
+    pub web_qr_svg: String,
     pub short_fingerprint: String,
     pub expires_at: String,
 }
@@ -162,11 +166,13 @@ pub fn create_invite_logic(conn: &mut Connection, actor: &SessionStaff, staff_id
     };
     let link = crate::server::invite::build_join_link(&payload).map_err(CmdError::internal)?;
     let qr_svg = crate::server::invite::qr_svg(&link).map_err(CmdError::internal)?;
+    let web_link = crate::server::invite::build_web_join_link(&payload).map_err(CmdError::internal)?;
+    let web_qr_svg = crate::server::invite::qr_svg(&web_link).map_err(CmdError::internal)?;
     let expires_at: String = conn
         .query_row("SELECT expires_at FROM invite WHERE code_hash=?1", params![sha256_hex(code.as_bytes())], |r| r.get(0))
         .optional()?
         .unwrap_or_default();
-    Ok(InviteDto { staff_id: staff_id.to_string(), code, link, qr_svg, short_fingerprint: crate::server::invite::short_fingerprint(&fp), expires_at })
+    Ok(InviteDto { staff_id: staff_id.to_string(), code, link, qr_svg, web_link, web_qr_svg, short_fingerprint: crate::server::invite::short_fingerprint(&fp), expires_at })
 }
 
 pub fn revoke_invite_logic(conn: &mut Connection, actor: &SessionStaff, staff_id: &str) -> CmdResult<()> {

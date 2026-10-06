@@ -1696,6 +1696,8 @@ export interface InviteDto {
   code: string
   link: string
   qr_svg: string
+  web_link: string
+  web_qr_svg: string
   short_fingerprint: string
   expires_at: string
 }
