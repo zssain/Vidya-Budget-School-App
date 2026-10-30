@@ -41,11 +41,14 @@ gitignored pixel baselines) — regenerate on the canonical machine.
 
 ## Not done / owner actions
 
-* K1 Android Keystore — needs a dependency decision (Kotlin plugin vs `jni`) and a device.
 * Real-hardware runs: two PCs on the LAN, Android join, iPhone join + Drive loop.
 * Deploy the PWA at a stable public origin (no Vercel login) → repo variable
   `PWA_ORIGIN` + Google Web OAuth origin. Decide the website domain.
 * PWA ports still missing: marks entry, report remarks, accountant collect-fee.
 * Independent review of the join-v2 / device-bundle crypto before claiming production
   assurance. Native Hindi/Telugu review of new strings. Code signing.
-* Owner portal (spec Phases 10–13): deferred by the owner.
+* Owner portal (spec Phases 10–13): **built in test mode** (apps/licence-portal, packages/billing-core,
+  services/billing-worker, services/licence-signer, infra/licensing) — needs real Supabase/Razorpay/Resend
+  accounts, domains, price and the production signing key (runbooks in docs/implementation/runbooks/).
+* K1 Android Keystore: built (Kotlin plugin, verified migration) — **on-device test still required**.
+* Readiness: READY FOR INTERNAL DEMO (see repair-status.md).

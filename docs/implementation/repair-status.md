@@ -74,3 +74,23 @@ Status: **FIXED** (code + regression test on this branch) · **PARTIAL** · **OP
 - Owner decisions: audiences for teacher leave/check-in/messages (W1); PWA/website domain
   (`neverworks.org` currently serves another site); signing identities; native Hindi/Telugu review.
 - Owner portal (spec Phases 10–13): deferred by the owner.
+
+## Owner licensing portal (spec Phases 10–13) — built in test mode (owner approved 2026-10-31)
+
+| Part | Where | Status | Evidence |
+|---|---|---|---|
+| Billing schema + least-privilege roles + RLS | `infra/licensing/migrations/0001_billing.sql`, `0002_portal_support.sql` | **BUILT** | applied to Postgres 16; role grants exercised by tests |
+| Licence signer (isolated Rust workspace) | `services/licence-signer/` | **BUILT** | 32/32 tests (re-run by the coordinator); byte-identical to `tools/licence-maker` incl. a run of the real binary; `verify_v2` accepts |
+| Billing core + worker | `packages/billing-core/`, `services/billing-worker/` | **BUILT** | 38 + 42 tests vs real Postgres (webhook HMAC, wrong amount/currency/env, duplicates, out-of-order, 8 concurrent workers → one entitlement, crash/lease, reconciliation, email outage no re-issue) |
+| Owner portal + checkout (Next 16) | `apps/licence-portal/` | **BUILT** | 47 tests (requireOwner AAL2 matrix, CSRF, step-up, surface split), `next build`, HTTP smoke test; isolation check passes |
+| Machine code shown to the buyer | `WelcomeScreen.tsx` | **FIXED** | was never displayed (found by the portal build) |
+| Real Supabase / Razorpay / Resend / domain / hosting / price / production signing key | — | **BLOCKED (owner accounts)** | runbooks in `docs/implementation/runbooks/` |
+
+## Readiness verdict (31 Oct 2026)
+
+**READY FOR INTERNAL DEMO.** All local gates pass (app: 863 Rust + 86 JS; portal: 127; signer: 32; PWA WebKit 4/4).
+Not READY FOR CONTROLLED PILOT until: real two-PC LAN, Android (incl. K1 key migration) and iPhone
+(Drive join + down export) runs pass; the PWA is hosted at a public origin; and the portal completes one
+real Razorpay test-mode purchase end to end with Supabase owner MFA. Not READY FOR CLIENT RELEASE until
+additionally: live merchant + price, production signing key alignment, code signing, an independent
+crypto review, native Hindi/Telugu review, and a clean-machine restore drill.
