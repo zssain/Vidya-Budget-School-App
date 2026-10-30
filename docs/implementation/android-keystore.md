@@ -113,10 +113,22 @@ plaintext present → re-wrap, transient unwrap → Backend (not Missing) with n
 transient during migration, corrupt / newer blob untouched, `set` replacing a key (restore),
 `set` with keystore down, disagreeing copies resolved by the DB.
 
+## Build verification (31 Oct 2026, macOS, NDK 26.3.11579264, JDK 21, Gradle 8.14.3)
+
+| Check | Result |
+|---|---|
+| `cargo test -p vidya --lib --locked` | 344 passed, 0 failed (incl. the 18 above) |
+| `cargo clippy --workspace --all-targets --locked -- -D warnings` | clean (the plugin crate is a workspace member and is linted on desktop) |
+| `cargo check -p vidya --lib --target aarch64-linux-android --locked` | OK, with `ANDROID_NDK_HOME`, `CC_/CXX_/AR_/RANLIB_aarch64_linux_android` (NDK `aarch64-linux-android24-clang`, `llvm-ar`, `llvm-ranlib`) and `CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER` set |
+| `cargo clippy -p vidya -p tauri-plugin-vidya-android --lib --target aarch64-linux-android -- -D warnings` | clean (covers the `#[cfg(target_os = "android")]` code) |
+| `tauri android build --debug --target aarch64 --apk --ci` (stub frontend via `--config`, because the worktree had no `node_modules`) | **APK built.** The first attempt failed because vendored OpenSSL could not find `aarch64-linux-android-ranlib`; it succeeded once `AR_aarch64_linux_android` / `RANLIB_aarch64_linux_android` pointed at NDK `llvm-ar` / `llvm-ranlib`. Generated `tauri.settings.gradle` includes `:tauri-plugin-vidya-android`. The Kotlin plugin compiled, and `Lapp/vidya/plugin/KeystorePlugin;` plus the alias string are in `classes4.dex`. |
+| Release (R8-minified) build | not run |
+| Emulator / device run | **not run**: no system image, no AVD, no `sdkmanager` in the SDK |
+
 ## What is NOT verified here
 
-The Kotlin code and the JNI round trip were **not run on a device or emulator** (no system
-image / device available when this was built). See the device plan below. Known residual
+The Kotlin code compiles and ships in the debug APK. It and the JNI round trip were **not run
+on a device or emulator** (no system image or device was available). See the device plan below. Known residual
 points:
 
 - `run_mobile_plugin` blocks the calling thread until the Android UI thread answers. It is
@@ -150,13 +162,15 @@ Inspect files with `adb shell run-as in.vidyabudget.app.debug ls -la files/ ../`
    deterministically: (a) copy back only `db-key` (wrapped removed) → migrates; (b) restore
    `db-key` next to a valid wrapped file → plaintext deleted on next launch; (c) put garbage in
    `db-key.wrapped.json.tmp` → removed, no effect.
-4. **Keystore invalidated / missing.** On a migrated install, delete the keystore key (debug
-   only: a temporary debug button or `adb shell run-as … ` cannot do this — easiest is to clear
-   the keystore by changing device lock type isn't sufficient for a non-auth key; instead copy
-   the app's files to a second device/emulator with the same debug build). Expect the **Recover**
-   screen, `vidya.db` and the wrapped file unchanged (compare `sha256sum` before/after), no new
-   key created. Restore from a `.vbak` → app restarts into the restored school; wrapped file
-   replaced, no `db-key`.
+4. **Keystore key missing (simulates invalidation).** On an emulator with a rootable image
+   (`google_apis`, not `google_apis_playstore`): migrate as in 2, then `adb root`, copy the
+   app's data dir out (`adb pull /data/data/in.vidyabudget.app.debug /tmp/vidya-a`), uninstall
+   (this deletes the keystore key), reinstall the same build, push the files back
+   (`adb push … ; adb shell chown -R <app uid> …; restorecon -R …`) **without** `db-key`, open.
+   Expect log `KEY_MISSING`, the **Recover** screen, and `sha256sum` of `vidya.db` and
+   `db-key.wrapped.json` unchanged before/after several relaunches; no new key file created.
+   Then restore a `.vbak` → app restarts into the restored school; wrapped file replaced, no
+   `db-key`.
 5. **Restore on a fresh phone.** Welcome → Recover → restore a `.vbak`. Expect wrapped file only.
 6. **Release build (R8).** Repeat 1 with `npm run tauri android build -- --target aarch64` (release,
    minified) to confirm the plugin class and `@Command` methods survive shrinking.
