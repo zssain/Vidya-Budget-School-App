@@ -8,8 +8,8 @@
 
 import type { DriveApi } from './api'
 import { ACKS, EXCHANGE, opsFolder } from './api'
-import { bundleAad, seal, sealOpen } from '../wasm'
-import { ackOps, applyRemoteOp, kvGet, type Op, pendingOps } from '../store'
+import { bundleAad, deriveDirectionKeys, relayAad, seal, sealOpen } from '../wasm'
+import { type AckResult, applyRemoteOp, kvGet, markUploaded, type Op, opsToPush, resolveOps } from '../store'
 
 const MAX_OPS_PER_BUNDLE = 500 // matches vidya-core/Rust (§11)
 const enc = new TextEncoder()
@@ -22,6 +22,8 @@ interface ExchangeCtx {
   drive: DriveApi
   exchangeId: string
   deviceId: string
+  /** base64 per-device session key (from join) — opens this device's acks. */
+  sessionKey: string
   keys: AudienceKeys
   keyVersion: number
 }
@@ -39,8 +41,10 @@ export async function resolveExchange(drive: DriveApi, schoolName: string, schoo
 
 /** Push pending ops: group by audience (already HLC-ordered), seal each ≤500-op
  *  bundle, upload to a temp name then rename (§11 atomic publish). */
-export async function pushOutbox(ctx: ExchangeCtx): Promise<number> {
-  const ops = await pendingOps()
+export async function pushOutbox(ctx: ExchangeCtx, nowMs: number = Date.now()): Promise<number> {
+  // Only ops not yet uploaded (or whose upload went unacknowledged for a long time):
+  // re-uploading the whole outbox every pass flooded Drive with duplicate bundles.
+  const ops = await opsToPush(nowMs)
   if (ops.length === 0) return 0
   const myOps = await ctx.drive.ensureFolder(ctx.exchangeId, opsFolder(ctx.deviceId))
   const byAud = new Map<string, Op[]>()
@@ -62,21 +66,45 @@ export async function pushOutbox(ctx: ExchangeCtx): Promise<number> {
         properties: { vidya_audience: audience, vidya_keyver: String(ctx.keyVersion) },
       })
       await ctx.drive.rename(id, finalName)
+      await markUploaded(chunk.map((o) => o.op_id), nowMs)
       pushed += chunk.length
     }
   }
   return pushed
 }
 
-/** Read the school PC's ack file for this device and drop acked ops from the outbox. */
+/** The school PC's per-device ack (`exchange.rs write_ack`): sealed with this
+ *  device's session-derived s2c key, AAD = relay AAD("ACK", device, device, 0). */
+export interface DeviceAck {
+  last_hlc: string
+  results: AckResult[]
+}
+
+/** Open + parse a sealed ack exactly as the native client does (pure given WASM).
+ *  Throws on a wrong key / device / tampered bytes (fail closed). */
+export function openAck(sealed: Uint8Array, sessionKeyB64: string, deviceId: string): DeviceAck {
+  const { s2c } = deriveDirectionKeys(sessionKeyB64)
+  const plain = sealOpen(s2c, relayAad('ACK', deviceId, deviceId, 0), sealed)
+  const ack = JSON.parse(dec.decode(plain)) as DeviceAck
+  if (!Array.isArray(ack.results)) throw new Error('malformed ack')
+  return ack
+}
+
+/** Read the school PC's ack for this device: confirmed ops leave the outbox, refused
+ *  ones are kept with their reason. An unreadable ack is skipped (not fatal), so the
+ *  rest of the pass (peer pull) still runs. */
 export async function readAcks(ctx: ExchangeCtx): Promise<number> {
   const acksFolder = await ctx.drive.ensureFolder(ctx.exchangeId, ACKS)
   const file = await ctx.drive.findChild(acksFolder, `${ctx.deviceId}.json`)
   if (!file) return 0
-  const bytes = await ctx.drive.download(file.id)
-  const acked = (JSON.parse(dec.decode(bytes)) as { acked?: string[] }).acked ?? []
-  await ackOps(acked)
-  return acked.length
+  let ack: DeviceAck
+  try {
+    ack = openAck(await ctx.drive.download(file.id), ctx.sessionKey, ctx.deviceId)
+  } catch {
+    return 0
+  }
+  const { confirmed } = await resolveOps(ack.results)
+  return confirmed
 }
 
 /** Pull peers' bundles for audiences we hold a key for; apply them provisionally.
@@ -130,9 +158,11 @@ export async function buildCtx(drive: DriveApi): Promise<ExchangeCtx | null> {
   const schoolId = await kvGet<string>('school_id')
   const keys = await kvGet<AudienceKeys>('audience_keys')
   if (!deviceId || !schoolName || !schoolId || !keys) return null
+  const sessionKey = await kvGet<string>('session_key')
+  if (!sessionKey) return null
   const keyVersion = (await kvGet<number>('audience_keyver')) ?? 1
   const exchangeId = await resolveExchange(drive, schoolName, schoolId)
-  return { drive, exchangeId, deviceId, keys, keyVersion }
+  return { drive, exchangeId, deviceId, sessionKey, keys, keyVersion }
 }
 
 /** Run one sync pass immediately (best effort) — e.g. right after a local write. */

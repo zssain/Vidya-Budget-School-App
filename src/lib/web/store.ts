@@ -98,22 +98,84 @@ export interface OutboxRow {
   hlc: string
   audience: string
   enc: Uint8Array
+  /** Wall ms of the last upload to Drive (absent = never uploaded). */
+  uploaded_at?: number
+  /** Set when the school PC refused the op: kept (not dropped) for the user to see. */
+  status?: 'rejected' | 'conflict' | 'flagged'
+  reason?: string | null
 }
 
-/** Pending ops to push, in HLC order (§8.3). */
-export async function pendingOps(): Promise<Op[]> {
+/** Re-upload an op whose upload was never acknowledged after this long. */
+export const REUPLOAD_AFTER_MS = 30 * 60 * 1000
+
+/** Which outbox rows to push now (pure → unit-tested): not refused, and either never
+ *  uploaded or uploaded long enough ago with no ack (the bundle may have been lost). */
+export function rowsToPush(rows: OutboxRow[], nowMs: number): OutboxRow[] {
+  return rows
+    .filter((r) => !r.status && (r.uploaded_at == null || nowMs - r.uploaded_at > REUPLOAD_AFTER_MS))
+    .sort((a, b) => (a.hlc < b.hlc ? -1 : a.hlc > b.hlc ? 1 : 0))
+}
+
+async function allOutbox(): Promise<OutboxRow[]> {
   const db = await openDb()
-  const rows = await reqDone<OutboxRow[]>(db.transaction(OUTBOX, 'readonly').objectStore(OUTBOX).getAll())
+  return reqDone<OutboxRow[]>(db.transaction(OUTBOX, 'readonly').objectStore(OUTBOX).getAll())
+}
+
+/** Ops still waiting for the school PC (not refused), in HLC order (§8.3). */
+export async function pendingOps(): Promise<Op[]> {
+  const rows = (await allOutbox()).filter((r) => !r.status)
   rows.sort((a, b) => (a.hlc < b.hlc ? -1 : a.hlc > b.hlc ? 1 : 0))
   return Promise.all(rows.map((r) => decryptJson<Op>(r.enc)))
 }
 
-/** Drop ops the server has acknowledged. */
-export async function ackOps(opIds: string[]): Promise<void> {
+/** Ops to upload on this pass (see rowsToPush). */
+export async function opsToPush(nowMs: number): Promise<Op[]> {
+  return Promise.all(rowsToPush(await allOutbox(), nowMs).map((r) => decryptJson<Op>(r.enc)))
+}
+
+/** Remember that these ops were uploaded at `nowMs` (so they aren't re-sent every pass). */
+export async function markUploaded(opIds: string[], nowMs: number): Promise<void> {
+  const ids = new Set(opIds)
+  const rows = (await allOutbox()).filter((r) => ids.has(r.op_id))
   const db = await openDb()
   await tx(db, [OUTBOX], 'readwrite', (t) => {
-    for (const id of opIds) t.objectStore(OUTBOX).delete(id)
+    for (const r of rows) t.objectStore(OUTBOX).put({ ...r, uploaded_at: nowMs })
   })
+}
+
+/** One per-op result from the school PC's ack. */
+export interface AckResult {
+  op_id: string
+  status: 'confirmed' | 'rejected' | 'conflict' | 'flagged'
+  reason_code?: string | null
+}
+
+/** Apply an ack: confirmed ops leave the outbox; refused ones stay, marked with the
+ *  status + reason (never silently dropped). Unknown op ids are ignored. */
+export async function resolveOps(results: AckResult[]): Promise<{ confirmed: number; refused: number }> {
+  const byId = new Map((await allOutbox()).map((r) => [r.op_id, r]))
+  let confirmed = 0
+  let refused = 0
+  const db = await openDb()
+  await tx(db, [OUTBOX], 'readwrite', (t) => {
+    for (const res of results) {
+      const row = byId.get(res.op_id)
+      if (!row) continue
+      if (res.status === 'confirmed') {
+        t.objectStore(OUTBOX).delete(res.op_id)
+        confirmed += 1
+      } else {
+        t.objectStore(OUTBOX).put({ ...row, status: res.status, reason: res.reason_code ?? null })
+        refused += 1
+      }
+    }
+  })
+  return { confirmed, refused }
+}
+
+/** Ops the school PC refused, for the UI to surface. */
+export async function refusedOps(): Promise<OutboxRow[]> {
+  return (await allOutbox()).filter((r) => r.status != null)
 }
 
 /** Record that a peer op was applied (idempotency by op_id, §8.4). */
