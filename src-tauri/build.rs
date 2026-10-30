@@ -58,4 +58,23 @@ fn check_release_config() {
              (prompts/P09 §5, P12 Step 6.4)"
         );
     }
+
+    // `pwa_origin` is OPTIONAL (empty → no iPhone invite link), but when set it must be
+    // a usable public origin (mirrors config::validate_pwa_origin): https, bare origin,
+    // not a per-deployment Vercel preview URL (those change each deploy and sit behind
+    // Vercel login, so every iPhone invite would break).
+    let pwa = json.get("pwa_origin").and_then(|v| v.as_str()).unwrap_or("").trim();
+    if !pwa.is_empty() {
+        let host = pwa.strip_prefix("https://").unwrap_or_else(|| {
+            panic!("release build config 'pwa_origin' must start with https:// (got {pwa})")
+        });
+        if host.is_empty() || host.contains('/') || pwa.contains("REPLACE") {
+            panic!("release build config 'pwa_origin' must be a bare https origin with no path (got {pwa})");
+        }
+        if let Some(sub) = host.strip_suffix(".vercel.app") {
+            if sub.split('-').count() >= 3 {
+                panic!("release build config 'pwa_origin' is a Vercel preview URL ({pwa}); use the production domain");
+            }
+        }
+    }
 }

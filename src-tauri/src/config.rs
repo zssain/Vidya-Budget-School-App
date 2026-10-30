@@ -41,6 +41,52 @@ pub struct BuildConfig {
     pub google_client_id_desktop: String,
     /// Google OAuth Android client id (used from Phase 6).
     pub google_client_id_android: String,
+    /// The public iPhone web-app (PWA) origin used in web invite links, e.g.
+    /// `https://app.example.org` (no trailing slash). OPTIONAL: empty → no web invite
+    /// is offered. Must be HTTPS, a stable production host (not a per-deployment
+    /// preview URL), and listed in the Web OAuth client's JavaScript origins.
+    #[serde(default)]
+    pub pwa_origin: String,
+}
+
+/// Validate a PWA origin: `Ok(())` for a usable public origin. Rejects placeholders,
+/// paths/trailing slashes, non-HTTPS (except localhost in dev builds) and
+/// per-deployment Vercel preview hosts (`<project>-<hash>-<team>.vercel.app`), which
+/// change on every deploy and sit behind Vercel login.
+pub fn validate_pwa_origin(origin: &str, allow_localhost: bool) -> Result<(), String> {
+    if origin.is_empty() || origin.contains("REPLACE") {
+        return Err("pwa_origin is not set".into());
+    }
+    let host = if let Some(h) = origin.strip_prefix("https://") {
+        h
+    } else if let Some(h) = origin.strip_prefix("http://") {
+        if !(allow_localhost && (h.starts_with("localhost") || h.starts_with("127.0.0.1"))) {
+            return Err("pwa_origin must be https://".into());
+        }
+        h
+    } else {
+        return Err("pwa_origin must be https://".into());
+    };
+    if host.is_empty() || host.contains('/') || host.contains('#') || host.contains('?') {
+        return Err("pwa_origin must be a bare origin (no path or trailing slash)".into());
+    }
+    if let Some(sub) = host.strip_suffix(".vercel.app") {
+        // A preview/deployment URL has ≥3 dash-separated parts incl. a random hash.
+        if sub.split('-').count() >= 3 {
+            return Err("pwa_origin is a per-deployment Vercel preview URL; use the production domain".into());
+        }
+    }
+    Ok(())
+}
+
+/// The PWA origin to put in web invites, or `None` when this build has none (or it
+/// is invalid). Debug builds fall back to the local `npm run dev:web` server.
+pub fn pwa_origin() -> Option<String> {
+    let configured = get().pwa_origin.trim_end_matches('/').to_string();
+    if !configured.is_empty() {
+        return validate_pwa_origin(&configured, cfg!(debug_assertions)).ok().map(|_| configured);
+    }
+    cfg!(debug_assertions).then(|| "http://localhost:5273".to_string())
 }
 
 /// The parsed config for this build. Panics only if the embedded JSON is
@@ -71,6 +117,20 @@ pub fn licence_public_keys() -> Vec<[u8; 32]> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pwa_origin_validation() {
+        assert!(validate_pwa_origin("https://app.example.org", false).is_ok());
+        assert!(validate_pwa_origin("https://vidya.vercel.app", false).is_ok());
+        assert!(validate_pwa_origin("https://vidyaschoolmanagement-1d29vhmfi-zssains-projects.vercel.app", false).is_err());
+        assert!(validate_pwa_origin("http://app.example.org", false).is_err());
+        assert!(validate_pwa_origin("http://localhost:5273", false).is_err());
+        assert!(validate_pwa_origin("http://localhost:5273", true).is_ok());
+        assert!(validate_pwa_origin("https://app.example.org/", false).is_err());
+        assert!(validate_pwa_origin("https://app.example.org/join", false).is_err());
+        assert!(validate_pwa_origin("", false).is_err());
+        assert!(validate_pwa_origin("REPLACE-with-pwa-origin", false).is_err());
+    }
 
     #[test]
     fn embedded_config_parses() {

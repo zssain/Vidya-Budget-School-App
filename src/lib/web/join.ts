@@ -1,20 +1,23 @@
-// Join-from-an-iPhone (Phase 19, Step 5, §18). The invitation QR/link carries the
-// same payload as the Android app link, in the URL FRAGMENT (`#d=…`) so the static
-// host never receives it. Because a browser can't reach the school PC's LAN server,
-// the PWA joins through Drive: it writes a join request to `exchange/joins/`, the
-// school PC answers with a sealed join response (drive/join.rs), and the PWA opens it
-// with the key derived from the invite code (WASM `join_key`) and stores the device
-// identity + audience keys the sync engine (Step 4) needs.
+// Join-from-an-iPhone (Phase 19, Step 5, §18) — join protocol v2. The web invite
+// link carries `{v:2, invite_id, secret, school_name, school_id}` in the URL FRAGMENT
+// (`#d=…`), so the static host never receives it. A browser can't reach the school
+// PC's LAN server, so the PWA joins through Drive: it writes a request holding only
+// the invite id, a random request id and an HMAC PROOF of the 256-bit secret (WASM
+// `join_v2_proof`) — never the secret or a code. The school PC verifies the proof and
+// seals the response under a key derived from the secret + request id, which only
+// this device can derive. A Drive reader can neither forge a join nor open one.
 
 import type { DriveApi } from './drive/api'
 import { JOINS } from './drive/api'
 import { resolveExchange } from './drive/sync'
-import { initWasm, joinAad, joinKey, sealOpen } from './wasm'
+import { initWasm, joinV2Aad, joinV2Proof, joinV2ResponseKey, sealOpen } from './wasm'
 import { kvGet, kvPut } from './store'
 
-/** The invitation payload (same fields the Android app link carries). */
+/** The web invitation payload (join v2). `secret` is base64url(32 bytes). */
 export interface InvitePayload {
-  invite_code: string
+  v: 2
+  invite_id: string
+  secret: string
   school_name: string
   school_id: string
 }
@@ -23,10 +26,17 @@ const FRAGMENT_KV = 'pending_join_fragment'
 const encoder = new TextEncoder()
 const decoder = new TextDecoder()
 
-function b64urlToString(s: string): string {
+function b64urlToBytes(s: string): Uint8Array {
   const b64 = s.replace(/-/g, '+').replace(/_/g, '/')
-  const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0))
-  return decoder.decode(bytes)
+  return Uint8Array.from(atob(b64 + '='.repeat((4 - (b64.length % 4)) % 4)), (c) => c.charCodeAt(0))
+}
+
+function bytesToB64url(b: Uint8Array): string {
+  return btoa(String.fromCharCode(...b)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+}
+
+function b64urlToString(s: string): string {
+  return decoder.decode(b64urlToBytes(s))
 }
 
 /** Parse the invitation payload from a URL fragment `#d=<base64url json>` (or null). */
@@ -35,8 +45,10 @@ export function parseJoinFragment(hash: string): InvitePayload | null {
   if (!m) return null
   try {
     const p = JSON.parse(b64urlToString(m[1])) as Partial<InvitePayload>
-    if (p.invite_code && p.school_name && p.school_id) return p as InvitePayload
-    return null
+    // Only v2 invites: an older link (plaintext short code) is refused.
+    if (p.v !== 2 || !p.invite_id || !p.secret || !p.school_name || !p.school_id) return null
+    if (b64urlToBytes(p.secret).length !== 32) return null
+    return p as InvitePayload
   } catch {
     return null
   }
@@ -59,19 +71,30 @@ function randomId(): string {
   return [...b].map((x) => x.toString(16).padStart(2, '0')).join('')
 }
 
-/** Write the join request to `exchange/joins/<request_id>.vjoin`; returns the id.
- *  (Plaintext JSON in the school's own sync account so the PC can authenticate the
- *  single-use invite code and derive the response seal key.) */
+const DEVICE_NAME = 'iPhone'
+const PLATFORM = 'web'
+
+/** The join request body (pure → unit-tested): non-secret fields + the HMAC proof.
+ *  Never contains the invite secret. */
+export function buildJoinRequest(payload: InvitePayload, requestId: string): Record<string, unknown> {
+  const proof = joinV2Proof(b64urlToBytes(payload.secret), payload.invite_id, requestId, DEVICE_NAME, PLATFORM)
+  return {
+    v: 2,
+    invite_id: payload.invite_id,
+    request_id: requestId,
+    device_name: DEVICE_NAME,
+    platform: PLATFORM,
+    proof: bytesToB64url(proof),
+  }
+}
+
+/** Write the join request to `exchange/joins/<request_id>.vjoin`; returns the id. */
 export async function requestJoin(drive: DriveApi, payload: InvitePayload): Promise<string> {
+  await initWasm()
   const exchangeId = await resolveExchange(drive, payload.school_name, payload.school_id)
   const joinsId = await drive.ensureFolder(exchangeId, JOINS)
   const requestId = randomId()
-  const req = {
-    request_id: requestId,
-    invite_code: payload.invite_code,
-    device_name: 'iPhone',
-    platform: 'web',
-  }
+  const req = buildJoinRequest(payload, requestId)
   await drive.upload(joinsId, `${requestId}.vjoin`, encoder.encode(JSON.stringify(req)))
   return requestId
 }
@@ -107,7 +130,11 @@ export async function pollJoinResponse(
   const file = await drive.findChild(joinsId, `${requestId}.resp.vjoin`)
   if (!file) return false // "Waiting for the school computer (usually under a minute)"
   const sealed = await drive.download(file.id)
-  const plain = sealOpen(joinKey(payload.invite_code), joinAad(requestId), sealed)
+  const plain = sealOpen(
+    joinV2ResponseKey(b64urlToBytes(payload.secret), requestId),
+    joinV2Aad(payload.invite_id, requestId, payload.school_id),
+    sealed,
+  )
   const resp = JSON.parse(decoder.decode(plain)) as JoinResp
 
   // Persist the joined identity + the audience keys the Drive sync engine reads.

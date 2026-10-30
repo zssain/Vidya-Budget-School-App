@@ -152,11 +152,35 @@ pub fn hello(conn: &Connection, now: time::OffsetDateTime) -> rusqlite::Result<O
 pub fn create_invite(conn: &mut Connection, staff_id: &str, now: time::OffsetDateTime) -> rusqlite::Result<String> {
     let bytes = rand_bytes(8);
     let code: String = bytes.iter().map(|b| CROCKFORD[(*b % 32) as usize] as char).collect();
+    // A separate 256-bit secret for the iPhone/web (Drive) route — see
+    // vidya_core::seal join v2. Never derived from the short code.
+    let web_secret = {
+        use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+        use base64::Engine;
+        URL_SAFE_NO_PAD.encode(rand_bytes(32))
+    };
     conn.execute(
-        "INSERT INTO invite(id, code_hash, staff_id, expires_at) VALUES (?1,?2,?3,?4)",
-        params![format!("inv-{}", sha256_hex(&bytes)[..12].to_string()), sha256_hex(code.as_bytes()), staff_id, iso_in(now, time::Duration::hours(INVITE_HOURS))],
+        "INSERT INTO invite(id, code_hash, staff_id, expires_at, web_secret) VALUES (?1,?2,?3,?4,?5)",
+        params![
+            format!("inv-{}", &sha256_hex(&rand_bytes(16))[..16]),
+            sha256_hex(code.as_bytes()),
+            staff_id,
+            iso_in(now, time::Duration::hours(INVITE_HOURS)),
+            web_secret
+        ],
     )?;
     Ok(code)
+}
+
+/// The web-route identity of the invite behind `code`: `(invite_id, web_secret)`
+/// (base64url, 32 bytes). Used to build the iPhone/web invite link.
+pub fn web_invite(conn: &Connection, code: &str) -> rusqlite::Result<Option<(String, String)>> {
+    conn.query_row(
+        "SELECT id, web_secret FROM invite WHERE code_hash=?1 AND web_secret IS NOT NULL",
+        params![sha256_hex(code.trim().to_uppercase().as_bytes())],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )
+    .optional()
 }
 
 /// The next device series (A1 = server; A2, A3 … never reused).
@@ -184,17 +208,71 @@ pub fn join(conn: &mut Connection, req: &JoinReq, now: time::OffsetDateTime) -> 
     let code_hash = sha256_hex(req.invite_code.trim().to_uppercase().as_bytes());
     let now_iso_s = now.format(&time::format_description::well_known::Rfc3339).unwrap_or_default();
 
-    // Valid = matches, unused, unrevoked, not expired.
-    let invite = conn
+    let invite_id: String = conn
+        .query_row("SELECT id FROM invite WHERE code_hash=?1", params![code_hash], |r| r.get(0))
+        .optional()
+        .map_err(|_| JoinError::InviteInvalid)?
+        .ok_or(JoinError::InviteInvalid)?;
+    provision_from_invite(conn, &invite_id, &req.device_name, &req.platform, req.google_email.as_deref(), &school, &now_iso_s, now)
+}
+
+/// Join over Drive (iPhone/web, join v2): the request names the invite by id and
+/// proves possession of its web secret. Verified in constant time; the invite is
+/// then consumed exactly like a LAN join. Returns the response with the secret so
+/// the caller can seal it.
+pub fn join_web(
+    conn: &mut Connection,
+    invite_id: &str,
+    request_id: &str,
+    device_name: &str,
+    platform: &str,
+    proof: &[u8],
+    now: time::OffsetDateTime,
+) -> Result<(JoinResp, Vec<u8>), JoinError> {
+    let school = school_info(conn).map_err(|_| JoinError::NoSchool)?.ok_or(JoinError::NoSchool)?;
+    let secret_b64: Option<String> = conn
+        .query_row("SELECT web_secret FROM invite WHERE id=?1", params![invite_id], |r| r.get(0))
+        .optional()
+        .map_err(|_| JoinError::InviteInvalid)?
+        .flatten();
+    let secret = {
+        use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+        use base64::Engine;
+        URL_SAFE_NO_PAD.decode(secret_b64.ok_or(JoinError::InviteInvalid)?).map_err(|_| JoinError::InviteInvalid)?
+    };
+    let transcript = vidya_core::seal::join_v2_transcript(invite_id, request_id, device_name, platform);
+    if !vidya_core::seal::join_v2_verify(&secret, &transcript, proof) {
+        return Err(JoinError::InviteInvalid);
+    }
+    let now_iso_s = now.format(&time::format_description::well_known::Rfc3339).unwrap_or_default();
+    let resp = provision_from_invite(conn, invite_id, device_name, platform, None, &school, &now_iso_s, now)?;
+    Ok((resp, secret))
+}
+
+/// Consume a valid invite (unused, unrevoked, unexpired) and provision the device.
+/// The consume is atomic (`used_at IS NULL` guard in the same transaction), so two
+/// concurrent joins can never both use one invite.
+#[allow(clippy::too_many_arguments)]
+fn provision_from_invite(
+    conn: &mut Connection,
+    invite_id: &str,
+    device_name: &str,
+    platform: &str,
+    google_email: Option<&str>,
+    school: &SchoolInfo,
+    now_iso_s: &str,
+    now: time::OffsetDateTime,
+) -> Result<JoinResp, JoinError> {
+    let (staff_id, expires_at, used_at, revoked_at): (String, String, Option<String>, Option<String>) = conn
         .query_row(
-            "SELECT id, staff_id, expires_at, used_at, revoked_at FROM invite WHERE code_hash=?1",
-            params![code_hash],
-            |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, Option<String>>(3)?, r.get::<_, Option<String>>(4)?)),
+            "SELECT staff_id, expires_at, used_at, revoked_at FROM invite WHERE id=?1",
+            params![invite_id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
         )
         .optional()
-        .map_err(|_| JoinError::InviteInvalid)?;
-    let (invite_id, staff_id, expires_at, used_at, revoked_at) = invite.ok_or(JoinError::InviteInvalid)?;
-    if used_at.is_some() || revoked_at.is_some() || expires_at.as_str() < now_iso_s.as_str() {
+        .map_err(|_| JoinError::InviteInvalid)?
+        .ok_or(JoinError::InviteInvalid)?;
+    if used_at.is_some() || revoked_at.is_some() || expires_at.as_str() < now_iso_s {
         return Err(JoinError::InviteInvalid);
     }
 
@@ -217,12 +295,18 @@ pub fn join(conn: &mut Connection, req: &JoinReq, now: time::OffsetDateTime) -> 
     tx.execute(
         "INSERT INTO device(id,staff_id,platform,name,token_hash,session_key,receipt_series,admission_series,last_seen_at,lease_expires_at,needs_rejoin) \
          VALUES (?1,?2,?3,?4,?5,?6,?7,?7,?8,?9,0)",
-        params![device_id, staff_id, req.platform, req.device_name, token_hash, session_key, series, now_iso_s, lease],
+        params![device_id, staff_id, platform, device_name, token_hash, session_key, series, now_iso_s, lease],
     ).map_err(|_| JoinError::NoSchool)?;
-    tx.execute("UPDATE invite SET used_at=?1 WHERE id=?2", params![now_iso_s, invite_id]).map_err(|_| JoinError::NoSchool)?;
+    // Consume exactly once; the web secret is no longer needed after use.
+    let consumed = tx
+        .execute("UPDATE invite SET used_at=?1, web_secret=NULL WHERE id=?2 AND used_at IS NULL", params![now_iso_s, invite_id])
+        .map_err(|_| JoinError::NoSchool)?;
+    if consumed != 1 {
+        return Err(JoinError::InviteInvalid); // tx dropped → device row rolled back
+    }
     // Invited staff becomes active on first join.
     tx.execute("UPDATE staff SET state='active', updated_at=?1 WHERE id=?2 AND state='invited'", params![now_iso_s, staff_id]).map_err(|_| JoinError::NoSchool)?;
-    if let Some(email) = &req.google_email {
+    if let Some(email) = google_email {
         tx.execute("UPDATE staff SET google_email=?1 WHERE id=?2", params![email, staff_id]).ok();
     }
     tx.commit().map_err(|_| JoinError::NoSchool)?;
@@ -240,7 +324,7 @@ pub fn join(conn: &mut Connection, req: &JoinReq, now: time::OffsetDateTime) -> 
         admission_series: series,
         audience_keys: audience_keys_for(conn, &staff_id).unwrap_or_default(),
         session_key,
-        school: SchoolLite { id: school.school_id, name: school.school_name },
+        school: SchoolLite { id: school.school_id.clone(), name: school.school_name.clone() },
         lease_expires_at: lease,
         bootstrap_cursor,
         protocol: PROTOCOL,

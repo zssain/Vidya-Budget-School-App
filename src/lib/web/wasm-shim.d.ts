@@ -13,8 +13,9 @@ export function hlc_skew(local_wall_ms: number, remote_wall_ms: number): boolean
 export function bundle_aad(audience: string, key_version: number): Uint8Array
 export function relay_aad(method: string, path: string, device_id: string, server_epoch: number): Uint8Array
 export function derive_direction_keys(session_key_b64: string): Uint8Array
-export function join_key(invite_code: string): Uint8Array
-export function join_aad(request_id: string): Uint8Array
+export function join_v2_proof(secret: Uint8Array, invite_id: string, request_id: string, device_name: string, platform: string): Uint8Array
+export function join_v2_response_key(secret: Uint8Array, request_id: string): Uint8Array
+export function join_v2_aad(invite_id: string, request_id: string, school_id: string): Uint8Array
 export function seal_with_nonce(key: Uint8Array, aad: Uint8Array, nonce: Uint8Array, plaintext: Uint8Array): Uint8Array
 export function seal_open(key: Uint8Array, aad: Uint8Array, sealed: Uint8Array): Uint8Array
 export function pin_hash_with_salt(pin: string, salt: Uint8Array): string

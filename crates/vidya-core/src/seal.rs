@@ -22,7 +22,7 @@ use base64::Engine;
 use chacha20poly1305::aead::{Aead, KeyInit, Payload};
 use chacha20poly1305::{ChaCha20Poly1305, Key, Nonce};
 use hmac::{Hmac, Mac};
-use sha2::{Digest, Sha256};
+use sha2::Sha256;
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -89,24 +89,56 @@ pub fn bundle_aad(audience: &str, key_version: i64) -> Vec<u8> {
     format!("vidya/vop/v1\n{audience}\n{key_version}").into_bytes()
 }
 
-/// Derive the symmetric key that seals a Drive **join** request/response from the
-/// single-use invite code both sides share (join-without-LAN, §18). SHA-256 of a
-/// domain label ‖ the code — identical on the school PC and the PWA, so the PC can
-/// seal the join response (device token, series, audience keys, session key) and only
-/// the joining device (which holds the code) can open it.
-pub fn join_key(invite_code: &str) -> [u8; 32] {
-    let mut h = Sha256::new();
-    h.update(b"vidya/join/v1\n");
-    h.update(invite_code.as_bytes());
-    let mut k = [0u8; 32];
-    k.copy_from_slice(&h.finalize());
-    k
+// ---------------------------------------------------------------------------
+// Drive JOIN, protocol v2 (join-without-LAN for the iPhone PWA, §18).
+//
+// v1 sealed the response under SHA-256(invite code) and put the code in the
+// plaintext request, so anyone able to read `exchange/joins/` could open the
+// response (device token, session key, every audience key). v2:
+//   * the web invite carries a fresh 256-bit `secret` in the URL FRAGMENT (never
+//     sent to the host, never uploaded); the short code is not used on this route;
+//   * the request carries only non-secret fields + `proof` =
+//     HMAC(K_proof, transcript), K_proof = HMAC-expand(secret, "…/proof");
+//   * the response is sealed under K_resp = HMAC(HMAC-expand(secret, "…/resp"),
+//     request_id) with AAD binding invite, request and school.
+// A Drive reader without the secret can neither forge a request nor open a response.
+
+const INFO_JOIN_PROOF: &[u8] = b"vidya/join/v2/proof";
+const INFO_JOIN_RESP: &[u8] = b"vidya/join/v2/resp";
+
+/// The exact bytes the join proof covers (fields newline-separated, versioned).
+pub fn join_v2_transcript(invite_id: &str, request_id: &str, device_name: &str, platform: &str) -> Vec<u8> {
+    format!("vidya/join-req/v2\n{invite_id}\n{request_id}\n{device_name}\n{platform}").into_bytes()
 }
 
-/// Associated data binding a join response to its request (so a response can't be
-/// replayed against a different request id).
-pub fn join_aad(request_id: &str) -> Vec<u8> {
-    format!("vidya/join-resp/v1\n{request_id}").into_bytes()
+fn hmac32(key: &[u8], msg: &[u8]) -> [u8; 32] {
+    let mut mac = <HmacSha256 as Mac>::new_from_slice(key).expect("HMAC accepts any key length");
+    mac.update(msg);
+    let mut out = [0u8; 32];
+    out.copy_from_slice(&Mac::finalize(mac).into_bytes());
+    out
+}
+
+/// The joining device's proof that it holds the invite secret.
+pub fn join_v2_proof(secret: &[u8], transcript: &[u8]) -> [u8; 32] {
+    hmac32(&expand(secret, INFO_JOIN_PROOF), transcript)
+}
+
+/// Constant-time check of a join proof (school PC side).
+pub fn join_v2_verify(secret: &[u8], transcript: &[u8], proof: &[u8]) -> bool {
+    let mut mac = <HmacSha256 as Mac>::new_from_slice(&expand(secret, INFO_JOIN_PROOF)).expect("HMAC accepts any key length");
+    mac.update(transcript);
+    mac.verify_slice(proof).is_ok()
+}
+
+/// The per-request key that seals the join response.
+pub fn join_v2_response_key(secret: &[u8], request_id: &str) -> [u8; 32] {
+    hmac32(&expand(secret, INFO_JOIN_RESP), request_id.as_bytes())
+}
+
+/// Associated data binding a join response to its invite, request and school.
+pub fn join_v2_aad(invite_id: &str, request_id: &str, school_id: &str) -> Vec<u8> {
+    format!("vidya/join-resp/v2\n{invite_id}\n{request_id}\n{school_id}").into_bytes()
 }
 
 /// Seal `plaintext` under `key` with `aad` and a CALLER-SUPPLIED 12-byte `nonce` →
@@ -247,18 +279,57 @@ mod tests {
         assert_eq!(open(&k.c2s, b"aad", &[0u8; 10]), Err(SealError::TooShort));
     }
 
+    const SECRET: [u8; 32] = [0x42; 32];
+
     #[test]
-    fn join_key_derives_deterministically_and_seals_a_response() {
-        // Same code → same key (PC and PWA); a different code → a different key.
-        let k1 = join_key("7KQ2-M9XD-4TRA");
-        assert_eq!(k1, join_key("7KQ2-M9XD-4TRA"));
-        assert_ne!(k1, join_key("OTHER-CODE-XXXX"));
-        // The PC seals a join response the joining device (same code) can open, bound
-        // to the request id; a wrong code or request id cannot open it.
-        let aad = join_aad("req-1");
-        let sealed = seal_with_nonce(&k1, &aad, &NONCE, br#"{"device_token":"t"}"#).unwrap();
-        assert_eq!(open(&k1, &aad, &sealed).unwrap(), br#"{"device_token":"t"}"#);
-        assert_eq!(open(&join_key("OTHER-CODE-XXXX"), &aad, &sealed), Err(SealError::Aead));
-        assert_eq!(open(&k1, &join_aad("req-2"), &sealed), Err(SealError::Aead));
+    fn join_v2_proof_verifies_only_with_the_secret_and_exact_transcript() {
+        let t = join_v2_transcript("inv-1", "req-1", "iPhone", "web");
+        let proof = join_v2_proof(&SECRET, &t);
+        assert!(join_v2_verify(&SECRET, &t, &proof));
+        // wrong secret
+        assert!(!join_v2_verify(&[0x43; 32], &t, &proof));
+        // any transcript field changed (request id, device, platform, invite)
+        for other in [
+            join_v2_transcript("inv-1", "req-2", "iPhone", "web"),
+            join_v2_transcript("inv-1", "req-1", "Android", "web"),
+            join_v2_transcript("inv-1", "req-1", "iPhone", "android"),
+            join_v2_transcript("inv-2", "req-1", "iPhone", "web"),
+        ] {
+            assert!(!join_v2_verify(&SECRET, &other, &proof));
+        }
+        // truncated proof
+        assert!(!join_v2_verify(&SECRET, &t, &proof[..16]));
     }
+
+    #[test]
+    fn join_v2_response_opens_only_with_secret_request_and_binding() {
+        let k = join_v2_response_key(&SECRET, "req-1");
+        assert_ne!(k, join_v2_response_key(&SECRET, "req-2"), "per-request key");
+        assert_ne!(k, join_v2_response_key(&[0x43; 32], "req-1"));
+        // The response key is not derivable from what a request file contains.
+        assert_ne!(k.to_vec(), join_v2_proof(&SECRET, &join_v2_transcript("inv-1", "req-1", "iPhone", "web")).to_vec());
+        let aad = join_v2_aad("inv-1", "req-1", "sch-1");
+        let sealed = seal_with_nonce(&k, &aad, &NONCE, br#"{"device_token":"t"}"#).unwrap();
+        assert_eq!(open(&k, &aad, &sealed).unwrap(), br#"{"device_token":"t"}"#);
+        assert_eq!(open(&join_v2_response_key(&[0x43; 32], "req-1"), &aad, &sealed), Err(SealError::Aead));
+        assert_eq!(open(&k, &join_v2_aad("inv-1", "req-2", "sch-1"), &sealed), Err(SealError::Aead));
+        assert_eq!(open(&k, &join_v2_aad("inv-1", "req-1", "sch-2"), &sealed), Err(SealError::Aead));
+    }
+
+    /// Golden vector: the PWA (WASM) and the school PC must derive identical bytes.
+    #[test]
+    fn join_v2_golden_vector() {
+        let t = join_v2_transcript("inv-1", "req-1", "iPhone", "web");
+        assert_eq!(t, b"vidya/join-req/v2\ninv-1\nreq-1\niPhone\nweb".to_vec());
+        let hex = |b: &[u8]| b.iter().map(|x| format!("{x:02x}")).collect::<String>();
+        let proof = hex(&join_v2_proof(&SECRET, &t));
+        let key = hex(&join_v2_response_key(&SECRET, "req-1"));
+        assert_eq!(proof.len(), 64);
+        assert_eq!(key.len(), 64);
+        // Cross-checked with Python hmac/hashlib; a change to the derivation must be deliberate.
+        assert_eq!(proof, GOLDEN_PROOF);
+        assert_eq!(key, GOLDEN_RESP_KEY);
+    }
+    const GOLDEN_PROOF: &str = "c45b29299a85100333463b9993c2f137a135d0d033f5d8507e94eef80ed41ed3";
+    const GOLDEN_RESP_KEY: &str = "3a02159ceadc648a14bda0ed79571d9854dfc295cbdfacc486fff962f93accf6";
 }

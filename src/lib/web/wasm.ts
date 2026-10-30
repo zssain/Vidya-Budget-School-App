@@ -45,9 +45,13 @@ export function deriveDirectionKeys(sessionKeyB64: string): { c2s: Uint8Array; s
   const both = w.derive_direction_keys(sessionKeyB64)
   return { c2s: both.slice(0, 32), s2c: both.slice(32, 64) }
 }
-// Join-without-LAN: the key + AAD that seal the Drive join response (§18).
-export const joinKey = (inviteCode: string): Uint8Array => w.join_key(inviteCode)
-export const joinAad = (requestId: string): Uint8Array => w.join_aad(requestId)
+// Join-without-LAN v2 (§18): proof of the invite secret + the per-request
+// response key/AAD. The secret never leaves the device.
+export const joinV2Proof = (secret: Uint8Array, inviteId: string, requestId: string, deviceName: string, platform: string): Uint8Array =>
+  w.join_v2_proof(secret, inviteId, requestId, deviceName, platform)
+export const joinV2ResponseKey = (secret: Uint8Array, requestId: string): Uint8Array => w.join_v2_response_key(secret, requestId)
+export const joinV2Aad = (inviteId: string, requestId: string, schoolId: string): Uint8Array =>
+  w.join_v2_aad(inviteId, requestId, schoolId)
 
 // ---- PIN (the browser supplies the 16-byte salt) ----
 export const pinHash = (pin: string): string => w.pin_hash_with_salt(pin, randomBytes(16))

@@ -164,10 +164,14 @@ export default function StaffAccessScreen() {
             <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 12 }} dangerouslySetInnerHTML={{ __html: invite.qr_svg }} />
             <div style={{ fontSize: 12, color: 'var(--muted)', wordBreak: 'break-all', marginBottom: 8 }}>{invite.link}</div>
 
-            <div style={{ marginTop: 14, paddingTop: 14, borderTop: '1px solid var(--line-strong)', fontSize: 11, fontWeight: 600, letterSpacing: '0.14em', textTransform: 'uppercase', color: 'var(--accent)' }}>{t('sa.webInvite')}</div>
-            <div style={{ fontSize: 12, color: 'var(--muted)', margin: '6px 0 10px' }}>{t('sa.webInviteHint')}</div>
-            <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 10 }} dangerouslySetInnerHTML={{ __html: invite.web_qr_svg }} />
-            <div style={{ fontSize: 12, color: 'var(--muted)', wordBreak: 'break-all', marginBottom: 8 }}>{invite.web_link}</div>
+            {invite.web_link && (
+              <>
+                <div style={{ marginTop: 14, paddingTop: 14, borderTop: '1px solid var(--line-strong)', fontSize: 11, fontWeight: 600, letterSpacing: '0.14em', textTransform: 'uppercase', color: 'var(--accent)' }}>{t('sa.webInvite')}</div>
+                <div style={{ fontSize: 12, color: 'var(--muted)', margin: '6px 0 10px' }}>{t('sa.webInviteHint')}</div>
+                <div style={{ display: 'flex', justifyContent: 'center', marginBottom: 10 }} dangerouslySetInnerHTML={{ __html: invite.web_qr_svg }} />
+                <div style={{ fontSize: 12, color: 'var(--muted)', wordBreak: 'break-all', marginBottom: 8 }}>{invite.web_link}</div>
+              </>
+            )}
 
             <div style={{ fontSize: 12, color: 'var(--muted)' }}>{t('sa.fingerprint')}: {invite.short_fingerprint || '—'}</div>
             <div style={{ marginTop: 16, display: 'flex', gap: 10, justifyContent: 'center' }}>

@@ -166,8 +166,18 @@ pub fn create_invite_logic(conn: &mut Connection, actor: &SessionStaff, staff_id
     };
     let link = crate::server::invite::build_join_link(&payload).map_err(CmdError::internal)?;
     let qr_svg = crate::server::invite::qr_svg(&link).map_err(CmdError::internal)?;
-    let web_link = crate::server::invite::build_web_join_link(&payload).map_err(CmdError::internal)?;
-    let web_qr_svg = crate::server::invite::qr_svg(&web_link).map_err(CmdError::internal)?;
+    // The iPhone/web invite (join v2): only when this build has a valid public PWA
+    // origin; otherwise the UI shows just the native invite (no broken link).
+    let (web_link, web_qr_svg) = match crate::server::service::web_invite(conn, &code)? {
+        Some((invite_id, secret)) => match crate::server::invite::build_web_join_link(&payload, &invite_id, &secret) {
+            Ok(l) => {
+                let qr = crate::server::invite::qr_svg(&l).map_err(CmdError::internal)?;
+                (l, qr)
+            }
+            Err(_) => (String::new(), String::new()),
+        },
+        None => (String::new(), String::new()),
+    };
     let expires_at: String = conn
         .query_row("SELECT expires_at FROM invite WHERE code_hash=?1", params![sha256_hex(code.as_bytes())], |r| r.get(0))
         .optional()?

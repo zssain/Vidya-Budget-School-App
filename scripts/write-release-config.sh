@@ -10,6 +10,9 @@
 #   LICENCE_PUBLIC_KEY_PREV  — a previously used public key kept trusted after a
 #                              signing-key rotation (tools/licence-maker README).
 #   RELAY_URL                — only for the optional "Instant sync" add-on (§14).
+#   PWA_ORIGIN               — the public iPhone web-app origin for web invites
+#                              (https://…, a stable production host). Empty → no
+#                              iPhone invite link is offered.
 # All are NON-secret (the licence PUBLIC key, OAuth client IDs, a public relay URL);
 # the licence PRIVATE key lives ONLY in the owner's licence-maker key folder and is
 # never part of the app build. There is no LICENCE_API in v2 (offline licences).
@@ -43,7 +46,8 @@ cat > src-tauri/build-config/release.json <<JSON
   "licence_public_keys": [${KEYS_JSON}],
   "relay_url": "${RELAY_URL:-}",
   "google_client_id_desktop": "${GOOGLE_CLIENT_ID_DESKTOP:-}",
-  "google_client_id_android": "${GOOGLE_CLIENT_ID_ANDROID:-}"
+  "google_client_id_android": "${GOOGLE_CLIENT_ID_ANDROID:-}",
+  "pwa_origin": "${PWA_ORIGIN:-}"
 }
 JSON
 echo "wrote src-tauri/build-config/release.json (licence_public_keys count=$([ -n "${LICENCE_PUBLIC_KEY_PREV:-}" ] && echo 2 || echo 1), relay_url=${RELAY_URL:-<none>})"

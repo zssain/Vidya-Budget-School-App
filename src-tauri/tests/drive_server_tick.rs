@@ -29,23 +29,34 @@ fn server_tick_answers_a_pending_join_and_is_idempotent() {
     let code = service::create_invite(&mut conn, "stf-meena", now()).unwrap();
 
     // The school's sync account (one identity, full access — the model the real school
-    // PC uses). A PWA dropped a plaintext join request into exchange/joins/.
+    // PC uses). A PWA dropped a v2 join request (proof only) into exchange/joins/.
     let drive = FakeDrive::new();
     let layout = drive.provision_school(&[]);
     let acct = drive.as_actor(PRINCIPAL);
     let joins = acct.ensure_folder(&layout.exchange, "joins").unwrap();
-    let req = DriveJoinRequest {
-        request_id: "req1".into(),
-        invite_code: code,
-        device_name: "iPhone".into(),
-        platform: "web".into(),
+    let req = {
+        use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+        use base64::Engine;
+        let (invite_id, secret_b64) = service::web_invite(&conn, &code).unwrap().unwrap();
+        let secret = URL_SAFE_NO_PAD.decode(secret_b64).unwrap();
+        let proof = vidya_core::seal::join_v2_proof(&secret, &vidya_core::seal::join_v2_transcript(&invite_id, "req1", "iPhone", "web"));
+        DriveJoinRequest {
+            v: 2,
+            invite_id,
+            request_id: "req1".into(),
+            device_name: "iPhone".into(),
+            platform: "web".into(),
+            proof: URL_SAFE_NO_PAD.encode(proof),
+        }
     };
     acct.create(&joins, "req1.vjoin", &serde_json::to_vec(&req).unwrap(), &BTreeMap::new()).unwrap();
 
     // One pass answers it: a sealed response appears + a web device is provisioned.
     let out = live::server_drive_tick(&mut conn, &acct, &layout.exchange, now()).unwrap();
     assert_eq!(out.joins_answered, 1);
-    assert!(acct.list(&joins).unwrap().iter().any(|f| f.name == "req1.resp.vjoin"), "sealed response written");
+    let files = acct.list(&joins).unwrap();
+    assert!(files.iter().any(|f| f.name == "req1.resp.vjoin"), "sealed response written");
+    assert!(!files.iter().any(|f| f.name == "req1.vjoin"), "answered request deleted");
     let web_devices: i64 = conn.query_row("SELECT COUNT(*) FROM device WHERE platform='web'", [], |r| r.get(0)).unwrap();
     assert_eq!(web_devices, 1, "the PWA was provisioned via /join");
 

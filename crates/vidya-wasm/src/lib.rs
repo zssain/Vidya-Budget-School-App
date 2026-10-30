@@ -131,17 +131,23 @@ pub fn derive_direction_keys(session_key_b64: &str) -> Result<Vec<u8>, String> {
     Ok(out)
 }
 
-/// The 32-byte symmetric key that seals a Drive join response, derived from the
-/// single-use invite code the PWA scanned (identical to the school PC's key).
+/// Drive join v2: the HMAC proof that this device holds the invite `secret`, over
+/// the exact request transcript (same bytes as the school PC verifies).
 #[wasm_bindgen]
-pub fn join_key(invite_code: &str) -> Vec<u8> {
-    seal::join_key(invite_code).to_vec()
+pub fn join_v2_proof(secret: &[u8], invite_id: &str, request_id: &str, device_name: &str, platform: &str) -> Vec<u8> {
+    seal::join_v2_proof(secret, &seal::join_v2_transcript(invite_id, request_id, device_name, platform)).to_vec()
 }
 
-/// Associated data binding a join response to its request id.
+/// Drive join v2: the per-request key that opens the school PC's sealed response.
 #[wasm_bindgen]
-pub fn join_aad(request_id: &str) -> Vec<u8> {
-    seal::join_aad(request_id)
+pub fn join_v2_response_key(secret: &[u8], request_id: &str) -> Vec<u8> {
+    seal::join_v2_response_key(secret, request_id).to_vec()
+}
+
+/// Drive join v2: associated data binding the response to invite, request, school.
+#[wasm_bindgen]
+pub fn join_v2_aad(invite_id: &str, request_id: &str, school_id: &str) -> Vec<u8> {
+    seal::join_v2_aad(invite_id, request_id, school_id)
 }
 
 // ---- PIN (Argon2id, identical parameters as the app) --------------------------

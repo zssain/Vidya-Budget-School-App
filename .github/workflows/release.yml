@@ -52,6 +52,7 @@ jobs:
           RELAY_URL: ${{ vars.RELAY_URL }}
           GOOGLE_CLIENT_ID_DESKTOP: ${{ vars.GOOGLE_CLIENT_ID_DESKTOP }}
           GOOGLE_CLIENT_ID_ANDROID: ${{ vars.GOOGLE_CLIENT_ID_ANDROID }}
+          PWA_ORIGIN: ${{ vars.PWA_ORIGIN }}
         run: bash scripts/write-release-config.sh
       # Signing + notarization run ONLY when a real certificate exists. The APPLE_* vars
       # must be UNSET (not empty) when absent — an empty APPLE_CERTIFICATE still makes
@@ -115,6 +116,7 @@ jobs:
           RELAY_URL: ${{ vars.RELAY_URL }}
           GOOGLE_CLIENT_ID_DESKTOP: ${{ vars.GOOGLE_CLIENT_ID_DESKTOP }}
           GOOGLE_CLIENT_ID_ANDROID: ${{ vars.GOOGLE_CLIENT_ID_ANDROID }}
+          PWA_ORIGIN: ${{ vars.PWA_ORIGIN }}
         run: bash scripts/write-release-config.sh
       # NOTE (cloud signing): the classic PFX-in-a-secret approach used by these
       # env vars only works for older certificates. Windows code-signing certs
@@ -205,6 +207,7 @@ jobs:
           RELAY_URL: ${{ vars.RELAY_URL }}
           GOOGLE_CLIENT_ID_DESKTOP: ${{ vars.GOOGLE_CLIENT_ID_DESKTOP }}
           GOOGLE_CLIENT_ID_ANDROID: ${{ vars.GOOGLE_CLIENT_ID_ANDROID }}
+          PWA_ORIGIN: ${{ vars.PWA_ORIGIN }}
         run: bash scripts/write-release-config.sh
       - name: Write keystore.properties if the keystore secret exists
         id: ks

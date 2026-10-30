@@ -11,14 +11,6 @@ const SCHEME_PREFIX: &str = "vidya://join?d=";
 /// Deep-link payload hard cap (§5).
 const MAX_LINK_BYTES: usize = 2048;
 
-/// The deployed PWA origin (no trailing slash) that staff open on an iPhone to join
-/// the school as an installable web app: Safari → Add to Home Screen, then the join
-/// finishes through Drive (the browser can't reach the LAN server). Change this one
-/// constant when the PWA URL changes — or point a stable custom domain at the same
-/// host — and add the new origin to the Web OAuth client's Authorized JavaScript
-/// origins (docs/DEPLOY-PWA.md §1).
-const PWA_BASE_URL: &str = "https://vidyaschoolmanagement-1d29vhmfi-zssains-projects.vercel.app";
-
 /// Build the `vidya://join?d=…` deep link for an invite payload.
 pub fn build_join_link(payload: &JoinPayload) -> Result<String, String> {
     let json = serde_json::to_vec(payload).map_err(|e| e.to_string())?;
@@ -29,19 +21,22 @@ pub fn build_join_link(payload: &JoinPayload) -> Result<String, String> {
     Ok(link)
 }
 
-/// Build the PWA web-invite URL `https://<pwa>/#d=<base64url JSON>`. Unlike the native
-/// `vidya://` link (parsed by the Android/desktop apps), the PWA reads a **minimal**
-/// payload — `{invite_code, school_name, school_id}` — carried in the URL **fragment**
-/// so the static host never receives it. The field is `invite_code` (not `code`) and
-/// no LAN facts are included, because the browser joins through Drive, not the LAN.
-pub fn build_web_join_link(payload: &JoinPayload) -> Result<String, String> {
+/// Build the PWA web-invite URL `https://<pwa>/#d=<base64url JSON>` (join v2). The
+/// PWA reads a **minimal** payload in the URL **fragment** (never sent to the host):
+/// `{v:2, invite_id, secret, school_name, school_id}`. `secret` is the invite's
+/// 256-bit web secret; the short code and LAN facts are NOT included — the browser
+/// joins through Drive by proving it holds the secret (vidya_core::seal join v2).
+pub fn build_web_join_link(payload: &JoinPayload, invite_id: &str, web_secret: &str) -> Result<String, String> {
     let json = serde_json::to_vec(&serde_json::json!({
-        "invite_code": payload.code,
+        "v": 2,
+        "invite_id": invite_id,
+        "secret": web_secret,
         "school_name": payload.school_name,
         "school_id": payload.school_id,
     }))
     .map_err(|e| e.to_string())?;
-    let link = format!("{PWA_BASE_URL}/#d={}", URL_SAFE_NO_PAD.encode(&json));
+    let origin = crate::config::pwa_origin().ok_or_else(|| "no PWA origin configured for this build".to_string())?;
+    let link = format!("{origin}/#d={}", URL_SAFE_NO_PAD.encode(&json));
     if link.len() > MAX_LINK_BYTES {
         return Err(format!("web join link too large ({} > {MAX_LINK_BYTES} bytes)", link.len()));
     }
@@ -102,15 +97,18 @@ mod tests {
 
     #[test]
     fn web_join_link_carries_invite_code_in_fragment() {
-        let link = build_web_join_link(&payload()).unwrap();
-        assert!(link.starts_with(PWA_BASE_URL));
+        let link = build_web_join_link(&payload(), "inv-1", "c2VjcmV0").unwrap();
+        assert!(link.starts_with(&crate::config::pwa_origin().unwrap()));
         let d = link.split("/#d=").nth(1).expect("has #d= fragment");
         let json = URL_SAFE_NO_PAD.decode(d.as_bytes()).unwrap();
         let v: serde_json::Value = serde_json::from_slice(&json).unwrap();
-        // The PWA requires exactly these three keys (field is invite_code, not code).
-        assert_eq!(v["invite_code"], "VIDYA123");
+        // Join v2: invite id + web secret, never the short code.
+        assert_eq!(v["v"], 2);
+        assert_eq!(v["invite_id"], "inv-1");
+        assert_eq!(v["secret"], "c2VjcmV0");
         assert_eq!(v["school_name"], "Saraswati Public School");
         assert_eq!(v["school_id"], "sch-demo");
+        assert!(v.get("invite_code").is_none() && v.get("code").is_none());
         // Minimal payload — no LAN facts leak into the browser link.
         assert!(v.get("lan_addrs").is_none());
         assert!(v.get("cert_sha256").is_none());

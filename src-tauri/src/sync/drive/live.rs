@@ -62,6 +62,9 @@ pub fn server_drive_tick(
         if let Ok(sealed) = answer_join_request(conn, &bytes, now) {
             drive.create(&joins_folder, &resp_name, &sealed, &BTreeMap::new())?;
             out.joins_answered += 1;
+            // Hygiene: the request has served its purpose (the invite is consumed).
+            // Not the security boundary — the request holds no secret either way.
+            let _ = drive.delete(&f.id);
         }
     }
 
