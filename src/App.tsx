@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { lazy, Suspense, useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
 import { useRoute, matchRoute } from '@/lib/router'
 import * as api from '@/lib/api'
@@ -17,46 +17,46 @@ import { startSync } from '@/lib/web/drive/sync'
 import PinUnlockScreen from '@/screens/shared/PinUnlockScreen'
 import DevicePinSetupScreen from '@/screens/shared/DevicePinSetupScreen'
 import { installSessionWatcher } from '@/lib/session'
-import ApprovalsScreen from '@/screens/desktop/ApprovalsScreen'
-import StaffAccessScreen from '@/screens/desktop/StaffAccessScreen'
-import CircularsScreen from '@/screens/desktop/CircularsScreen'
-import ConflictReviewScreen from '@/screens/desktop/ConflictReviewScreen'
-import SyncDevicesScreen from '@/screens/desktop/SyncDevicesScreen'
-import StudentsScreen from '@/screens/desktop/StudentsScreen'
-import StudentProfileScreen from '@/screens/desktop/StudentProfileScreen'
-import AdmissionSheet from '@/screens/desktop/AdmissionSheet'
-import CsvImportScreen from '@/screens/desktop/CsvImportScreen'
-import FeesScreen from '@/screens/desktop/FeesScreen'
-import ReceiptsScreen from '@/screens/desktop/ReceiptsScreen'
-import DayBookScreen from '@/screens/desktop/DayBookScreen'
-import AccountsScreen from '@/screens/desktop/AccountsScreen'
-import SchoolStoreScreen from '@/screens/desktop/SchoolStoreScreen'
-import TimetableScreen from '@/screens/desktop/TimetableScreen'
+const ApprovalsScreen = lazy(() => import('@/screens/desktop/ApprovalsScreen'))
+const StaffAccessScreen = lazy(() => import('@/screens/desktop/StaffAccessScreen'))
+const CircularsScreen = lazy(() => import('@/screens/desktop/CircularsScreen'))
+const ConflictReviewScreen = lazy(() => import('@/screens/desktop/ConflictReviewScreen'))
+const SyncDevicesScreen = lazy(() => import('@/screens/desktop/SyncDevicesScreen'))
+const StudentsScreen = lazy(() => import('@/screens/desktop/StudentsScreen'))
+const StudentProfileScreen = lazy(() => import('@/screens/desktop/StudentProfileScreen'))
+const AdmissionSheet = lazy(() => import('@/screens/desktop/AdmissionSheet'))
+const CsvImportScreen = lazy(() => import('@/screens/desktop/CsvImportScreen'))
+const FeesScreen = lazy(() => import('@/screens/desktop/FeesScreen'))
+const ReceiptsScreen = lazy(() => import('@/screens/desktop/ReceiptsScreen'))
+const DayBookScreen = lazy(() => import('@/screens/desktop/DayBookScreen'))
+const AccountsScreen = lazy(() => import('@/screens/desktop/AccountsScreen'))
+const SchoolStoreScreen = lazy(() => import('@/screens/desktop/SchoolStoreScreen'))
+const TimetableScreen = lazy(() => import('@/screens/desktop/TimetableScreen'))
 import TeacherTimetableScreen from '@/screens/phone/TeacherTimetableScreen'
 import NotesScreen from '@/screens/phone/NotesScreen'
 import MyAttendanceScreen from '@/screens/phone/MyAttendanceScreen'
 import ApplyLeaveScreen from '@/screens/phone/ApplyLeaveScreen'
 import AboutScreen from '@/screens/phone/AboutScreen'
-import AttendanceRegisterScreen from '@/screens/desktop/AttendanceRegisterScreen'
-import MyRequestsScreen from '@/screens/desktop/MyRequestsScreen'
-import InboxScreen from '@/screens/desktop/InboxScreen'
-import AccountantHomeScreen from '@/screens/desktop/AccountantHomeScreen'
-import SessionScreen from '@/screens/desktop/SessionScreen'
-import GlobalSearch from '@/screens/desktop/GlobalSearch'
-import MarksScreen from '@/screens/desktop/MarksScreen'
-import ReportRemarksScreen from '@/screens/desktop/ReportRemarksScreen'
-import ExamsScreen from '@/screens/desktop/ExamsScreen'
-import CalendarScreen from '@/screens/desktop/CalendarScreen'
-import HallTicketsDoc from '@/screens/print/HallTicketsDoc'
-import SeatingChartDoc from '@/screens/print/SeatingChartDoc'
-import GradeScaleScreen from '@/screens/desktop/GradeScaleScreen'
-import ReportsScreen from '@/screens/desktop/ReportsScreen'
-import SettingsScreen from '@/screens/desktop/SettingsScreen'
-import BackupsScreen from '@/screens/desktop/BackupsScreen'
-import ReportCardDoc from '@/screens/print/ReportCardDoc'
-import ReceiptDoc from '@/screens/print/ReceiptDoc'
-import DayBookDoc from '@/screens/print/DayBookDoc'
-import SalarySlipsDoc from '@/screens/print/SalarySlipsDoc'
+const AttendanceRegisterScreen = lazy(() => import('@/screens/desktop/AttendanceRegisterScreen'))
+const MyRequestsScreen = lazy(() => import('@/screens/desktop/MyRequestsScreen'))
+const InboxScreen = lazy(() => import('@/screens/desktop/InboxScreen'))
+const AccountantHomeScreen = lazy(() => import('@/screens/desktop/AccountantHomeScreen'))
+const SessionScreen = lazy(() => import('@/screens/desktop/SessionScreen'))
+const GlobalSearch = lazy(() => import('@/screens/desktop/GlobalSearch'))
+const MarksScreen = lazy(() => import('@/screens/desktop/MarksScreen'))
+const ReportRemarksScreen = lazy(() => import('@/screens/desktop/ReportRemarksScreen'))
+const ExamsScreen = lazy(() => import('@/screens/desktop/ExamsScreen'))
+const CalendarScreen = lazy(() => import('@/screens/desktop/CalendarScreen'))
+const HallTicketsDoc = lazy(() => import('@/screens/print/HallTicketsDoc'))
+const SeatingChartDoc = lazy(() => import('@/screens/print/SeatingChartDoc'))
+const GradeScaleScreen = lazy(() => import('@/screens/desktop/GradeScaleScreen'))
+const ReportsScreen = lazy(() => import('@/screens/desktop/ReportsScreen'))
+const SettingsScreen = lazy(() => import('@/screens/desktop/SettingsScreen'))
+const BackupsScreen = lazy(() => import('@/screens/desktop/BackupsScreen'))
+const ReportCardDoc = lazy(() => import('@/screens/print/ReportCardDoc'))
+const ReceiptDoc = lazy(() => import('@/screens/print/ReceiptDoc'))
+const DayBookDoc = lazy(() => import('@/screens/print/DayBookDoc'))
+const SalarySlipsDoc = lazy(() => import('@/screens/print/SalarySlipsDoc'))
 import PrincipalHomeContainer from '@/screens/containers/PrincipalHomeContainer'
 import CollectFeeContainer from '@/screens/containers/CollectFeeContainer'
 import AttendanceContainer from '@/screens/containers/AttendanceContainer'
@@ -86,7 +86,7 @@ function PinGate() {
   return <PinUnlockScreen staff={staff} schoolName={t('app.name')} />
 }
 
-export default function App() {
+function AppRoutes() {
   const path = useRoute()
   const base = path.split('?')[0]
   const store = useStore()
@@ -332,4 +332,14 @@ function desktopRoute(base: string, role: Role): { active: string; node: ReactNo
   if (base === '/accountant/collect') return { active: 'collect', node: <CollectFeeContainer /> }
   if (role === 'accountant') return { active: 'home', node: <AccountantHomeScreen /> }
   return { active: 'home', node: <PrincipalHomeContainer /> }
+}
+
+/** Desktop and print screens are loaded on demand (code-split), so the phone app and
+ *  the first paint don't download every desktop screen. */
+export default function App() {
+  return (
+    <Suspense fallback={<StatusScreen messageKey="app.name" />}>
+      <AppRoutes />
+    </Suspense>
+  )
 }
