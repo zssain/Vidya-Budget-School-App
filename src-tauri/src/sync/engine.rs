@@ -238,6 +238,23 @@ fn fence(server_epoch: i64, known: i64) -> Result<(), TransportError> {
     }
 }
 
+/// Settle one server result for an outbox op — the same on every route (LAN push
+/// response, relay, Drive ack). A rejection becomes an Inbox item so the user can
+/// edit & resend or discard (§6) — never a silent drop; conflicts and review flags are
+/// held by the school PC (Principal's review). The server has recorded the op
+/// (idempotent by op_id), so it leaves the outbox.
+pub fn settle_op_result(conn: &Connection, res: &crate::sync::protocol::OpResult) {
+    if res.status == OpStatus::Rejected {
+        conn.execute(
+            "INSERT OR IGNORE INTO notification(id, staff_id, kind, title_key, vars_json, link) \
+             VALUES (?1, (SELECT staff_id FROM outbox WHERE op_id=?2), 'rejected', 'sync.rejected', ?3, 'inbox')",
+            params![format!("ntf-{}", res.op_id), res.op_id, serde_json::json!({ "reason": res.reason_code }).to_string()],
+        )
+        .ok();
+    }
+    conn.execute("DELETE FROM outbox WHERE op_id=?1", params![res.op_id]).ok();
+}
+
 /// One sync cycle against a transport. Pushes the outbox, applies results, pulls.
 /// Enforces epoch fencing: a response from a lower-epoch server is refused (§8.9).
 pub async fn sync_once<T: Transport>(conn: &mut Connection, t: &T) -> Result<SyncOutcome, TransportError> {
@@ -262,18 +279,9 @@ pub async fn sync_once<T: Transport>(conn: &mut Connection, t: &T) -> Result<Syn
                 }
                 OpStatus::Conflict => outcome.conflicts += 1,
                 OpStatus::Flagged => outcome.flagged += 1,
-                OpStatus::Rejected => {
-                    outcome.rejected += 1;
-                    // Inbox item so the user can Edit & resend / Discard (§6).
-                    conn.execute(
-                        "INSERT INTO notification(id, staff_id, kind, title_key, vars_json, link) \
-                         VALUES (?1, (SELECT staff_id FROM outbox WHERE op_id=?2), 'rejected', 'sync.rejected', ?3, 'inbox')",
-                        params![format!("ntf-{}", res.op_id), res.op_id, serde_json::json!({ "reason": res.reason_code }).to_string()],
-                    ).ok();
-                }
+                OpStatus::Rejected => outcome.rejected += 1,
             }
-            // The server has recorded the op (idempotent) → drop it from the outbox.
-            conn.execute("DELETE FROM outbox WHERE op_id=?1", params![res.op_id]).ok();
+            settle_op_result(conn, res);
         }
     }
 

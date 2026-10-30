@@ -89,6 +89,14 @@ pub fn bundle_aad(audience: &str, key_version: i64) -> Vec<u8> {
     format!("vidya/vop/v1\n{audience}\n{key_version}").into_bytes()
 }
 
+/// Associated data for a **device-sealed** Drive `.vop` bundle (format v2). Uploads
+/// are sealed with the device's own c2s key (from its session key, held only by that
+/// device and the school PC), so opening one proves which device wrote it; the AAD
+/// binds the device id, so a bundle can't be moved to another device's folder.
+pub fn device_bundle_aad(device_id: &str) -> Vec<u8> {
+    format!("vidya/vop/v2\n{device_id}").into_bytes()
+}
+
 // ---------------------------------------------------------------------------
 // Drive JOIN, protocol v2 (join-without-LAN for the iPhone PWA, §18).
 //

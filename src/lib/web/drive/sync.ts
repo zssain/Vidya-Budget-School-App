@@ -8,8 +8,8 @@
 
 import type { DriveApi } from './api'
 import { ACKS, EXCHANGE, opsFolder } from './api'
-import { bundleAad, deriveDirectionKeys, relayAad, seal, sealOpen } from '../wasm'
-import { type AckResult, applyRemoteOp, kvGet, markUploaded, type Op, opsToPush, resolveOps } from '../store'
+import { deriveDirectionKeys, deviceBundleAad, relayAad, seal, sealOpen } from '../wasm'
+import { type AckResult, kvGet, markUploaded, type Op, opsToPush, resolveOps } from '../store'
 
 const MAX_OPS_PER_BUNDLE = 500 // matches vidya-core/Rust (§11)
 const enc = new TextEncoder()
@@ -28,10 +28,6 @@ interface ExchangeCtx {
   keyVersion: number
 }
 
-function b64ToBytes(b64: string): Uint8Array {
-  return Uint8Array.from(atob(b64), (c) => c.charCodeAt(0))
-}
-
 /** Resolve (creating) Vidya/<school> (<school_id>)/exchange; return its folder id. */
 export async function resolveExchange(drive: DriveApi, schoolName: string, schoolId: string): Promise<string> {
   const vidya = await drive.ensureFolder(drive.root(), 'Vidya')
@@ -39,36 +35,27 @@ export async function resolveExchange(drive: DriveApi, schoolName: string, schoo
   return drive.ensureFolder(school, EXCHANGE)
 }
 
-/** Push pending ops: group by audience (already HLC-ordered), seal each ≤500-op
- *  bundle, upload to a temp name then rename (§11 atomic publish). */
+/** Push pending ops as device-sealed bundles (format v2): sealed with THIS device's
+ *  c2s key (from its session key), AAD bound to the device id — identical to the
+ *  native `exchange::push_outbox`. No audience key is needed to upload, and the school
+ *  PC can prove which device wrote each bundle. Upload to a temp name then rename. */
 export async function pushOutbox(ctx: ExchangeCtx, nowMs: number = Date.now()): Promise<number> {
-  // Only ops not yet uploaded (or whose upload went unacknowledged for a long time):
-  // re-uploading the whole outbox every pass flooded Drive with duplicate bundles.
-  const ops = await opsToPush(nowMs)
+  // Only ops not yet uploaded (or whose upload went unacknowledged for a long time).
+  const ops = (await opsToPush(nowMs)).filter((o) => o.device_id === ctx.deviceId)
   if (ops.length === 0) return 0
   const myOps = await ctx.drive.ensureFolder(ctx.exchangeId, opsFolder(ctx.deviceId))
-  const byAud = new Map<string, Op[]>()
-  for (const op of ops) {
-    if (!ctx.keys[op.audience]) continue // no key for this audience → skip
-    const arr = byAud.get(op.audience) ?? []
-    arr.push(op)
-    byAud.set(op.audience, arr)
-  }
+  const { c2s } = deriveDirectionKeys(ctx.sessionKey)
   let pushed = 0
-  for (const [audience, group] of byAud) {
-    const key = b64ToBytes(ctx.keys[audience])
-    for (let i = 0; i < group.length; i += MAX_OPS_PER_BUNDLE) {
-      const chunk = group.slice(i, i + MAX_OPS_PER_BUNDLE)
-      const sealed = seal(key, bundleAad(audience, ctx.keyVersion), enc.encode(JSON.stringify(chunk)))
-      const hlc = chunk[chunk.length - 1].hlc
-      const finalName = `${hlc}-${audience}-v${ctx.keyVersion}.vop`
-      const id = await ctx.drive.upload(myOps, `.tmp-${finalName}`, sealed, {
-        properties: { vidya_audience: audience, vidya_keyver: String(ctx.keyVersion) },
-      })
-      await ctx.drive.rename(id, finalName)
-      await markUploaded(chunk.map((o) => o.op_id), nowMs)
-      pushed += chunk.length
-    }
+  for (let i = 0; i < ops.length; i += MAX_OPS_PER_BUNDLE) {
+    const chunk: Op[] = ops.slice(i, i + MAX_OPS_PER_BUNDLE)
+    const sealed = seal(c2s, deviceBundleAad(ctx.deviceId), enc.encode(JSON.stringify(chunk)))
+    const finalName = `${chunk[0].hlc}-dev-v2.vop`
+    const id = await ctx.drive.upload(myOps, `.tmp-${finalName}`, sealed, {
+      properties: { vidya_format: 'device-v2' },
+    })
+    await ctx.drive.rename(id, finalName)
+    await markUploaded(chunk.map((o) => o.op_id), nowMs)
+    pushed += chunk.length
   }
   return pushed
 }
@@ -107,33 +94,11 @@ export async function readAcks(ctx: ExchangeCtx): Promise<number> {
   return confirmed
 }
 
-/** Pull peers' bundles for audiences we hold a key for; apply them provisionally.
- *  A bundle that fails to open (tamper / wrong key) is skipped, not applied. */
-export async function pullPeers(ctx: ExchangeCtx): Promise<number> {
-  const children = await ctx.drive.list(ctx.exchangeId)
-  const mine = opsFolder(ctx.deviceId)
-  let applied = 0
-  for (const child of children) {
-    if (!child.name.startsWith('ops-') || child.name === mine) continue
-    for (const b of await ctx.drive.list(child.id)) {
-      if (!b.name.endsWith('.vop') || b.name.startsWith('.tmp-')) continue
-      const audience = b.properties?.vidya_audience
-      if (!audience || !ctx.keys[audience]) continue
-      const keyver = Number(b.properties?.vidya_keyver ?? ctx.keyVersion)
-      const sealed = await ctx.drive.download(b.id)
-      let ops: Op[]
-      try {
-        const plain = sealOpen(b64ToBytes(ctx.keys[audience]), bundleAad(audience, keyver), sealed)
-        ops = JSON.parse(dec.decode(plain)) as Op[]
-      } catch {
-        continue // tampered / wrong key
-      }
-      for (const op of ops) {
-        if ((await applyRemoteOp(op)) === 'applied') applied += 1
-      }
-    }
-  }
-  return applied
+/** Peers' uploads are sealed to the school PC with each device's own key, so they
+ *  are not readable here (no provisional peer apply — spec default). Canonical changes
+ *  reach this device from the school PC. Kept as a no-op for the SyncResult shape. */
+export async function pullPeers(_ctx: ExchangeCtx): Promise<number> {
+  return 0
 }
 
 export interface SyncResult {

@@ -10,9 +10,8 @@ use rusqlite::{params, Connection};
 use time::OffsetDateTime;
 
 use vidya_lib::server::service;
-use vidya_lib::sync::drive::exchange::{self, HeldKeys};
+use vidya_lib::sync::drive::exchange;
 use vidya_lib::sync::drive::fake::{FakeDrive, PRINCIPAL};
-use vidya_lib::sync::drive::keys;
 use vidya_lib::sync::drive::DriveApi;
 use vidya_lib::sync::protocol::{Op, OpStatus};
 use vidya_lib::sync::scope;
@@ -267,12 +266,13 @@ fn queue(dev: &Connection, o: &Op) {
     ).unwrap();
 }
 
-/// Deliver the server's current key for `audience` to a device (as join would).
-fn deliver(server: &Connection, audience: &str) -> HeldKeys {
-    let k = keys::get_or_create(server, audience).unwrap();
-    let mut h = HeldKeys::new();
-    h.insert((audience.to_string(), k.version), keys::decode_key(&k.key_b64).unwrap());
-    h
+/// Give a registered device its per-device session key (as join would); returns it.
+/// Drive uploads are sealed with this device's own key (format v2).
+fn session_key_for(server: &Connection, device: &str) -> String {
+    use base64::Engine;
+    let sk = base64::engine::general_purpose::STANDARD.encode([0x5au8; 32]);
+    server.execute("UPDATE device SET session_key=?1 WHERE id=?2", params![sk, device]).unwrap();
+    sk
 }
 
 fn attendance_op(id: &str, mark_id: &str) -> Op {
@@ -299,12 +299,11 @@ fn drive_server_off_phone_pushes_then_server_imports_confirmed() {
     register_device(&s, "dev-phone", "stf-meena");
     let o = attendance_op("op-att-drive", &mark_id);
     queue(&ph, &o);
-    let held = deliver(&s, "class:cls-5a");
 
     // Drive: provision the school; the phone pushes its outbox.
     let drive = FakeDrive::new();
     let l = drive.provision_school(&[("stf-meena", "dev-phone")]);
-    let pushed = exchange::push_outbox(&mut ph, &drive.as_actor("stf-meena"), &l.ops["dev-phone"], &held).unwrap();
+    let pushed = exchange::push_outbox(&mut ph, &drive.as_actor("stf-meena"), &l.ops["dev-phone"], "dev-phone", &session_key_for(&s, "dev-phone")).unwrap();
     assert_eq!((pushed.bundles, pushed.ops), (1, 1), "one bundle, one op shared to Drive");
 
     // Server comes back and imports everything from exchange/.
@@ -331,16 +330,17 @@ fn drive_tampered_bundle_is_quarantined_on_import() {
     let mark_id: String = s
         .query_row("SELECT m.id FROM attendance_mark m JOIN attendance_sheet sh ON sh.id=m.sheet_id WHERE sh.class_id='cls-5a' AND m.mark='A' LIMIT 1", [], |r| r.get(0))
         .unwrap();
-    let key = keys::get_or_create(&s, "class:cls-5a").unwrap();
-    let kb = keys::decode_key(&key.key_b64).unwrap();
+    register_device(&s, "dev-phone", "stf-meena");
+    let sk = session_key_for(&s, "dev-phone");
     let o = attendance_op("op-tamper", &mark_id);
-    let mut body = vidya_lib::sync::drive::bundle::seal_bundle(&kb, "class:cls-5a", key.version, std::slice::from_ref(&o)).unwrap();
+    let c2s = vidya_lib::sync::seal::derive_keys(&sk).unwrap().c2s;
+    let mut body = vidya_lib::sync::drive::bundle::seal_device_bundle(&c2s, "dev-phone", std::slice::from_ref(&o)).unwrap();
     let last = body.len() - 1;
     body[last] ^= 0x01; // tamper in transit
 
     let drive = FakeDrive::new();
     let l = drive.provision_school(&[("stf-meena", "dev-phone")]);
-    let props = vidya_lib::sync::drive::bundle::bundle_properties("class:cls-5a", key.version);
+    let props = vidya_lib::sync::drive::bundle::device_bundle_properties();
     drive.as_actor("stf-meena").create(&l.ops["dev-phone"], "bad.vop", &body, &props).unwrap();
 
     let out = exchange::import_all(&mut s, &drive.as_actor(PRINCIPAL), &l.exchange).unwrap();
@@ -363,10 +363,9 @@ fn drive_revoked_author_bundle_is_flagged_not_applied() {
     register_device(&s, "dev-phone", "stf-meena");
     let o = attendance_op("op-revoked", &mark_id);
     queue(&ph, &o);
-    let held = deliver(&s, "class:cls-5a");
     let drive = FakeDrive::new();
     let l = drive.provision_school(&[("stf-meena", "dev-phone")]);
-    exchange::push_outbox(&mut ph, &drive.as_actor("stf-meena"), &l.ops["dev-phone"], &held).unwrap();
+    exchange::push_outbox(&mut ph, &drive.as_actor("stf-meena"), &l.ops["dev-phone"], "dev-phone", &session_key_for(&s, "dev-phone")).unwrap();
 
     let out = exchange::import_all(&mut s, &drive.as_actor(PRINCIPAL), &l.exchange).unwrap();
     assert_eq!((out.flagged, out.confirmed), (1, 0), "suspended author → flagged");
@@ -392,10 +391,9 @@ fn drive_same_op_via_lan_and_drive_applies_once() {
     let drive = FakeDrive::new();
     let l = drive.provision_school(&[("stf-suresh", "dev-a2")]);
     register_device(&s, "dev-a2", "stf-suresh");
-    let held = deliver(&s, "finance");
     let mut ph = phone();
     queue(&ph, &o);
-    exchange::push_outbox(&mut ph, &drive.as_actor("stf-suresh"), &l.ops["dev-a2"], &held).unwrap();
+    exchange::push_outbox(&mut ph, &drive.as_actor("stf-suresh"), &l.ops["dev-a2"], "dev-a2", &session_key_for(&s, "dev-a2")).unwrap();
     let out = exchange::import_all(&mut s, &drive.as_actor(PRINCIPAL), &l.exchange).unwrap();
 
     // apply_op is idempotent by op_id: the import "confirms" from the remembered
@@ -421,10 +419,9 @@ fn drive_ack_round_trips_to_the_device() {
     register_device(&s, "dev-phone", "stf-meena");
     let o = attendance_op("op-ack", &mark_id);
     queue(&ph, &o);
-    let held = deliver(&s, "class:cls-5a");
     let drive = FakeDrive::new();
     let l = drive.provision_school(&[("stf-meena", "dev-phone")]);
-    exchange::push_outbox(&mut ph, &drive.as_actor("stf-meena"), &l.ops["dev-phone"], &held).unwrap();
+    exchange::push_outbox(&mut ph, &drive.as_actor("stf-meena"), &l.ops["dev-phone"], "dev-phone", &session_key_for(&s, "dev-phone")).unwrap();
     let out = exchange::import_all(&mut s, &drive.as_actor(PRINCIPAL), &l.exchange).unwrap();
 
     // Server seals the ack with the device session key; the device reads it back.

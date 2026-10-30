@@ -131,6 +131,13 @@ pub fn derive_direction_keys(session_key_b64: &str) -> Result<Vec<u8>, String> {
     Ok(out)
 }
 
+/// Associated data for a device-sealed Drive bundle (format v2; seal with the c2s
+/// key from `derive_direction_keys`).
+#[wasm_bindgen]
+pub fn device_bundle_aad(device_id: &str) -> Vec<u8> {
+    seal::device_bundle_aad(device_id)
+}
+
 /// Drive join v2: the HMAC proof that this device holds the invite `secret`, over
 /// the exact request transcript (same bytes as the school PC verifies).
 #[wasm_bindgen]

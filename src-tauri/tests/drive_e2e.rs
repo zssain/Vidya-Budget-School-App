@@ -1,204 +1,183 @@
-//! Google Drive fallback harness (prompts/P06 Step 9 — offline-provable slice).
+//! Google Drive exchange harness — device-sealed bundles (format v2, P21).
 //!
-//! Composes the REAL P06 modules — `sync::drive::{fake, bundle, keys}` and
-//! `vidya_core::audience` — with no Google and no Step-0 spike, to prove the
-//! security-critical exchange properties:
-//!   1. server off → a device seals its ops into a `.vop` and uploads to its own
-//!      Drive folder (temp name → verify-by-readback → rename);
-//!   2. a same-audience device downloads + decrypts it (provisional); a different
-//!      class / the accountant CANNOT (no key) — the DONE-MEANS isolation core;
-//!   3. a tampered bundle a holder *should* read fails AEAD → quarantine;
-//!   4. staff can never delete `backups/` through the Drive API.
-//!
-//! NOT covered here (needs the real DriveApi client + OAuth from Step 1, gated on
-//! the spike, and the Step 4–6 push/pull/import engine): the full "server on →
-//! import → all phones Confirmed" loop, LAN+Drive op dedup (idempotent by op_id,
-//! already proven in `sync_e2e`), and revoked-author flagging on import
-//! (`apply.rs` raises `review_flag revoked_author`). See docs/phase-notes/phase-6.md.
+//! Every device seals its uploads with its OWN session-derived c2s key (AAD bound to
+//! its device id). The school PC opens a bundle with the session key of the live
+//! device that owns the folder, so opening it PROVES authorship; the op is then
+//! applied as that device's staff (`apply_client_op`). Proven here over FakeDrive:
+//!   1. a device's bundle is imported and confirmed;
+//!   2. a peer can't open another device's bundle (not with its own key, not with an
+//!      audience key);
+//!   3. tampered, foreign-key, moved-to-another-folder, legacy audience-sealed and
+//!      revoked-device bundles are all quarantined, never applied;
+//!   4. staff can never delete `backups/` and write only to their own ops folder.
 
 use std::collections::BTreeMap;
 
+use base64::engine::general_purpose::STANDARD;
+use base64::Engine;
 use rusqlite::{params, Connection};
-use vidya_core::audience::{audience_for, Audience};
-use vidya_lib::db;
-use vidya_lib::sync::drive::bundle::{self, PROP_AUDIENCE, PROP_KEYVER};
-use vidya_lib::sync::drive::exchange::{self, HeldKeys};
+use time::OffsetDateTime;
+use vidya_lib::sync::drive::bundle;
+use vidya_lib::sync::drive::exchange;
 use vidya_lib::sync::drive::fake::{Access, FakeDrive, PRINCIPAL};
-use vidya_lib::sync::drive::{keys, pull};
 use vidya_lib::sync::drive::{DriveApi, DriveError};
 use vidya_lib::sync::protocol::Op;
+use vidya_lib::sync::seal;
+use vidya_lib::{db, seed};
 
 const DBKEY: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
-/// An attendance op for a class (audience decided by vidya-core, as the write
-/// path will).
-fn attendance_op(n: usize, class_id: &str) -> Op {
-    let aud = match audience_for("attendance_mark", Some(class_id)).unwrap() {
-        Audience::Class(_) => format!("class:{class_id}"),
-        other => other.as_str(),
-    };
-    Op {
-        op_id: format!("op-{class_id}-{n}"),
-        hlc: format!("00000000000000000{n:03}devA"),
-        device_id: "devA".into(),
-        staff_id: "teacherA".into(),
-        audience: aud,
-        table: "attendance_mark".into(),
-        record_id: format!("mark-{n}"),
-        kind: "update".into(),
-        payload: serde_json::json!({ "student": format!("s{n}"), "mark": "P" }),
-        base_version: Some(1),
-        server_epoch: 1,
-    }
+fn now() -> OffsetDateTime {
+    OffsetDateTime::parse("2026-09-23T12:00:00Z", &time::format_description::well_known::Rfc3339).unwrap()
 }
 
-/// sha256 hex of a byte slice — matches what the fake Drive returns as `checksum`.
-fn sha256_hex(bytes: &[u8]) -> String {
-    use sha2::{Digest, Sha256};
-    let mut h = Sha256::new();
-    h.update(bytes);
-    h.finalize().iter().map(|b| format!("{b:02x}")).collect()
+fn server() -> Connection {
+    let mut c = db::open_in_memory(DBKEY).unwrap();
+    db::run_migrations(&mut c).unwrap();
+    seed::seed_demo_school(&mut c, now()).unwrap();
+    c
 }
 
-/// The server's audience keys (persisted, versioned) for one audience.
-fn server_key(conn: &rusqlite::Connection, audience: &str) -> ([u8; 32], i64) {
-    let k = keys::get_or_create(conn, audience).unwrap();
-    (keys::decode_key(&k.key_b64).unwrap(), k.version)
+fn phone() -> Connection {
+    let mut c = db::open_in_memory(DBKEY).unwrap();
+    db::run_migrations(&mut c).unwrap();
+    c
 }
 
-/// Push one device's same-audience ops as a bundle to its Drive folder, exactly
-/// as Step 4 does: seal → create under a temp name → verify the readback
-/// checksum → rename to the final `.vop` name. Returns the final file id.
-fn push_bundle(
-    drive: &FakeDrive,
-    actor: &str,
-    ops_folder: &str,
-    key: &[u8; 32],
-    audience: &str,
-    version: i64,
-    ops: &[Op],
-) -> String {
-    let client = drive.as_actor(actor);
-    let body = bundle::seal_bundle(key, audience, version, ops).unwrap();
-    let props = bundle::bundle_properties(audience, version);
-    // temp name so a half-written file is never seen
-    let tmp = client
-        .create(ops_folder, ".tmp-upload", &body, &props)
+/// Register a device on the server (as a join would) with a session key; returns it.
+fn register(s: &Connection, device: &str, staff: &str, key_byte: u8) -> String {
+    let sk = STANDARD.encode([key_byte; 32]);
+    s.execute(
+        "INSERT INTO device(id,staff_id,platform,name,token_hash,session_key) VALUES (?1,?2,'android','Phone','h',?3)",
+        params![device, staff, sk],
+    )
+    .unwrap();
+    sk
+}
+
+fn queue(dev: &Connection, o: &Op) {
+    dev.execute(
+        "INSERT INTO outbox(op_id,hlc,device_id,staff_id,audience,\"table\",record_id,kind,payload,base_version,server_epoch) \
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
+        params![o.op_id, o.hlc, o.device_id, o.staff_id, o.audience, o.table, o.record_id, o.kind, o.payload.to_string(), o.base_version, o.server_epoch],
+    ).unwrap();
+}
+
+/// Meena (class teacher of cls-5a) marks a student Present on an OPEN sheet.
+fn meena_mark_op(s: &Connection, op_id: &str, device: &str) -> (Op, String) {
+    let mark_id: String = s
+        .query_row(
+            "SELECT m.id FROM attendance_mark m JOIN attendance_sheet sh ON sh.id=m.sheet_id WHERE sh.class_id='cls-5a' AND m.mark='A' LIMIT 1",
+            [], |r| r.get(0),
+        )
         .unwrap();
-    // verify-by-readback: the metadata checksum must match what we uploaded
-    let meta = client.metadata(&tmp.id).unwrap();
-    assert_eq!(meta.checksum, sha256_hex(&body), "readback checksum mismatch");
-    assert_eq!(meta.size, body.len());
-    // only now commit to the final name
-    let hlc = &ops[0].hlc;
-    let final_name = bundle::bundle_filename(hlc, audience, version);
-    client.rename(&tmp.id, &final_name).unwrap();
-    tmp.id
+    s.execute("UPDATE attendance_sheet SET status='draft' WHERE id=(SELECT sheet_id FROM attendance_mark WHERE id=?1)", [&mark_id]).unwrap();
+    let op = Op {
+        op_id: op_id.into(),
+        hlc: format!("0000000000001000{op_id}"),
+        device_id: device.into(),
+        staff_id: "stf-meena".into(),
+        audience: "class:cls-5a".into(),
+        table: "attendance_mark".into(),
+        record_id: mark_id.clone(),
+        kind: "update".into(),
+        payload: serde_json::json!({ "mark": "P" }),
+        base_version: None,
+        server_epoch: 1,
+    };
+    (op, mark_id)
 }
 
 #[test]
-fn same_class_device_sees_provisional_other_class_and_accountant_cannot() {
-    // Server issues the audience keys (persisted, versioned).
-    let mut conn = db::open_in_memory(DBKEY).unwrap();
-    db::run_migrations(&mut conn).unwrap();
-    let (va_key, va_ver) = server_key(&conn, "class:VI-A");
-    let (_vb_key, _vb_ver) = server_key(&conn, "class:VII-B");
-    let (_fin_key, _fin_ver) = server_key(&conn, "finance");
-
-    // Devices and their §11 Drive folders.
-    let drive = FakeDrive::new();
-    let l = drive.provision_school(&[
-        ("teacherA", "devA"), // class VI-A
-        ("teacherB", "devB"), // class VI-A (same class as A)
-        ("teacherC", "devC"), // class VII-B (other class)
-        ("accountant", "devAcc"),
-    ]);
-
-    // Keys each device HOLDS (delivered for its audiences only).
-    // A & B hold class:VI-A; C holds class:VII-B; accountant holds finance.
-    // (No device is handed a key for an audience it isn't in.)
-
-    // --- server off: teacherA (devA) records attendance and pushes it ---------
-    let ops = vec![attendance_op(1, "VI-A"), attendance_op(2, "VI-A")];
-    assert_eq!(ops[0].audience, "class:VI-A"); // audience decided by vidya-core
-    let file_id = push_bundle(&drive, "teacherA", &l.ops["devA"], &va_key, "class:VI-A", va_ver, &ops);
-
-    // --- teacherB (same class:VI-A key) sees it as provisional ----------------
-    let b = drive.as_actor("teacherB");
-    let listed = b.list(&l.ops["devA"]).unwrap();
-    let bundle_file = listed.iter().find(|f| f.name.ends_with(".vop")).expect("B sees the bundle");
-    assert_eq!(bundle_file.id, file_id);
-    // B reads the audience+version from properties WITHOUT downloading
-    assert_eq!(bundle_file.properties.get(PROP_AUDIENCE).unwrap(), "class:VI-A");
-    assert_eq!(bundle_file.properties.get(PROP_KEYVER).unwrap(), &va_ver.to_string());
-    // B holds class:VI-A v1 → can decrypt → provisional ops
-    let body = b.download(&bundle_file.id).unwrap();
-    let got = bundle::open_bundle(&va_key, "class:VI-A", va_ver, &body).unwrap();
-    assert_eq!(got, ops, "same-class device applies the ops provisionally");
-
-    // --- teacherC (other class) can SEE the file but cannot decrypt it --------
-    let c = drive.as_actor("teacherC");
-    let c_body = c.download(&bundle_file.id).unwrap(); // reader on exchange → can fetch bytes
-    // C does not hold the class:VI-A key at all; its own VII-B key cannot open it.
-    assert!(
-        bundle::open_bundle(&_vb_key, "class:VI-A", va_ver, &c_body).is_err(),
-        "other-class device cannot read VI-A attendance"
-    );
-
-    // --- accountant (finance only) also cannot decrypt class bundles ----------
-    let body_acc = drive.as_actor("accountant").download(&bundle_file.id).unwrap();
-    assert!(bundle::open_bundle(&_fin_key, "class:VI-A", va_ver, &body_acc).is_err());
-}
-
-#[test]
-fn tampered_bundle_a_holder_should_read_is_quarantined() {
-    let mut conn = db::open_in_memory(DBKEY).unwrap();
-    db::run_migrations(&mut conn).unwrap();
-    let (va_key, va_ver) = server_key(&conn, "class:VI-A");
+fn a_device_sealed_bundle_is_imported_and_confirmed() {
+    let mut s = server();
+    let sk = register(&s, "dev-phone", "stf-meena", 0x31);
+    let (op, mark_id) = meena_mark_op(&s, "op-d1", "dev-phone");
+    let mut ph = phone();
+    queue(&ph, &op);
 
     let drive = FakeDrive::new();
-    let l = drive.provision_school(&[("teacherA", "devA"), ("teacherB", "devB")]);
+    let l = drive.provision_school(&[("stf-meena", "dev-phone")]);
+    let pushed = exchange::push_outbox(&mut ph, &drive.as_actor("stf-meena"), &l.ops["dev-phone"], "dev-phone", &sk).unwrap();
+    assert_eq!((pushed.bundles, pushed.ops), (1, 1));
+    let files = drive.as_actor(PRINCIPAL).list(&l.ops["dev-phone"]).unwrap();
+    assert_eq!(files[0].properties.get(bundle::PROP_FORMAT).map(String::as_str), Some(bundle::FORMAT_DEVICE_V2));
+    // Re-pushing before the server has picked it up is retry-safe (same name → skipped).
+    let again = exchange::push_outbox(&mut ph, &drive.as_actor("stf-meena"), &l.ops["dev-phone"], "dev-phone", &sk).unwrap();
+    assert_eq!(again.bundles, 0);
 
-    // teacherA uploads a bundle, then a byte is corrupted in transit/at rest.
-    let ops = vec![attendance_op(1, "VI-A")];
-    let mut body = bundle::seal_bundle(&va_key, "class:VI-A", va_ver, &ops).unwrap();
-    let last = body.len() - 1;
-    body[last] ^= 0x01; // tamper
-    let props = bundle::bundle_properties("class:VI-A", va_ver);
-    let a = drive.as_actor("teacherA");
-    let f = a.create(&l.ops["devA"], "x.vop", &body, &props).unwrap();
-
-    // teacherB HOLDS the class:VI-A key and the properties say VI-A v1, so it
-    // must be able to open it — a failure here is tampering → quarantine.
-    let b = drive.as_actor("teacherB");
-    let meta = b.metadata(&f.id).unwrap();
-    assert_eq!(meta.properties.get(PROP_AUDIENCE).unwrap(), "class:VI-A"); // addressed to me
-    let fetched = b.download(&f.id).unwrap();
-    assert!(
-        bundle::open_bundle(&va_key, "class:VI-A", va_ver, &fetched).is_err(),
-        "tampered bundle fails AEAD → quarantine, not applied"
-    );
+    let out = exchange::import_all(&mut s, &drive.as_actor(PRINCIPAL), &l.exchange).unwrap();
+    assert_eq!((out.confirmed, out.quarantined), (1, 0));
+    let mark: String = s.query_row("SELECT mark FROM attendance_mark WHERE id=?1", [&mark_id], |r| r.get(0)).unwrap();
+    assert_eq!(mark, "P");
+    assert_eq!(out.acks["dev-phone"].results[0].op_id, "op-d1");
 }
 
 #[test]
-fn rotation_lets_the_server_still_read_old_bundles() {
-    // Assignment change rotates the class key; a bundle written under v1 must
-    // still be openable by the server (which keeps all versions) — §8.8.
-    let mut conn = db::open_in_memory(DBKEY).unwrap();
-    db::run_migrations(&mut conn).unwrap();
-    let (v1_key, _) = server_key(&conn, "class:VI-A");
-    let ops = vec![attendance_op(9, "VI-A")];
-    let body = bundle::seal_bundle(&v1_key, "class:VI-A", 1, &ops).unwrap();
+fn a_peer_cannot_open_another_devices_bundle() {
+    let s = server();
+    let sk_a = register(&s, "dev-a", "stf-meena", 0x41);
+    let sk_b = register(&s, "dev-b", "stf-meena", 0x42);
+    let (op, _) = meena_mark_op(&s, "op-p1", "dev-a");
+    let body = bundle::seal_device_bundle(&seal::derive_keys(&sk_a).unwrap().c2s, "dev-a", std::slice::from_ref(&op)).unwrap();
+    // The author's own key opens it…
+    assert!(bundle::open_device_bundle(&seal::derive_keys(&sk_a).unwrap().c2s, "dev-a", &body).is_ok());
+    // …a peer's key does not, in either direction, nor does any audience key.
+    let kb = seal::derive_keys(&sk_b).unwrap();
+    assert!(bundle::open_device_bundle(&kb.c2s, "dev-a", &body).is_err());
+    assert!(bundle::open_device_bundle(&kb.s2c, "dev-a", &body).is_err());
+    assert!(bundle::open_bundle(&[0x22; 32], "class:cls-5a", 1, &body).is_err());
+    // A device bundle can only carry the device's own ops.
+    let mut foreign = op.clone();
+    foreign.device_id = "dev-b".into();
+    assert!(bundle::seal_device_bundle(&seal::derive_keys(&sk_a).unwrap().c2s, "dev-a", &[foreign]).is_err());
+}
 
-    // rotate (new teacher assigned) → v2 is now current, v1 retained.
-    let v2 = keys::rotate(&conn, "class:VI-A").unwrap();
-    assert_eq!(v2.version, 2);
-    // server opens the old v1 bundle using the retained v1 key
-    let v1_again = keys::key_bytes(&conn, "class:VI-A", 1).unwrap().unwrap();
-    let got = bundle::open_bundle(&v1_again, "class:VI-A", 1, &body).unwrap();
-    assert_eq!(got, ops);
-    // and the current key is a different, newer version
-    assert_ne!(keys::key_bytes(&conn, "class:VI-A", 2).unwrap().unwrap(), v1_key);
+#[test]
+fn forged_moved_legacy_and_revoked_bundles_are_quarantined() {
+    let mut s = server();
+    let sk = register(&s, "dev-phone", "stf-meena", 0x51);
+    let sk_other = register(&s, "dev-other", "stf-meena", 0x52);
+    let _ = register(&s, "dev-revoked", "stf-meena", 0x53);
+    s.execute("UPDATE device SET revoked_at='2026-09-01T00:00:00Z' WHERE id='dev-revoked'", []).unwrap();
+    let (op, mark_id) = meena_mark_op(&s, "op-q1", "dev-phone");
+
+    let drive = FakeDrive::new();
+    let l = drive.provision_school(&[("stf-meena", "dev-phone"), ("stf-meena", "dev-other"), ("stf-meena", "dev-revoked")]);
+    // Everyone signs in as the one school account in reality, so an attacker can write
+    // into any folder — model that with the owner account.
+    let acct = drive.as_actor(PRINCIPAL);
+    let props = bundle::device_bundle_properties();
+
+    // (a) sealed with a key that isn't dev-phone's, dropped into dev-phone's folder.
+    let wrong = bundle::seal_device_bundle(&[0x99; 32], "dev-phone", std::slice::from_ref(&op)).unwrap();
+    acct.create(&l.ops["dev-phone"], "a-dev-v2.vop", &wrong, &props).unwrap();
+    // (b) dev-other's genuine bundle (claiming dev-phone's ops is impossible) moved
+    //     into dev-phone's folder: the AAD binds dev-other, so it won't open there.
+    let mut other_op = op.clone();
+    other_op.device_id = "dev-other".into();
+    other_op.op_id = "op-q2".into();
+    let moved = bundle::seal_device_bundle(&seal::derive_keys(&sk_other).unwrap().c2s, "dev-other", &[other_op]).unwrap();
+    acct.create(&l.ops["dev-phone"], "b-dev-v2.vop", &moved, &props).unwrap();
+    // (c) a tampered genuine bundle.
+    let mut tampered = bundle::seal_device_bundle(&seal::derive_keys(&sk).unwrap().c2s, "dev-phone", std::slice::from_ref(&op)).unwrap();
+    let last = tampered.len() - 1;
+    tampered[last] ^= 0x01;
+    acct.create(&l.ops["dev-phone"], "c-dev-v2.vop", &tampered, &props).unwrap();
+    // (d) a legacy audience-sealed bundle (authorship unprovable).
+    let legacy = bundle::seal_bundle(&[0x22; 32], "class:cls-5a", 1, std::slice::from_ref(&op)).unwrap();
+    acct.create(&l.ops["dev-phone"], "d-class-v1.vop", &legacy, &bundle::bundle_properties("class:cls-5a", 1)).unwrap();
+    // (e) a revoked device's otherwise-valid bundle.
+    let mut rev_op = op.clone();
+    rev_op.device_id = "dev-revoked".into();
+    rev_op.op_id = "op-q3".into();
+    let rev = bundle::seal_device_bundle(&seal::derive_keys(&STANDARD.encode([0x53u8; 32])).unwrap().c2s, "dev-revoked", &[rev_op]).unwrap();
+    acct.create(&l.ops["dev-revoked"], "e-dev-v2.vop", &rev, &props).unwrap();
+
+    let out = exchange::import_all(&mut s, &acct, &l.exchange).unwrap();
+    assert_eq!((out.confirmed, out.quarantined), (0, 5), "every forged/moved/legacy/revoked bundle quarantined");
+    let mark: String = s.query_row("SELECT mark FROM attendance_mark WHERE id=?1", [&mark_id], |r| r.get(0)).unwrap();
+    assert_eq!(mark, "A", "nothing applied");
 }
 
 #[test]
@@ -237,125 +216,11 @@ fn actor_writes_are_confined_to_their_own_ops_folder() {
     );
 }
 
+
+
 // Access is part of the public sharing API used by Step 2 provisioning; touch it
 // so a compile-time break in that enum surfaces here too.
 #[allow(dead_code)]
 fn _access_is_ordered() {
     assert!(Access::Owner > Access::Writer && Access::Writer > Access::Reader);
-}
-
-// ============================ Step 5 — device provisional pull ================
-
-const FIN_KEY: [u8; 32] = [0x11; 32];
-const CLASS_KEY: [u8; 32] = [0x22; 32];
-
-fn phone() -> Connection {
-    let mut c = db::open_in_memory(DBKEY).unwrap();
-    db::run_migrations(&mut c).unwrap();
-    c
-}
-
-fn queue(dev: &Connection, o: &Op) {
-    dev.execute(
-        "INSERT INTO outbox(op_id,hlc,device_id,staff_id,audience,\"table\",record_id,kind,payload,base_version,server_epoch) \
-         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11)",
-        params![o.op_id, o.hlc, o.device_id, o.staff_id, o.audience, o.table, o.record_id, o.kind, o.payload.to_string(), o.base_version, o.server_epoch],
-    ).unwrap();
-}
-
-fn student_op(id: &str, device: &str, name: &str) -> Op {
-    Op {
-        op_id: format!("op-{id}"),
-        hlc: format!("00000000000000000001{id}"),
-        device_id: device.into(),
-        staff_id: "accA".into(),
-        audience: "finance".into(),
-        table: "student".into(),
-        record_id: id.into(),
-        kind: "insert".into(),
-        payload: serde_json::json!({ "name": name, "status": "active" }),
-        base_version: None,
-        server_epoch: 1,
-    }
-}
-
-fn held(audience: &str, key: [u8; 32]) -> HeldKeys {
-    let mut h = HeldKeys::new();
-    h.insert((audience.to_string(), 1), key);
-    h
-}
-
-/// DONE-MEANS phone side: phone A (finance) shares a student to Drive → phone B
-/// (finance) sees it PROVISIONALLY; phone C (a class device) cannot.
-#[test]
-fn phone_b_sees_provisional_phone_c_cannot() {
-    let drive = FakeDrive::new();
-    let l = drive.provision_school(&[("accA", "devA"), ("accB", "devB"), ("teacherC", "devC")]);
-
-    // Phone A (accountant) records a student while the server is off, shares it.
-    let mut a = phone();
-    queue(&a, &student_op("stu-p5", "devA", "Provisional Priya"));
-    exchange::push_outbox(&mut a, &drive.as_actor("accA"), &l.ops["devA"], &held("finance", FIN_KEY)).unwrap();
-
-    // Phone B (also finance) pulls → provisional row, marked shared_drive.
-    let mut b = phone();
-    let out = pull::pull_provisional(&mut b, &drive.as_actor("accB"), &l.exchange, "devB", &held("finance", FIN_KEY)).unwrap();
-    assert_eq!((out.applied, out.bundles_seen, out.quarantined), (1, 1, 0));
-    let (name, state): (String, String) = b
-        .query_row("SELECT name, sync_state FROM student WHERE id='stu-p5'", [], |r| Ok((r.get(0)?, r.get(1)?)))
-        .unwrap();
-    assert_eq!(name, "Provisional Priya");
-    assert_eq!(state, "shared_drive", "marked 'Shared through school Drive · waiting for school'");
-    assert_eq!(pull::PROVISIONAL_STATUS, "Shared through school Drive · waiting for school");
-
-    // A second pull is a no-op (cursor per folder).
-    let again = pull::pull_provisional(&mut b, &drive.as_actor("accB"), &l.exchange, "devB", &held("finance", FIN_KEY)).unwrap();
-    assert_eq!((again.applied, again.bundles_seen), (0, 0));
-
-    // Phone C holds only a class key → the finance bundle is "not for me".
-    let mut c = phone();
-    let cout = pull::pull_provisional(&mut c, &drive.as_actor("teacherC"), &l.exchange, "devC", &held("class:cls-1", CLASS_KEY)).unwrap();
-    assert_eq!((cout.applied, cout.skipped_not_for_me), (0, 1));
-    let n: i64 = c.query_row("SELECT COUNT(*) FROM student WHERE id='stu-p5'", [], |r| r.get(0)).unwrap();
-    assert_eq!(n, 0, "other-audience device never sees the row");
-}
-
-/// Step 5: a provisional pull never overwrites the device's own unsent change.
-#[test]
-fn pull_never_overwrites_own_unsent() {
-    let drive = FakeDrive::new();
-    let l = drive.provision_school(&[("accA", "devA"), ("accB", "devB")]);
-    let mut a = phone();
-    queue(&a, &student_op("stu-shared", "devA", "From A"));
-    exchange::push_outbox(&mut a, &drive.as_actor("accA"), &l.ops["devA"], &held("finance", FIN_KEY)).unwrap();
-
-    // Phone B has its OWN unsent edit to the same record (an outbox op).
-    let mut b = phone();
-    queue(&b, &student_op("stu-shared", "devB", "My local edit"));
-    let out = pull::pull_provisional(&mut b, &drive.as_actor("accB"), &l.exchange, "devB", &held("finance", FIN_KEY)).unwrap();
-    assert_eq!((out.applied, out.kept_local), (0, 1), "own unsent kept, remote flagged not applied");
-    let n: i64 = b.query_row("SELECT COUNT(*) FROM student WHERE id='stu-shared'", [], |r| r.get(0)).unwrap();
-    assert_eq!(n, 0, "the remote value did not overwrite the local unsent change");
-}
-
-/// Step 5: a bundle the device holds the key for but that fails AEAD → quarantined.
-#[test]
-fn pull_quarantines_a_tampered_bundle() {
-    let drive = FakeDrive::new();
-    let l = drive.provision_school(&[("accA", "devA"), ("accB", "devB")]);
-    // Put a tampered finance bundle in A's folder (correct properties).
-    let o = student_op("stu-bad", "devA", "Tampered");
-    let mut body = bundle::seal_bundle(&FIN_KEY, "finance", 1, std::slice::from_ref(&o)).unwrap();
-    let last = body.len() - 1;
-    body[last] ^= 0x01;
-    drive
-        .as_actor("accA")
-        .create(&l.ops["devA"], "bad.vop", &body, &bundle::bundle_properties("finance", 1))
-        .unwrap();
-
-    let mut b = phone();
-    let out = pull::pull_provisional(&mut b, &drive.as_actor("accB"), &l.exchange, "devB", &held("finance", FIN_KEY)).unwrap();
-    assert_eq!((out.quarantined, out.applied), (1, 0));
-    let q: i64 = b.query_row("SELECT COUNT(*) FROM drive_state WHERE key LIKE 'quarantine:%'", [], |r| r.get(0)).unwrap();
-    assert_eq!(q, 1, "the tampered bundle is recorded for the Principal");
 }

@@ -27,6 +27,37 @@ const PACK_BUDGET_BYTES: usize = MAX_BUNDLE_BYTES - 1_024;
 /// Property keys carried on the Drive file (see module note).
 pub const PROP_AUDIENCE: &str = "vidya_audience";
 pub const PROP_KEYVER: &str = "vidya_keyver";
+/// Drive property naming the bundle format; uploads are `device-v2` (sealed with
+/// the uploading device's own session-derived c2s key).
+pub const PROP_FORMAT: &str = "vidya_format";
+pub const FORMAT_DEVICE_V2: &str = "device-v2";
+
+/// Filename of a device-sealed bundle (format v2).
+pub fn device_bundle_filename(hlc: &str) -> String {
+    format!("{hlc}-dev-v2.vop")
+}
+
+/// Drive properties of a device-sealed bundle.
+pub fn device_bundle_properties() -> BTreeMap<String, String> {
+    BTreeMap::from([(PROP_FORMAT.to_string(), FORMAT_DEVICE_V2.to_string())])
+}
+
+/// Seal a device's own ops (format v2) under its c2s key. Every op must name
+/// `device_id` as its device.
+pub fn seal_device_bundle(c2s: &[u8; 32], device_id: &str, ops: &[Op]) -> Result<Vec<u8>, BundleError> {
+    if ops.iter().any(|o| o.device_id != device_id) {
+        return Err(BundleError::ForeignDevice);
+    }
+    let json = serde_json::to_vec(ops).map_err(|e| BundleError::Json(e.to_string()))?;
+    Ok(seal::seal(c2s, &vidya_core::seal::device_bundle_aad(device_id), &json))
+}
+
+/// Open a device-sealed bundle with that device's c2s key. Success proves the device
+/// (or the school PC, the only other holder of its session key) wrote it.
+pub fn open_device_bundle(c2s: &[u8; 32], device_id: &str, body: &[u8]) -> Result<Vec<Op>, BundleError> {
+    let json = seal::open(c2s, &vidya_core::seal::device_bundle_aad(device_id), body).map_err(BundleError::Seal)?;
+    serde_json::from_slice(&json).map_err(|e| BundleError::Json(e.to_string()))
+}
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum BundleError {
@@ -38,6 +69,8 @@ pub enum BundleError {
     OpTooLarge,
     #[error("mixed audiences in one bundle")]
     MixedAudience,
+    #[error("a device bundle may only carry that device's own ops")]
+    ForeignDevice,
 }
 
 /// Associated data bound into the bundle AEAD (audience + key version). Shared with

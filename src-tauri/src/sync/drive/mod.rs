@@ -27,7 +27,6 @@ pub mod join;
 pub mod keys;
 pub mod live;
 pub mod oauth;
-pub mod pull;
 
 use std::collections::BTreeMap;
 

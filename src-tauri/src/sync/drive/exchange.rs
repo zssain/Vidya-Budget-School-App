@@ -14,10 +14,9 @@
 
 use std::collections::BTreeMap;
 
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 
-use super::bundle::{self, PROP_AUDIENCE, PROP_KEYVER};
-use super::keys;
+use super::bundle::{self, FORMAT_DEVICE_V2, PROP_FORMAT};
 use super::{DriveApi, DriveError};
 use crate::sync::apply::{apply_client_op, OpAuth};
 use crate::sync::protocol::{Op, OpResult, OpStatus};
@@ -46,14 +45,6 @@ fn is_synced(table: &str) -> bool {
     )
 }
 
-/// The current (highest) version this device holds for `audience`, if any.
-fn current_version(held: &HeldKeys, audience: &str) -> Option<(i64, [u8; 32])> {
-    held.iter()
-        .filter(|((a, _), _)| a == audience)
-        .max_by_key(|((_, v), _)| *v)
-        .map(|((_, v), k)| (*v, *k))
-}
-
 // ================================================================ push =========
 
 #[derive(Debug, Default, PartialEq, Eq)]
@@ -63,51 +54,43 @@ pub struct PushOutcome {
     pub files: Vec<String>,
 }
 
-/// Read the device's outbox, seal each audience's ops into `.vop` bundles, and
-/// upload them to `ops_folder`.
+/// Read the device's outbox, seal it into device bundles (format v2: this device's
+/// own c2s key from `session_key_b64`, AAD bound to `device_id`) and upload them to
+/// `ops_folder`. No audience key is needed to upload: a teacher can submit a leave
+/// request or an admin-audience op without holding the admin key, and the school PC
+/// can authenticate exactly which device wrote each bundle.
 pub fn push_outbox(
     conn: &mut Connection,
     drive: &impl DriveApi,
     ops_folder: &str,
-    held: &HeldKeys,
+    device_id: &str,
+    session_key_b64: &str,
 ) -> Result<PushOutcome, ExchangeError> {
-    let ops = read_outbox(conn)?;
-    let mut by_aud: BTreeMap<String, Vec<Op>> = BTreeMap::new();
-    for op in ops {
-        by_aud.entry(op.audience.clone()).or_default().push(op);
-    }
-
+    let keys = seal::derive_keys(session_key_b64).map_err(|_| ExchangeError::Bundle("bad session key".into()))?;
+    let ops: Vec<Op> = read_outbox(conn)?.into_iter().filter(|o| o.device_id == device_id).collect();
     let existing: Vec<String> = drive.list(ops_folder)?.into_iter().map(|f| f.name).collect();
     let mut out = PushOutcome::default();
-
-    for (audience, group) in by_aud {
-        let (version, key) =
-            current_version(held, &audience).ok_or_else(|| ExchangeError::NoKey(audience.clone()))?;
-        let chunks = bundle::chunk_ops(&group).map_err(|e| ExchangeError::Bundle(format!("{e}")))?;
-        for chunk in chunks {
-            let name = bundle::bundle_filename(&chunk[0].hlc, &audience, version);
-            if existing.contains(&name) {
-                continue; // already uploaded — retry-safe (same content → same name)
-            }
-            let body = bundle::seal_bundle(&key, &audience, version, &chunk)
-                .map_err(|e| ExchangeError::Bundle(format!("{e}")))?;
-            let props = bundle::bundle_properties(&audience, version);
-            // temp name so a half-written file is never seen, then verify, then commit
-            let tmp = drive.create(ops_folder, &format!(".tmp-{}", chunk[0].op_id), &body, &props)?;
-            // verify-by-readback (portable across fake + real Drive; no md5 dep)
-            if drive.download(&tmp.id)? != body {
-                drive.delete(&tmp.id).ok();
-                return Err(ExchangeError::Bundle("readback mismatch".into()));
-            }
-            drive.rename(&tmp.id, &name)?;
-            // only now: mark the domain rows shared_drive
-            for op in &chunk {
-                mark_shared(conn, op)?;
-            }
-            out.bundles += 1;
-            out.ops += chunk.len();
-            out.files.push(name);
+    let chunks = bundle::chunk_ops(&ops).map_err(|e| ExchangeError::Bundle(format!("{e}")))?;
+    for chunk in chunks {
+        let name = bundle::device_bundle_filename(&chunk[0].hlc);
+        if existing.contains(&name) {
+            continue; // already uploaded — retry-safe
         }
+        let body = bundle::seal_device_bundle(&keys.c2s, device_id, &chunk).map_err(|e| ExchangeError::Bundle(format!("{e}")))?;
+        let props = bundle::device_bundle_properties();
+        // temp name so a half-written file is never seen, then verify, then commit
+        let tmp = drive.create(ops_folder, &format!(".tmp-{}", chunk[0].op_id), &body, &props)?;
+        if drive.download(&tmp.id)? != body {
+            drive.delete(&tmp.id).ok();
+            return Err(ExchangeError::Bundle("readback mismatch".into()));
+        }
+        drive.rename(&tmp.id, &name)?;
+        for op in &chunk {
+            mark_shared(conn, op)?;
+        }
+        out.bundles += 1;
+        out.ops += chunk.len();
+        out.files.push(name);
     }
     Ok(out)
 }
@@ -190,30 +173,52 @@ pub fn import_all(
         .filter_map(|f| f.name.strip_prefix("ops-").map(|d| (f.id.clone(), d.to_string())))
         .collect();
 
-    // 2) gather (device, bundle file, decrypted ops) — quarantine AEAD failures
+    // 2) gather (device, bundle file, decrypted ops). A bundle is accepted only if it
+    //    is format device-v2 AND opens with the session key of the (live) device that
+    //    owns the folder — that proves authorship. Anything else is quarantined: a
+    //    legacy audience-sealed bundle, an unknown/revoked device, a tampered body.
     struct Pending {
         device: String,
+        staff: String,
         folder: String,
         file_id: String,
-        audience: String,
         ops: Vec<Op>,
     }
     let mut pending: Vec<Pending> = Vec::new();
     for (folder_id, device) in &ops_folders {
+        let live: Option<(String, Option<String>)> = conn
+            .query_row(
+                "SELECT staff_id, session_key FROM device WHERE id=?1 AND revoked_at IS NULL",
+                params![device],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()?;
+        let device_keys = live
+            .as_ref()
+            .and_then(|(_, sk)| sk.as_deref())
+            .and_then(|sk| seal::derive_keys(sk).ok());
         for f in drive.list(folder_id)? {
             if f.is_folder || !f.name.ends_with(".vop") {
                 continue;
             }
             out.bundles += 1;
-            let audience = f.properties.get(PROP_AUDIENCE).cloned().unwrap_or_default();
-            let version: i64 = f.properties.get(PROP_KEYVER).and_then(|v| v.parse().ok()).unwrap_or(0);
-            let Some(key) = keys::key_bytes(conn, &audience, version)? else {
-                out.quarantined += 1; // server has no such key → cannot read
+            let (Some((staff, _)), Some(k)) = (&live, &device_keys) else {
+                out.quarantined += 1; // unknown / revoked device, or no session key
                 continue;
             };
+            if f.properties.get(PROP_FORMAT).map(String::as_str) != Some(FORMAT_DEVICE_V2) {
+                out.quarantined += 1; // legacy audience-sealed bundle: authorship unprovable
+                continue;
+            }
             let body = drive.download(&f.id)?;
-            match bundle::open_bundle(&key, &audience, version, &body) {
-                Ok(ops) => pending.push(Pending { device: device.clone(), folder: folder_id.clone(), file_id: f.id, audience: audience.clone(), ops }),
+            match bundle::open_device_bundle(&k.c2s, device, &body) {
+                Ok(ops) => pending.push(Pending {
+                    device: device.clone(),
+                    staff: staff.clone(),
+                    folder: folder_id.clone(),
+                    file_id: f.id,
+                    ops,
+                }),
                 Err(_) => out.quarantined += 1, // tampered / wrong key → not applied
             }
         }
@@ -228,34 +233,10 @@ pub fn import_all(
     }
     all.sort_by(|a, b| a.1.hlc.cmp(&b.1.hlc));
     for (src, op) in &all {
-        // The bundle's author is the device whose ops-<device> folder held it; its
-        // staff comes from the server's device row, never from the op. An op must
-        // also be sealed for the audience it claims. (Folder placement is not yet
-        // cryptographic proof of authorship — per-device bundle authentication is
-        // the sync-protocol-v2 follow-up.)
+        // Authorship was proven by the device key that opened the bundle; the staff
+        // comes from the server's device row, never from the op.
         let p = &pending[*src];
-        let staff: Option<String> = conn
-            .query_row("SELECT staff_id FROM device WHERE id=?1 AND revoked_at IS NULL", params![p.device], |r| r.get(0))
-            .ok();
-        let result = match staff {
-            Some(staff_id) if op.audience == p.audience => {
-                apply_client_op(conn, &OpAuth { device_id: &p.device, staff_id: &staff_id }, op)?
-            }
-            Some(_) => OpResult {
-                op_id: op.op_id.clone(),
-                status: OpStatus::Rejected,
-                server_seq: None,
-                record: None,
-                reason_code: Some(crate::sync::protocol::codes::FORBIDDEN.into()),
-            },
-            None => OpResult {
-                op_id: op.op_id.clone(),
-                status: OpStatus::Rejected,
-                server_seq: None,
-                record: None,
-                reason_code: Some(crate::sync::protocol::codes::DEVICE_REVOKED_OR_UNKNOWN.into()),
-            },
-        };
+        let result = apply_client_op(conn, &OpAuth { device_id: &p.device, staff_id: &p.staff }, op)?;
         match result.status {
             OpStatus::Confirmed => out.confirmed += 1,
             OpStatus::Flagged => out.flagged += 1,

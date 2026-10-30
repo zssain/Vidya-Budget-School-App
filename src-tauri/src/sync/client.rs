@@ -259,31 +259,20 @@ pub async fn client_sync_tick(conn: &mut Connection) -> Result<String, String> {
     Ok(label.to_string())
 }
 
-/// One Drive sync pass as a CLIENT (§8.3 route 3): push our outbox as sealed `.vop`
-/// bundles, pull peers' bundles for audiences we hold a key for (provisional apply),
-/// and apply the server's ack (dropping confirmed ops from the outbox). This is the
+/// One Drive sync pass as a CLIENT (§8.3 route 3): push our outbox as device-sealed
+/// `.vop` bundles (format v2) and settle the server's ack (confirmed → done, rejected
+/// → Inbox). This is the
 /// off-LAN route — used when the school server is unreachable but the internet + a
 /// connected Google Drive are. SYNC — the Drive client blocks internally, so call from
 /// a blocking context. Composes the already-built exchange engine; the real Drive
 /// round-trip is device-verified.
 pub fn client_drive_tick(conn: &mut Connection) -> Result<(), String> {
-    use crate::sync::drive::{exchange, google::GoogleDrive, oauth, pull, DriveApi};
-    use base64::Engine;
+    use crate::sync::drive::{exchange, google::GoogleDrive, oauth, DriveApi};
 
     if !oauth::is_connected(conn) {
         return Ok(()); // Drive not connected on this device — LAN only
     }
     let id = load(conn).ok_or("this device has not joined a school")?;
-
-    // The audience keys this device holds (audience+version → 32-byte key), from join.
-    let mut held: exchange::HeldKeys = std::collections::BTreeMap::new();
-    for ak in &id.audience_keys {
-        if let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(&ak.key_b64) {
-            if let Ok(k) = <[u8; 32]>::try_from(bytes.as_slice()) {
-                held.insert((ak.audience.clone(), ak.version), k);
-            }
-        }
-    }
 
     // Refresh the access token with the client id that minted it (Android vs desktop).
     #[cfg(target_os = "android")]
@@ -307,12 +296,16 @@ pub fn client_drive_tick(conn: &mut Connection) -> Result<(), String> {
     let ops_folder = drive
         .ensure_folder(&exchange_folder, &format!("ops-{}", id.device_id))
         .map_err(|e| format!("{e:?}"))?;
-    exchange::push_outbox(conn, &drive, &ops_folder, &held).map_err(|e| format!("{e:?}"))?;
-    pull::pull_provisional(conn, &drive, &exchange_folder, &id.device_id, &held).map_err(|e| format!("{e:?}"))?;
+    // Uploads are sealed with this device's own key (format v2) — no audience key is
+    // needed and the school PC can prove who wrote them. Peers' bundles are no longer
+    // readable by other devices (no provisional peer apply); changes arrive from the
+    // school PC.
+    exchange::push_outbox(conn, &drive, &ops_folder, &id.device_id, &id.session_key).map_err(|e| format!("{e:?}"))?;
     let acks_folder = drive.ensure_folder(&exchange_folder, "acks").map_err(|e| format!("{e:?}"))?;
     if let Some(ack) = exchange::read_ack(&drive, &acks_folder, &id.device_id, &id.session_key).map_err(|e| format!("{e:?}"))? {
+        // Confirmed → done; rejected → Inbox item (never silently dropped).
         for res in &ack.results {
-            let _ = conn.execute("DELETE FROM outbox WHERE op_id=?1", rusqlite::params![res.op_id]);
+            crate::sync::engine::settle_op_result(conn, res);
         }
     }
     Ok(())

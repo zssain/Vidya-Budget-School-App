@@ -13,6 +13,7 @@ export function hlc_skew(local_wall_ms: number, remote_wall_ms: number): boolean
 export function bundle_aad(audience: string, key_version: number): Uint8Array
 export function relay_aad(method: string, path: string, device_id: string, server_epoch: number): Uint8Array
 export function derive_direction_keys(session_key_b64: string): Uint8Array
+export function device_bundle_aad(device_id: string): Uint8Array
 export function join_v2_proof(secret: Uint8Array, invite_id: string, request_id: string, device_name: string, platform: string): Uint8Array
 export function join_v2_response_key(secret: Uint8Array, request_id: string): Uint8Array
 export function join_v2_aad(invite_id: string, request_id: string, school_id: string): Uint8Array
