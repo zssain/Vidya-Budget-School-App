@@ -13,10 +13,25 @@ const KEY_LOCKED_UNTIL = 'pin_locked_until'
 const AUTO_LOCK_MS = 5 * 60 * 1000
 
 let unlocked = false
+/** Wall-clock ms of the last real user input while unlocked (idle auto-lock). */
+let lastActivity = 0
 
-/** True while the app is unlocked this session. */
+/** True when an unlocked session's last input is older than the auto-lock limit.
+ *  Timestamp-based (not a timer), so a suspended/backgrounded iPhone still locks.
+ *  A clock that jumped backwards fails closed. Pure → unit-tested. */
+export function idleExpired(lastActivityMs: number, nowMs: number): boolean {
+  return nowMs - lastActivityMs > AUTO_LOCK_MS || lastActivityMs > nowMs + 60_000
+}
+
+/** True while the app is unlocked this session (and not idle past the limit). */
 export function isUnlocked(): boolean {
+  if (unlocked && idleExpired(lastActivity, Date.now())) unlocked = false
   return unlocked
+}
+
+/** Record real user input: pushes the idle deadline out while still unlocked. */
+export function touch(): void {
+  if (isUnlocked()) lastActivity = Date.now()
 }
 
 /** True once a PIN has been created on this device. */
@@ -24,13 +39,16 @@ export async function hasPin(): Promise<boolean> {
   return (await kvGet<string>(KEY_PHC)) != null
 }
 
-/** Create the PIN (once, at join/first run). Leaves the app unlocked. */
+/** Create the PIN (once, at join/first run). Leaves the app unlocked. Refused once a
+ *  PIN exists — otherwise anyone holding a locked phone could just set a new one. */
 export async function createPin(pin: string): Promise<void> {
+  if (await hasPin()) throw new Error('pin_already_set')
   await initWasm()
   await kvPut(KEY_PHC, pinHash(pin))
   await kvPut(KEY_FAIL, 0)
   await kvPut(KEY_LOCKED_UNTIL, null)
   unlocked = true
+  lastActivity = Date.now()
   // Ask the browser to keep our data (§18, spike Q6): a persisted origin is
   // excluded from storage-pressure eviction, and Safari 17+/iOS grants persistence
   // heuristically for a Home-Screen web app. Best-effort — a `false` or unsupported
@@ -64,6 +82,7 @@ export async function unlock(pin: string): Promise<UnlockResult> {
     await kvPut(KEY_FAIL, 0)
     await kvPut(KEY_LOCKED_UNTIL, null)
     unlocked = true
+    lastActivity = Date.now()
     return { ok: true }
   }
   const fail = ((await kvGet<number>(KEY_FAIL)) ?? 0) + 1
@@ -79,15 +98,16 @@ export function lock(): void {
   unlocked = false
 }
 
-/** Install the 5-minute auto-lock: lock when the app returns after being hidden. */
-export function installAutoLock(): void {
+/** Install the 5-minute auto-lock: any real input pushes the deadline out; time
+ *  hidden or asleep counts toward it (checked on every command and on return). */
+export function installAutoLock(onLocked: () => void): void {
   if (typeof document === 'undefined') return
-  let hiddenAt = 0
-  document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'hidden') {
-      hiddenAt = Date.now()
-    } else if (hiddenAt && Date.now() - hiddenAt > AUTO_LOCK_MS) {
-      lock()
-    }
-  })
+  for (const ev of ['pointerdown', 'keydown', 'touchstart']) {
+    document.addEventListener(ev, touch, { passive: true, capture: true })
+  }
+  const check = () => {
+    if (unlocked && !isUnlocked()) onLocked()
+  }
+  document.addEventListener('visibilitychange', check)
+  setInterval(check, 15_000)
 }

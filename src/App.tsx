@@ -15,6 +15,8 @@ import { isWeb } from '@/lib/platform'
 import { GoogleDrive } from '@/lib/web/drive/google'
 import { startSync } from '@/lib/web/drive/sync'
 import PinUnlockScreen from '@/screens/shared/PinUnlockScreen'
+import DevicePinSetupScreen from '@/screens/shared/DevicePinSetupScreen'
+import { installSessionWatcher } from '@/lib/session'
 import ApprovalsScreen from '@/screens/desktop/ApprovalsScreen'
 import StaffAccessScreen from '@/screens/desktop/StaffAccessScreen'
 import CircularsScreen from '@/screens/desktop/CircularsScreen'
@@ -99,7 +101,10 @@ export default function App() {
 
   // Load app_state once (except on the DEV fixture routes used by fidelity).
   useEffect(() => {
-    if (!isDevRoute) void refreshAppState()
+    if (!isDevRoute) {
+      void refreshAppState()
+      installSessionWatcher()
+    }
   }, [isDevRoute])
 
   // On the PWA, run the foreground Drive sync loop whenever the app is unlocked —
@@ -200,6 +205,8 @@ export default function App() {
       return <SetupWizard startStep={route.step} />
     case 'pin':
       return <PinGate />
+    case 'pin_setup':
+      return <DevicePinSetupScreen staff={route.staff} />
     case 'db_key_missing':
       return <StatusScreen messageKey="error.DB_KEY_MISSING" />
     case 'needs_rejoin':

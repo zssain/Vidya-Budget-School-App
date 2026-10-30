@@ -27,12 +27,11 @@ import '@/styles/app.css'
 import './ios.css' // iPhone-only tweaks: 16px form fields (no focus zoom), tap highlight
 import { loadAccent } from '@/lib/theme'
 import { loadLang } from '@/lib/i18n'
-import { installAutoLock } from '@/lib/web/lock'
 import { registerServiceWorker } from './sw-register'
 
 loadAccent()
 loadLang()
-installAutoLock() // auto-lock after 5 min hidden (§9)
+// Auto-lock (§9) is installed by App via lib/session.ts (idle + hidden, 5 min).
 registerServiceWorker() // offline shell + "new version — Reload" (Step 6)
 
 ReactDOM.createRoot(document.getElementById('root')!).render(

@@ -4,10 +4,11 @@
 //!   1. the server builds a role-scoped snapshot for the joining teacher (`scope::snapshot`),
 //!   2. a fresh client applies it (`engine::apply_snapshot`) — the school/session/classes/…
 //!      that setup created with direct writes (never op-logged) land locally, and
-//!   3. with a stored client identity, `state::compute` reports `Unlocked{teacher}` so the
-//!      app routes to the teacher home.
+//!   3. with a stored client identity the device asks for its OWN local PIN (`PinSetup`),
+//!      then starts `Locked` on every launch and unlocks only with that PIN.
+//!
 //! If any link breaks (snapshot omits the school row, apply drops columns, compute ignores
-//! the client identity), a joined device silently falls back to welcome — this is the guard.
+//! the client identity, or a joined device is auto-signed-in) this test fails.
 
 use time::OffsetDateTime;
 
@@ -73,25 +74,33 @@ fn joined_client_bootstraps_data_and_reaches_the_teacher_home() {
     let class_rows: i64 = client.query_row("SELECT COUNT(*) FROM class", [], |r| r.get(0)).unwrap();
     assert!(class_rows >= 1, "the teacher's classes landed locally");
 
-    // Persist the client identity (as join does) → compute now reports the teacher home.
+    // Persist the client identity (as join does) → the device must first create its own PIN.
     client::store(&client, &identity_for("stf-meena")).unwrap();
     match compute(&client, None).unwrap().state {
+        AppState::PinSetup { staff } => assert_eq!(staff.id, "stf-meena"),
+        other => panic!("joined client must ask for a device PIN, got {other:?}"),
+    }
+    // With a PIN set, a cold start is Locked; the joined teacher's session unlocks it.
+    vidya_lib::security::device_pin::create(&client, "4821").unwrap();
+    assert!(matches!(compute(&client, None).unwrap().state, AppState::Locked));
+    vidya_lib::security::device_pin::verify(&client, "4821", 1_000).unwrap();
+    let me = vidya_lib::state::SessionStaff { id: "stf-meena".into(), name: "Meena".into(), role: "teacher".into() };
+    match compute(&client, Some(me)).unwrap().state {
         AppState::Unlocked { staff } => assert_eq!(staff.id, "stf-meena"),
-        other => panic!("joined client should be Unlocked at its home, got {other:?}"),
+        other => panic!("unlocked joined client should reach its home, got {other:?}"),
     }
 }
 
 #[test]
-fn joined_client_is_signed_in_even_before_bootstrap_not_welcome() {
-    // A client identity but no school data yet (snapshot hasn't landed): the device is still
-    // signed in as the joined teacher (Unlocked) — NOT NoSchool (welcome) and NOT the dead PIN
-    // screen. The home shows empty until the 15s sync loop self-heals the snapshot.
+fn joined_client_is_never_auto_signed_in() {
+    // A client identity but no school data yet: the device is NOT NoSchool (welcome) and is
+    // NOT signed in — the join token authenticates the device, never a human session.
     let mut client = db::open_in_memory(KEY).unwrap();
     db::run_migrations(&mut client).unwrap();
     client::store(&client, &identity_for("stf-meena")).unwrap();
     match compute(&client, None).unwrap().state {
-        AppState::Unlocked { staff } => assert_eq!(staff.id, "stf-meena"),
-        other => panic!("joined client should be Unlocked, got {other:?}"),
+        AppState::PinSetup { staff } => assert_eq!(staff.id, "stf-meena"),
+        other => panic!("joined client must not be auto-unlocked, got {other:?}"),
     }
 }
 

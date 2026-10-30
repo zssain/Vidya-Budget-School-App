@@ -315,9 +315,19 @@ pub fn create_pin_logic(conn: &mut Connection, pin: &str) -> CmdResult<()> {
 // ============================================================= unlock ========
 
 pub fn unlock_impl(state: &State<RtCtx>, staff_id: &str, pin: &str) -> CmdResult<AppStateResponse> {
-    let session = state.with_db(|conn| unlock_logic(conn, staff_id, pin))?;
-    *state.session.lock().map_err(|_| CmdError::internal("lock"))? = Some(session.clone());
-    let s = Some(session);
+    let session = state.with_db(|conn| match crate::sync::client::load(conn) {
+        // A joined client verifies its own device PIN, and only as the staff it joined as.
+        Some(cid) => {
+            if cid.staff_id != staff_id {
+                return Err(CmdError::forbidden("not_this_device"));
+            }
+            crate::security::device_pin::verify(conn, pin, crate::ctx::now_ms())?;
+            Ok(SessionStaff { id: cid.staff_id, name: cid.staff_name, role: cid.staff_role })
+        }
+        None => unlock_logic(conn, staff_id, pin),
+    })?;
+    state.open_session(session)?;
+    let s = state.current_session()?;
     state.with_db(|conn| Ok(crate::state::compute(conn, s)?))
 }
 

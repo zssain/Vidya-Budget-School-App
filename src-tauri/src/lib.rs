@@ -68,10 +68,6 @@ fn build_ctx(data_dir: std::path::PathBuf) -> RtCtx {
     // Phase B: a device that has joined a school runs as a Client; otherwise it is the
     // single-PC Server. Decided here from the persisted client identity.
     let mut device_mode = DeviceMode::Server;
-    // A joined client auto-signs-in as the staff it joined as (the device holds the join
-    // token; there is no local PIN). Seeding the session here makes `require_session` work
-    // for its commands and lets `state::compute` report Unlocked. Stays None on the server.
-    let mut client_session: Option<crate::state::SessionStaff> = None;
     let (db, key_missing) = match security::keys::ensure_key(key_store.as_ref(), db_exists) {
         Ok(key) => {
             let hex = security::keys::to_hex(&key);
@@ -90,13 +86,10 @@ fn build_ctx(data_dir: std::path::PathBuf) -> RtCtx {
                         if let Err(e) = roles::seed_role_permissions(&mut conn) {
                             tracing::warn!("role permission seed: {e}");
                         }
-                        if let Some(cid) = crate::sync::client::load(&conn) {
+                        // A joined client starts LOCKED like any device: the join token
+                        // authenticates sync, never a human session (security::device_pin).
+                        if crate::sync::client::is_client(&conn) {
                             device_mode = DeviceMode::Client;
-                            client_session = Some(crate::state::SessionStaff {
-                                id: cid.staff_id,
-                                name: cid.staff_name,
-                                role: cid.staff_role,
-                            });
                         }
                         (Some(conn), false)
                     }
@@ -120,7 +113,8 @@ fn build_ctx(data_dir: std::path::PathBuf) -> RtCtx {
 
     RtCtx {
         db: Mutex::new(db),
-        session: Mutex::new(client_session),
+        session: Mutex::new(None),
+        last_activity_ms: Mutex::new(0),
         machine_id,
         device_id: Mutex::new(None),
         device_mode,
@@ -307,7 +301,7 @@ fn invoke_handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'stat
     use commands::*;
     tauri::generate_handler![
         app_state, activate_licence, machine_code, setup_school, setup_session, setup_classes, setup_principal,
-        create_recovery_key, confirm_recovery_key, create_pin, unlock, lock, switch_user,
+        create_recovery_key, confirm_recovery_key, create_pin, unlock, lock, switch_user, session_activity, create_device_pin,
         list_staff, list_classes, get_school, list_students, list_students_page, search_students, get_student,
         get_student_profile, create_student, check_duplicate_students, transfer_student, mark_student_left,
         export_csv, students_csv_template, import_students_dry_run, import_students_commit,
@@ -356,7 +350,7 @@ fn invoke_handler() -> impl Fn(tauri::ipc::Invoke) -> bool + Send + Sync + 'stat
     use commands::*;
     tauri::generate_handler![
         app_state, activate_licence, machine_code, setup_school, setup_session, setup_classes, setup_principal,
-        create_recovery_key, confirm_recovery_key, create_pin, unlock, lock, switch_user,
+        create_recovery_key, confirm_recovery_key, create_pin, unlock, lock, switch_user, session_activity, create_device_pin,
         list_staff, list_classes, get_school, list_students, list_students_page, search_students, get_student,
         get_student_profile, create_student, check_duplicate_students, transfer_student, mark_student_left,
         export_csv, students_csv_template, import_students_dry_run, import_students_commit,

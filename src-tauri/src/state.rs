@@ -51,6 +51,8 @@ pub enum AppState {
     Locked,
     /// A staff member is signed in on this device.
     Unlocked { staff: SessionStaff },
+    /// A joined client device has no local PIN yet: create one before any data shows.
+    PinSetup { staff: SessionStaff },
     /// DB file present but its key is missing (offer Recover; never overwrite).
     DbKeyMissing,
     /// A restore/transfer means this device must re-join the school.
@@ -91,21 +93,22 @@ pub fn compute(conn: &Connection, session: Option<SessionStaff>) -> rusqlite::Re
     let lic_status = licence_status(conn)?;
     let has_school = school_exists(conn)?;
 
-    // A joined CLIENT device (it stored a client identity at join). It never ran the setup
-    // wizard and has no principal/PIN of its own — it runs as the staff it joined as. Once
-    // the join bootstrap snapshot has populated the school data it goes straight to its home;
-    // until then it shows the locked/loading state while the sync loop fetches the snapshot.
-    // (Auto-unlocked: the device is authenticated by its join token and the OS lock screen
-    // guards the phone; a per-teacher PIN can be layered on later.) This branch never fires
-    // on the school server, which has no client identity.
+    // A joined CLIENT device (it stored a client identity at join). The join token
+    // authenticates the DEVICE for sync; it never signs a human in. The device needs its
+    // own local PIN (security::device_pin) before any school data is shown, and is locked
+    // on every launch and after the idle timeout. Never fires on the school server.
     if let Some(cid) = crate::sync::client::load(conn) {
-        // Always signed in as the joined staff — the device is authenticated by its join
-        // token, so there is no PIN gate (which would be a dead end here: a client has no
-        // local principal/PIN). Right after join the bootstrap snapshot has populated the
-        // school data; in the rare case it has not landed yet, the home shows empty and the
-        // 15s sync loop self-heals. A per-teacher PIN lock can be layered on later.
-        let staff = session.unwrap_or(SessionStaff { id: cid.staff_id, name: cid.staff_name, role: cid.staff_role });
-        return Ok(AppStateResponse { state: AppState::Unlocked { staff }, licence_status: lic_status });
+        let staff = SessionStaff { id: cid.staff_id, name: cid.staff_name, role: cid.staff_role };
+        let state = if !crate::security::device_pin::is_set(conn)? {
+            AppState::PinSetup { staff }
+        } else {
+            match session {
+                // Only the staff this device joined as can hold its session.
+                Some(s) if s.id == staff.id => AppState::Unlocked { staff: s },
+                _ => AppState::Locked,
+            }
+        };
+        return Ok(AppStateResponse { state, licence_status: lic_status });
     }
 
     // Off-path states take precedence once a school exists.
@@ -237,6 +240,54 @@ mod tests {
         )
         .unwrap();
         assert_eq!(compute(&c, None).unwrap().state, AppState::NeedsRejoin);
+    }
+
+    fn join_as_teacher(c: &Connection) {
+        let id = crate::sync::client::ClientIdentity {
+            device_id: "dev1".into(),
+            device_token: "tok".into(),
+            staff_id: "stf-t".into(),
+            staff_name: "Meena".into(),
+            staff_role: "teacher".into(),
+            session_key: String::new(),
+            school_id: "sch1".into(),
+            school_name: "S".into(),
+            receipt_series: "R".into(),
+            admission_series: "A".into(),
+            audience_keys: vec![],
+            server_fingerprint: "fp".into(),
+            server_addrs: vec![],
+            server_port: 47650,
+            server_epoch: 1,
+            bootstrap_cursor: 0,
+            lease_expires_at: String::new(),
+            protocol: 1,
+        };
+        crate::sync::client::store(c, &id).unwrap();
+    }
+
+    #[test]
+    fn joined_client_without_pin_must_create_one() {
+        let c = fresh();
+        join_as_teacher(&c);
+        match compute(&c, None).unwrap().state {
+            AppState::PinSetup { staff } => assert_eq!(staff.id, "stf-t"),
+            other => panic!("expected PinSetup, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn joined_client_with_pin_starts_locked_and_unlocks_only_as_its_staff() {
+        let c = fresh();
+        join_as_teacher(&c);
+        crate::security::device_pin::create(&c, "4821").unwrap();
+        // Cold start: locked (never auto-signed-in).
+        assert_eq!(compute(&c, None).unwrap().state, AppState::Locked);
+        let me = SessionStaff { id: "stf-t".into(), name: "Meena".into(), role: "teacher".into() };
+        assert_eq!(compute(&c, Some(me.clone())).unwrap().state, AppState::Unlocked { staff: me });
+        // A session for any other staff id is not honoured on this device.
+        let other = SessionStaff { id: "stf-p".into(), name: "P".into(), role: "principal".into() };
+        assert_eq!(compute(&c, Some(other)).unwrap().state, AppState::Locked);
     }
 
     #[test]

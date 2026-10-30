@@ -38,6 +38,8 @@ pub const COMMANDS: &[&str] = &[
     "unlock",
     "lock",
     "switch_user",
+    "session_activity",
+    "create_device_pin",
     "list_staff",
     "list_classes",
     "get_school",
@@ -253,6 +255,7 @@ pub fn app_state(state: State<RtCtx>) -> CmdResult<AppStateResponse> {
 
 #[tauri::command]
 pub fn activate_licence(state: State<RtCtx>, licence_key: String) -> CmdResult<AppStateResponse> {
+    state.require_no_school_or_principal()?;
     activate_licence_impl(&state, &licence_key)
 }
 
@@ -266,36 +269,43 @@ pub fn machine_code(state: State<RtCtx>) -> CmdResult<String> {
 
 #[tauri::command]
 pub fn setup_school(state: State<RtCtx>, input: SchoolInput) -> CmdResult<()> {
+    state.require_setup_phase()?;
     state.with_db(|conn| setup_school_logic(conn, &input))
 }
 
 #[tauri::command]
 pub fn setup_session(state: State<RtCtx>, input: SessionInput) -> CmdResult<()> {
+    state.require_setup_phase()?;
     state.with_db(|conn| setup_session_logic(conn, &input))
 }
 
 #[tauri::command]
 pub fn setup_classes(state: State<RtCtx>, sections: Vec<ClassInput>) -> CmdResult<()> {
+    state.require_setup_phase()?;
     state.with_db(|conn| setup_classes_logic(conn, &sections))
 }
 
 #[tauri::command]
 pub fn setup_principal(state: State<RtCtx>, name: String, mobile: String) -> CmdResult<()> {
+    state.require_setup_phase()?;
     state.with_db(|conn| setup_principal_logic(conn, &name, &mobile))
 }
 
 #[tauri::command]
 pub fn create_recovery_key(state: State<RtCtx>) -> CmdResult<RecoveryKeyDto> {
+    state.require_setup_phase()?;
     create_recovery_key_logic(&state)
 }
 
 #[tauri::command]
 pub fn confirm_recovery_key(state: State<RtCtx>, group3: String, group5: String) -> CmdResult<()> {
+    state.require_setup_phase()?;
     confirm_recovery_key_logic(&state, &group3, &group5)
 }
 
 #[tauri::command]
 pub fn create_pin(state: State<RtCtx>, pin: String) -> CmdResult<()> {
+    state.require_setup_phase()?;
     state.with_db(|conn| create_pin_logic(conn, &pin))
 }
 
@@ -308,15 +318,35 @@ pub fn unlock(state: State<RtCtx>, staff_id: String, pin: String) -> CmdResult<A
 
 #[tauri::command]
 pub fn lock(state: State<RtCtx>) -> CmdResult<()> {
-    *state.session.lock().map_err(|_| crate::error::CmdError::internal("lock"))? = None;
-    Ok(())
+    state.close_session()
+}
+
+/// Real user input in the UI (throttled by the frontend). Pushes the §9 idle
+/// auto-lock deadline out; background polling never calls this.
+#[tauri::command]
+pub fn session_activity(state: State<RtCtx>) -> CmdResult<()> {
+    state.touch_session()
+}
+
+/// Create the local PIN of a joined client device (first launch after join, or the
+/// first launch after upgrading from a build that had no device PIN). Opens the
+/// session as the staff this device joined as.
+#[tauri::command]
+pub fn create_device_pin(state: State<RtCtx>, pin: String) -> CmdResult<AppStateResponse> {
+    let staff = state.with_db(|conn| {
+        let cid = crate::sync::client::load(conn).ok_or_else(|| crate::error::CmdError::forbidden("not_a_client"))?;
+        crate::security::device_pin::create(conn, &pin)?;
+        Ok(crate::state::SessionStaff { id: cid.staff_id, name: cid.staff_name, role: cid.staff_role })
+    })?;
+    state.open_session(staff)?;
+    let session = state.current_session()?;
+    state.with_db(|conn| Ok(crate::state::compute(conn, session)?))
 }
 
 #[tauri::command]
 pub fn switch_user(state: State<RtCtx>) -> CmdResult<()> {
     // Clearing the session drops all in-memory screen state on the UI side too.
-    *state.session.lock().map_err(|_| crate::error::CmdError::internal("lock"))? = None;
-    Ok(())
+    state.close_session()
 }
 
 // ------------------------------------------------------------- students ------
@@ -328,31 +358,37 @@ pub fn list_staff(state: State<RtCtx>) -> CmdResult<Vec<StaffDto>> {
 
 #[tauri::command]
 pub fn list_classes(state: State<RtCtx>) -> CmdResult<Vec<ClassDto>> {
+    state.require_session()?;
     state.with_db(list_classes_logic)
 }
 
 #[tauri::command]
 pub fn get_school(state: State<RtCtx>) -> CmdResult<SchoolDto> {
+    state.require_session()?;
     state.with_db(get_school_logic)
 }
 
 #[tauri::command]
 pub fn list_students(state: State<RtCtx>, class_id: Option<String>) -> CmdResult<Vec<StudentDto>> {
+    state.require_session()?;
     state.with_db(|conn| list_students_logic(conn, class_id.as_deref()))
 }
 
 #[tauri::command]
 pub fn list_students_page(state: State<RtCtx>, query: StudentQuery) -> CmdResult<StudentsPageDto> {
+    state.require_session()?;
     state.with_db(|conn| list_students_page_logic(conn, &query))
 }
 
 #[tauri::command]
 pub fn search_students(state: State<RtCtx>, query: String) -> CmdResult<Vec<StudentDto>> {
+    state.require_session()?;
     state.with_db(|conn| search_students_logic(conn, &query))
 }
 
 #[tauri::command]
 pub fn get_student(state: State<RtCtx>, id: String) -> CmdResult<StudentDto> {
+    state.require_session()?;
     state.with_db(|conn| get_student_logic(conn, &id))
 }
 
@@ -366,11 +402,13 @@ pub fn create_student(state: State<RtCtx>, input: NewStudentInput) -> CmdResult<
 
 #[tauri::command]
 pub fn get_student_profile(state: State<RtCtx>, id: String) -> CmdResult<StudentProfileDto> {
+    state.require_session()?;
     state.with_db(|conn| get_student_profile_logic(conn, &today(), &id))
 }
 
 #[tauri::command]
 pub fn check_duplicate_students(state: State<RtCtx>, name: String, dob: Option<String>, guardian_mobile: Option<String>) -> CmdResult<Vec<StudentRowDto>> {
+    state.require_role(&["principal", "accountant"])?;
     state.with_db(|conn| check_duplicate_students_logic(conn, &name, dob.as_deref(), guardian_mobile.as_deref()))
 }
 
@@ -399,7 +437,8 @@ pub fn export_csv(state: State<RtCtx>, kind: String, path: String, arg: Option<S
 }
 
 #[tauri::command]
-pub fn students_csv_template(path: String) -> CmdResult<()> {
+pub fn students_csv_template(state: State<RtCtx>, path: String) -> CmdResult<()> {
+    state.require_session()?;
     std::fs::write(&path, students_csv_template_logic().into_bytes())
         .map_err(|_| crate::error::CmdError::internal("csv_write"))?;
     Ok(())
@@ -790,7 +829,8 @@ pub fn day_book(state: State<RtCtx>, date: String) -> CmdResult<DayBookDto> {
 /// verified present in tauri 2.11). "Printed" means only that the dialog opened
 /// (§7); the caller falls back to window.print() if this errors.
 #[tauri::command]
-pub fn print_page(window: tauri::WebviewWindow) -> CmdResult<()> {
+pub fn print_page(state: State<RtCtx>, window: tauri::WebviewWindow) -> CmdResult<()> {
+    state.require_session()?;
     // Printing is a desktop (school-PC) capability; `WebviewWindow::print()` does not
     // exist on Android, where this command is simply unavailable.
     #[cfg(not(target_os = "android"))]
@@ -809,6 +849,7 @@ pub fn print_page(window: tauri::WebviewWindow) -> CmdResult<()> {
 
 #[tauri::command]
 pub fn get_attendance_sheet(state: State<RtCtx>, class_id: String, date: String) -> CmdResult<AttendanceSheetDto> {
+    state.require_session()?;
     state.with_db(|conn| get_attendance_sheet_logic(conn, &class_id, &date))
 }
 
@@ -1253,6 +1294,7 @@ pub fn list_privacy_actions(state: State<RtCtx>) -> CmdResult<Vec<PrivacyActionD
 
 #[tauri::command]
 pub fn list_grade_bands(state: State<RtCtx>) -> CmdResult<Vec<GradeBandDto>> {
+    state.require_session()?;
     state.with_db(list_grade_bands_logic)
 }
 
@@ -1264,11 +1306,13 @@ pub fn update_grade_bands(state: State<RtCtx>, bands: Vec<GradeBandDto>) -> CmdR
 
 #[tauri::command]
 pub fn list_class_subjects(state: State<RtCtx>) -> CmdResult<Vec<ClassSubjectDto>> {
+    state.require_session()?;
     state.with_db(list_class_subjects_logic)
 }
 
 #[tauri::command]
 pub fn list_exams(state: State<RtCtx>) -> CmdResult<Vec<ExamDto>> {
+    state.require_session()?;
     state.with_db(list_exams_logic)
 }
 
@@ -1330,6 +1374,7 @@ pub fn exam_results(state: State<RtCtx>, exam_id: String) -> CmdResult<Vec<ExamR
 
 #[tauri::command]
 pub fn class_student_ids(state: State<RtCtx>, class_id: String) -> CmdResult<Vec<String>> {
+    state.require_session()?;
     state.with_db(|conn| class_student_ids_logic(conn, &class_id))
 }
 
@@ -1337,6 +1382,7 @@ pub fn class_student_ids(state: State<RtCtx>, class_id: String) -> CmdResult<Vec
 
 #[tauri::command]
 pub fn list_fee_dues(state: State<RtCtx>, student_id: String) -> CmdResult<FeeDuesDto> {
+    state.require_role(&["principal", "accountant"])?;
     state.with_db(|conn| list_fee_dues_logic(conn, &student_id))
 }
 
@@ -1350,6 +1396,7 @@ pub fn record_payment(state: State<RtCtx>, input: PaymentInput) -> CmdResult<Pay
 
 #[tauri::command]
 pub fn list_payments(state: State<RtCtx>, student_id: Option<String>) -> CmdResult<Vec<PaymentDto>> {
+    state.require_role(&["principal", "accountant"])?;
     state.with_db(|conn| list_payments_logic(conn, student_id.as_deref()))
 }
 
@@ -1369,12 +1416,20 @@ pub fn cancel_request(state: State<RtCtx>, id: String) -> CmdResult<()> {
 
 #[tauri::command]
 pub fn list_requests(state: State<RtCtx>, status: Option<String>, kind: Option<String>) -> CmdResult<Vec<RequestDto>> {
-    state.with_db(|conn| list_requests_logic(conn, status.as_deref(), kind.as_deref()))
+    // The Principal decides requests and sees all of them; other staff see only their own.
+    let actor = state.require_session()?;
+    let rows = state.with_db(|conn| list_requests_logic(conn, status.as_deref(), kind.as_deref()))?;
+    Ok(if actor.role == "principal" { rows } else { rows.into_iter().filter(|r| r.requested_by == actor.id).collect() })
 }
 
 #[tauri::command]
 pub fn get_request(state: State<RtCtx>, id: String) -> CmdResult<RequestDto> {
-    state.with_db(|conn| get_request_logic(conn, &id))
+    let actor = state.require_session()?;
+    let r = state.with_db(|conn| get_request_logic(conn, &id))?;
+    if actor.role != "principal" && r.requested_by != actor.id {
+        return Err(crate::error::CmdError::not_found());
+    }
+    Ok(r)
 }
 
 #[tauri::command]
@@ -1388,11 +1443,13 @@ pub fn decide_request(state: State<RtCtx>, id: String, decision: String, note: O
 
 #[tauri::command]
 pub fn dashboard_principal(state: State<RtCtx>) -> CmdResult<crate::dash::PrincipalDashboard> {
+    state.require_role(&["principal"])?;
     state.with_db(|conn| Ok(crate::dash::principal_dashboard(conn, &today())?))
 }
 
 #[tauri::command]
 pub fn dashboard_accountant(state: State<RtCtx>) -> CmdResult<AccountantDashboard> {
+    state.require_role(&["principal", "accountant"])?;
     state.with_db(|conn| dashboard_accountant_logic(conn, &today()))
 }
 
@@ -1406,11 +1463,13 @@ pub fn dashboard_teacher(state: State<RtCtx>) -> CmdResult<TeacherDashboard> {
 
 #[tauri::command]
 pub fn set_accent(state: State<RtCtx>, hex: String) -> CmdResult<()> {
+    state.require_role(&["principal"])?;
     state.with_db(|conn| set_accent_logic(conn, &hex))
 }
 
 #[tauri::command]
 pub fn verify_audit_chain(state: State<RtCtx>) -> CmdResult<AuditChainDto> {
+    state.require_role(&["principal"])?;
     state.with_db(|conn| {
         let first_bad = crate::security::audit::verify_chain(conn)?;
         Ok(AuditChainDto { ok: first_bad.is_none(), first_bad_seq: first_bad })
@@ -1420,6 +1479,7 @@ pub fn verify_audit_chain(state: State<RtCtx>) -> CmdResult<AuditChainDto> {
 /// Backups screen status: enabled? + recent runs.
 #[tauri::command]
 pub fn backup_status(state: State<RtCtx>) -> CmdResult<BackupStatusDto> {
+    state.require_role(&["principal"])?;
     let enabled = crate::backup::schedule::read_cached_key(&state.data_dir).is_some();
     let runs = state.with_db(backup_runs_logic)?;
     Ok(BackupStatusDto { enabled, runs })
@@ -1429,6 +1489,7 @@ pub fn backup_status(state: State<RtCtx>) -> CmdResult<BackupStatusDto> {
 /// enabled). Runs one encrypted, verified backup and records it.
 #[tauri::command]
 pub fn backup_now(state: State<RtCtx>, recovery_key: Option<String>) -> CmdResult<BackupStatusDto> {
+    state.require_role(&["principal"])?;
     crate::backup::schedule::backup_now(&state, recovery_key.as_deref())?;
     let enabled = crate::backup::schedule::read_cached_key(&state.data_dir).is_some();
     let runs = state.with_db(backup_runs_logic)?;
@@ -1457,6 +1518,7 @@ fn drive_status_dto(ctx: &RtCtx) -> CmdResult<DriveStatusDto> {
 /// Current Google Drive connection status (Backups screen).
 #[tauri::command]
 pub fn drive_status(state: State<RtCtx>) -> CmdResult<DriveStatusDto> {
+    state.require_role(&["principal"])?;
     drive_status_dto(&state)
 }
 
@@ -1466,6 +1528,7 @@ pub fn drive_status(state: State<RtCtx>) -> CmdResult<DriveStatusDto> {
 /// finishes consent or the 5-minute timeout elapses.
 #[tauri::command]
 pub fn drive_connect(state: State<RtCtx>) -> CmdResult<DriveStatusDto> {
+    state.require_role(&["principal"])?;
     use crate::sync::drive::oauth;
     let client_id = crate::config::get().google_client_id_desktop.clone();
     if client_id.is_empty() {
@@ -1481,6 +1544,7 @@ pub fn drive_connect(state: State<RtCtx>) -> CmdResult<DriveStatusDto> {
 /// Disconnect Google Drive (forget the tokens on this PC). Local backups continue.
 #[tauri::command]
 pub fn drive_disconnect(state: State<RtCtx>) -> CmdResult<DriveStatusDto> {
+    state.require_role(&["principal"])?;
     state.with_db(|c| crate::sync::drive::oauth::clear_tokens(c).map_err(|e| crate::error::CmdError::internal(e.to_string())))?;
     drive_status_dto(&state)
 }
@@ -1491,6 +1555,7 @@ pub fn drive_disconnect(state: State<RtCtx>) -> CmdResult<DriveStatusDto> {
 /// is completed by [`drive_exchange`]. Uses the Android OAuth client id.
 #[tauri::command]
 pub fn drive_connect_start(state: State<RtCtx>) -> CmdResult<String> {
+    state.require_session()?;
     use crate::sync::drive::oauth;
     let client_id = crate::config::get().google_client_id_android.clone();
     if client_id.is_empty() {
@@ -1508,6 +1573,7 @@ pub fn drive_connect_start(state: State<RtCtx>) -> CmdResult<String> {
 /// code, stores the tokens, and returns the new status.
 #[tauri::command]
 pub fn drive_exchange(state: State<RtCtx>, callback_url: String) -> CmdResult<DriveStatusDto> {
+    state.require_session()?;
     use crate::sync::drive::oauth;
     state.with_db(|c| {
         oauth::finish_mobile_connect(c, &callback_url).map_err(|e| {
@@ -1576,6 +1642,7 @@ pub fn restore_summary(path: String, recovery_key: String) -> CmdResult<RestoreS
 /// fences the previous PC (server_epoch + 1, every device needs to rejoin).
 #[tauri::command]
 pub fn restore_install(app: tauri::AppHandle, state: State<RtCtx>, path: String, recovery_key: String) -> CmdResult<()> {
+    state.require_no_school_or_principal()?;
     let vbak = std::path::PathBuf::from(&path);
     let backup_key_hex =
         crate::backup::restore::backup_key_from_meta(&vbak, &recovery_key).map_err(restore_error)?;
@@ -1628,6 +1695,7 @@ fn drive_err(e: crate::sync::drive::DriveError) -> crate::error::CmdError {
 /// drive.file sees them) and list the `.vbak` files in `Vidya/backups/`, newest first.
 #[tauri::command]
 pub fn restore_drive_list(state: State<RtCtx>) -> CmdResult<Vec<RestoreDriveEntryDto>> {
+    state.require_no_school_or_principal()?;
     use crate::sync::drive::{google::GoogleDrive, oauth, DriveApi};
     let client_id = crate::config::get().google_client_id_desktop.clone();
     if client_id.is_empty() {
@@ -1664,6 +1732,7 @@ pub fn restore_drive_list(state: State<RtCtx>) -> CmdResult<Vec<RestoreDriveEntr
 /// restore_summary / restore_install then operate on.
 #[tauri::command]
 pub fn restore_drive_fetch(state: State<RtCtx>, file_id: String, name: String) -> CmdResult<String> {
+    state.require_no_school_or_principal()?;
     use crate::sync::drive::{google::GoogleDrive, oauth, DriveApi};
     let client_id = crate::config::get().google_client_id_desktop.clone();
     let token = state.with_db(|c| {
@@ -1700,6 +1769,15 @@ pub fn restore_drive_fetch(state: State<RtCtx>, file_id: String, name: String) -
 /// up as a Client (device_mode) and starts syncing. Async (the join is a network call).
 #[tauri::command]
 pub async fn join_school(app: tauri::AppHandle, state: State<'_, RtCtx>, invite: String, device_name: String) -> CmdResult<()> {
+    // Joining replaces this device's role: only a fresh device (no school, not already
+    // joined) may do it — never a set-up school PC or an already-joined client.
+    state.with_db(|conn| {
+        let has_school = conn.query_row("SELECT 1 FROM school LIMIT 1", [], |_| Ok(())).is_ok();
+        if has_school || crate::sync::client::is_client(conn) {
+            return Err(crate::error::CmdError::forbidden("already_set_up"));
+        }
+        Ok(())
+    })?;
     let payload = crate::server::invite::parse_join_link(invite.trim()).map_err(|e| {
         crate::error::CmdError::new("INVITE_INVALID", "error.INVITE_INVALID", serde_json::json!({ "detail": e }))
     })?;
@@ -1764,6 +1842,7 @@ pub fn seed_demo_school(state: State<RtCtx>) -> CmdResult<()> {
 
 #[tauri::command]
 pub fn list_staff_access(state: State<RtCtx>) -> CmdResult<Vec<StaffFullDto>> {
+    state.require_role(&["principal"])?;
     state.with_db(list_staff_full_logic)
 }
 
@@ -1811,6 +1890,7 @@ pub fn assign_subject_teacher(state: State<RtCtx>, class_subject_id: String, sta
 
 #[tauri::command]
 pub fn effective_access(state: State<RtCtx>, staff_id: String) -> CmdResult<Vec<String>> {
+    state.require_role(&["principal"])?;
     state.with_db(|conn| effective_access_logic(conn, &staff_id))
 }
 
@@ -1818,6 +1898,7 @@ pub fn effective_access(state: State<RtCtx>, staff_id: String) -> CmdResult<Vec<
 
 #[tauri::command]
 pub fn list_devices(state: State<RtCtx>) -> CmdResult<Vec<DeviceDto>> {
+    state.require_role(&["principal"])?;
     state.with_db(list_devices_logic)
 }
 
@@ -1829,16 +1910,19 @@ pub fn revoke_device(state: State<RtCtx>, id: String) -> CmdResult<()> {
 
 #[tauri::command]
 pub fn server_status(state: State<RtCtx>) -> CmdResult<ServerStatusDto> {
+    state.require_session()?;
     state.with_db(server_status_logic)
 }
 
 #[tauri::command]
 pub fn sync_status(state: State<RtCtx>) -> CmdResult<SyncStatusDto> {
+    state.require_session()?;
     state.with_db(sync_status_logic)
 }
 
 #[tauri::command]
 pub fn sync_now(state: State<RtCtx>) -> CmdResult<SyncStatusDto> {
+    state.require_session()?;
     // Single-PC server: nothing to push (it IS the server) — report current state,
     // honestly (no fake "synced"). On client devices this triggers the engine.
     state.with_db(sync_status_logic)
@@ -1848,6 +1932,7 @@ pub fn sync_now(state: State<RtCtx>) -> CmdResult<SyncStatusDto> {
 
 #[tauri::command]
 pub fn list_conflicts(state: State<RtCtx>) -> CmdResult<Vec<ConflictDto>> {
+    state.require_role(&["principal"])?;
     state.with_db(list_conflicts_logic)
 }
 
@@ -1859,6 +1944,7 @@ pub fn resolve_conflict(state: State<RtCtx>, id: String, choice: String, value: 
 
 #[tauri::command]
 pub fn list_review_flags(state: State<RtCtx>) -> CmdResult<Vec<ReviewFlagDto>> {
+    state.require_role(&["principal"])?;
     state.with_db(list_review_flags_logic)
 }
 

@@ -21,7 +21,7 @@ import type {
   TeacherTimetableDto,
 } from '../api'
 import { hasJoined } from './join'
-import { createPin, hasPin, isUnlocked, lock, type UnlockResult, unlock as pinUnlock } from './lock'
+import { createPin, hasPin, isUnlocked, lock, touch, type UnlockResult, unlock as pinUnlock } from './lock'
 import { kvGet, listRecords } from './store'
 import {
   buildStaffDay,
@@ -262,7 +262,16 @@ export const WEB_COMMANDS: Record<string, WebHandler> = {
   lock: async () => {
     lock()
   },
+  session_activity: async () => {
+    touch()
+  },
 }
+
+/** Commands that may run while the PWA is locked: routing state, the PIN gate (and its
+ *  one-staff picker), first PIN creation during join, lock and the activity ping.
+ *  Every other command needs an unlocked, non-idle session — enforced here in the
+ *  dispatcher, not just by routing. */
+export const LOCKED_ALLOWED = new Set(['app_state', 'unlock', 'list_staff', 'create_pin', 'lock', 'session_activity'])
 
 /** True if the PWA implements `cmd`. The UI hides any feature whose command isn't. */
 export function isAvailableOnWeb(cmd: string): boolean {
@@ -279,6 +288,10 @@ export async function webInvoke<T>(cmd: string, args?: Record<string, unknown>):
       vars: { cmd: cmd ?? '' },
     }
     // api.ts wrappers reject with the CmdError shape (as Tauri's invoke does on Err).
+    return Promise.reject(err)
+  }
+  if (!LOCKED_ALLOWED.has(cmd) && !isUnlocked()) {
+    const err: CmdError = { code: 'LOCKED', message_key: 'error.LOCKED', vars: {} }
     return Promise.reject(err)
   }
   return (await handler(args)) as T

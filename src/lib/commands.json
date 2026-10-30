@@ -14,6 +14,8 @@
     "unlock",
     "lock",
     "switch_user",
+    "session_activity",
+    "create_device_pin",
     "list_staff",
     "list_classes",
     "get_school",

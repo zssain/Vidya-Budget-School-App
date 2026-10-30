@@ -39,6 +39,7 @@ export type AppState =
   | { kind: 'setup_in_progress'; step: number }
   | { kind: 'locked' }
   | { kind: 'unlocked'; staff: SessionStaff }
+  | { kind: 'pin_setup'; staff: SessionStaff }
   | { kind: 'db_key_missing' }
   | { kind: 'needs_rejoin' }
   | { kind: 'moved' }
@@ -972,6 +973,10 @@ export const unlock = (staffId: string, pin: string) =>
   invoke<AppStateResponse>('unlock', { staffId, pin })
 export const lock = () => invoke<void>('lock')
 export const switch_user = () => invoke<void>('switch_user')
+/** Real user input (throttled): pushes the 5-minute auto-lock deadline out. */
+export const session_activity = () => invoke<void>('session_activity')
+/** Create a joined device's own local PIN (opens its session). */
+export const create_device_pin = (pin: string) => invoke<AppStateResponse>('create_device_pin', { pin })
 export const list_staff = () => invoke<StaffDto[]>('list_staff')
 export const list_classes = () => invoke<ClassDto[]>('list_classes')
 export const get_school = () => invoke<SchoolDto>('get_school')

@@ -5,7 +5,7 @@
 
 import { useSyncExternalStore } from 'react'
 import * as api from './api'
-import type { AppState, AppStateResponse, CmdError } from './api'
+import type { AppState, AppStateResponse, CmdError, SessionStaff } from './api'
 
 export interface StoreState {
   app: AppStateResponse | null
@@ -63,6 +63,7 @@ export type Route =
   | { screen: 'welcome' }
   | { screen: 'setup'; step: number }
   | { screen: 'pin' }
+  | { screen: 'pin_setup'; staff: SessionStaff }
   | { screen: 'home'; role: string }
   | { screen: 'db_key_missing' }
   | { screen: 'needs_rejoin' }
@@ -81,6 +82,8 @@ export function routeForState(app: AppState): Route {
       return { screen: 'pin' }
     case 'unlocked':
       return { screen: 'home', role: app.staff.role }
+    case 'pin_setup':
+      return { screen: 'pin_setup', staff: app.staff }
     case 'db_key_missing':
       return { screen: 'db_key_missing' }
     case 'needs_rejoin':

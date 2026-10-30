@@ -94,6 +94,12 @@ const errors: Bundle = {
     'pin.enter': 'Enter your PIN',
     'pin.choose_user': 'Who are you?',
     'pin.switch_user': 'Switch user',
+    'pin.setup_title': 'Set a PIN for this device',
+    'pin.setup_hint': 'You will enter this PIN each time you open Vidya on this device. It stays on this device only.',
+    'pin.new': 'New PIN (4–6 digits)',
+    'pin.confirm': 'Enter the PIN again',
+    'pin.mismatch': 'The two PINs do not match. Try again.',
+    'pin.create': 'Save PIN',
 
     // Approvals.
     'approvals.title': 'Approvals',
@@ -208,6 +214,12 @@ errors.hi = {
   'pin.enter': 'अपना PIN दर्ज करें',
   'pin.choose_user': 'आप कौन हैं?',
   'pin.switch_user': 'उपयोगकर्ता बदलें',
+  'pin.setup_title': 'इस डिवाइस के लिए PIN बनाएँ',
+  'pin.setup_hint': 'हर बार इस डिवाइस पर Vidya खोलने पर आप यह PIN डालेंगे। यह केवल इसी डिवाइस पर रहता है।',
+  'pin.new': 'नया PIN (4–6 अंक)',
+  'pin.confirm': 'PIN दोबारा डालें',
+  'pin.mismatch': 'दोनों PIN मेल नहीं खाते। फिर से कोशिश करें।',
+  'pin.create': 'PIN सहेजें',
 
   // Approvals.
   'approvals.title': 'स्वीकृतियाँ',
