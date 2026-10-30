@@ -212,6 +212,7 @@ pub const COMMANDS: &[&str] = &[
     "server_status",
     "sync_status",
     "sync_now",
+    "list_sync_problems",
     "list_conflicts",
     "resolve_conflict",
     "list_review_flags",
@@ -370,26 +371,50 @@ pub fn get_school(state: State<RtCtx>) -> CmdResult<SchoolDto> {
 
 #[tauri::command]
 pub fn list_students(state: State<RtCtx>, class_id: Option<String>) -> CmdResult<Vec<StudentDto>> {
-    state.require_session()?;
-    state.with_db(|conn| list_students_logic(conn, class_id.as_deref()))
+    let actor = state.require_session()?;
+    state.with_db(|conn| {
+        let rows = list_students_logic(conn, class_id.as_deref())?;
+        let allowed = teacher_students(conn, &actor)?;
+        Ok(rows.into_iter().filter(|r| allowed.as_ref().map_or(true, |a| a.contains(&r.id))).collect())
+    })
 }
 
 #[tauri::command]
 pub fn list_students_page(state: State<RtCtx>, query: StudentQuery) -> CmdResult<StudentsPageDto> {
-    state.require_session()?;
-    state.with_db(|conn| list_students_page_logic(conn, &query))
+    let actor = state.require_session()?;
+    state.with_db(|conn| {
+        // A teacher pages only through one of THEIR classes (filtering a page after the
+        // fact would break the total and page sizes).
+        if actor.role == "teacher" {
+            let Some(a) = crate::sync::apply::load_actor(conn, &actor.id)? else {
+                return Ok(StudentsPageDto { rows: vec![], total: 0 });
+            };
+            let classes = crate::sync::scope::teacher_class_ids(conn, &a)?;
+            if !query.class_id.as_ref().is_some_and(|c| classes.contains(c)) {
+                return Ok(StudentsPageDto { rows: vec![], total: 0 });
+            }
+        }
+        list_students_page_logic(conn, &query)
+    })
 }
 
 #[tauri::command]
 pub fn search_students(state: State<RtCtx>, query: String) -> CmdResult<Vec<StudentDto>> {
-    state.require_session()?;
-    state.with_db(|conn| search_students_logic(conn, &query))
+    let actor = state.require_session()?;
+    state.with_db(|conn| {
+        let rows = search_students_logic(conn, &query)?;
+        let allowed = teacher_students(conn, &actor)?;
+        Ok(rows.into_iter().filter(|r| allowed.as_ref().map_or(true, |a| a.contains(&r.id))).collect())
+    })
 }
 
 #[tauri::command]
 pub fn get_student(state: State<RtCtx>, id: String) -> CmdResult<StudentDto> {
-    state.require_session()?;
-    state.with_db(|conn| get_student_logic(conn, &id))
+    let actor = state.require_session()?;
+    state.with_db(|conn| {
+        require_teacher_student(conn, &actor, &id)?;
+        get_student_logic(conn, &id)
+    })
 }
 
 #[tauri::command]
@@ -402,8 +427,39 @@ pub fn create_student(state: State<RtCtx>, input: NewStudentInput) -> CmdResult<
 
 #[tauri::command]
 pub fn get_student_profile(state: State<RtCtx>, id: String) -> CmdResult<StudentProfileDto> {
-    state.require_session()?;
-    state.with_db(|conn| get_student_profile_logic(conn, &today(), &id))
+    let actor = state.require_session()?;
+    state.with_db(|conn| {
+        require_teacher_student(conn, &actor, &id)?;
+        get_student_profile_logic(conn, &today(), &id)
+    })
+}
+
+/// For a TEACHER: the students enrolled in their classes (class-teacher or subject
+/// classes) — they see only those (§5), also when signed in on the school PC.
+/// `None` for Principal / Accountant (all students).
+fn teacher_students(conn: &rusqlite::Connection, actor: &crate::state::SessionStaff) -> crate::error::CmdResult<Option<std::collections::BTreeSet<String>>> {
+    if actor.role != "teacher" {
+        return Ok(None);
+    }
+    let Some(a) = crate::sync::apply::load_actor(conn, &actor.id)? else { return Ok(Some(Default::default())) };
+    let classes = crate::sync::scope::teacher_class_ids(conn, &a)?;
+    let mut st = conn.prepare("SELECT student_id, class_id FROM enrollment WHERE to_date IS NULL")?;
+    let rows = st.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+    let mut out = std::collections::BTreeSet::new();
+    for row in rows {
+        let (sid, cid) = row?;
+        if classes.contains(&cid) {
+            out.insert(sid);
+        }
+    }
+    Ok(Some(out))
+}
+
+fn require_teacher_student(conn: &rusqlite::Connection, actor: &crate::state::SessionStaff, id: &str) -> crate::error::CmdResult<()> {
+    match teacher_students(conn, actor)? {
+        Some(allowed) if !allowed.contains(id) => Err(crate::error::CmdError::not_found()),
+        _ => Ok(()),
+    }
 }
 
 #[tauri::command]
@@ -2028,6 +2084,37 @@ pub fn sync_now(state: State<RtCtx>) -> CmdResult<SyncStatusDto> {
 }
 
 // ------------------------------------------------------ P04: conflict review ---
+
+/// One of MY changes the school PC refused (Inbox): never a silent drop.
+#[derive(Debug, serde::Serialize)]
+pub struct SyncProblemDto {
+    pub id: String,
+    pub reason: Option<String>,
+}
+
+/// Changes this staff member made that the school PC refused (rejection Inbox items
+/// written by engine::settle_op_result). Any signed-in staff, own items only.
+#[tauri::command]
+pub fn list_sync_problems(state: State<RtCtx>) -> CmdResult<Vec<SyncProblemDto>> {
+    let actor = state.require_session()?;
+    state.with_db(|conn| {
+        let mut st = conn.prepare(
+            "SELECT id, vars_json FROM notification WHERE staff_id=?1 AND kind='rejected' AND read_at IS NULL ORDER BY id DESC",
+        )?;
+        let rows = st
+            .query_map(rusqlite::params![actor.id], |r| Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?)))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(rows
+            .into_iter()
+            .map(|(id, vars)| SyncProblemDto {
+                id,
+                reason: vars
+                    .and_then(|v| serde_json::from_str::<serde_json::Value>(&v).ok())
+                    .and_then(|v| v.get("reason").and_then(|r| r.as_str()).map(str::to_string)),
+            })
+            .collect())
+    })
+}
 
 #[tauri::command]
 pub fn list_conflicts(state: State<RtCtx>) -> CmdResult<Vec<ConflictDto>> {

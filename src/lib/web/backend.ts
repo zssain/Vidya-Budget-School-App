@@ -26,7 +26,7 @@ import type {
 } from '../api'
 import { hasJoined } from './join'
 import { createPin, hasPin, isUnlocked, lock, touch, type UnlockResult, unlock as pinUnlock } from './lock'
-import { kvGet, listRecords } from './store'
+import { kvGet, listRecords, refusedOps } from './store'
 import {
   buildStaffDay,
   type LeaveRecordRec,
@@ -283,6 +283,8 @@ export const WEB_COMMANDS: Record<string, WebHandler> = {
   record_message: async (args) => recordMessage(args?.input as RecordMessageInput),
   list_circulars: async () => listCirculars(),
   mark_circular_read: async (args) => markCircularRead(String(args?.circularId ?? '')),
+  // Changes the school PC refused (kept in the outbox with their reason).
+  list_sync_problems: async () => (await refusedOps()).map((r) => ({ id: r.op_id, reason: r.reason ?? null })),
 }
 
 /** Commands that may run while the PWA is locked: routing state, the PIN gate (and its

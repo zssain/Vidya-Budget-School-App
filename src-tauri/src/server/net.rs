@@ -112,6 +112,11 @@ async fn hello(State(st): State<Arc<ServerState>>) -> Response {
 }
 
 async fn join(State(st): State<Arc<ServerState>>, Json(req): Json<JoinReq>) -> Response {
+    // Unauthenticated by nature, so throttle it globally: a burst of guesses can't
+    // monopolise the DB lock or brute-force invite codes at network speed.
+    if !st.allow("__join__", now().unix_timestamp()) {
+        return err(StatusCode::TOO_MANY_REQUESTS, codes::RATE_LIMITED);
+    }
     let mut conn = st.db.lock().unwrap();
     match crate::server::service::join(&mut conn, &req, now()) {
         Ok(resp) => (StatusCode::OK, Json(resp)).into_response(),

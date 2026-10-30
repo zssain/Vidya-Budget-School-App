@@ -1769,6 +1769,12 @@ export const revoke_device = (id: string) => invoke<void>('revoke_device', { id 
 export const server_status = () => invoke<ServerStatusDto>('server_status')
 export const sync_status = () => invoke<SyncStatusDto>('sync_status')
 export const sync_now = () => invoke<SyncStatusDto>('sync_now')
+/** One of my changes the school PC refused (with its reason code). */
+export interface SyncProblemDto {
+  id: string
+  reason: string | null
+}
+export const list_sync_problems = () => invoke<SyncProblemDto[]>('list_sync_problems')
 export const list_conflicts = () => invoke<ConflictDto[]>('list_conflicts')
 export const resolve_conflict = (id: string, choice: string, value?: string) =>
   invoke<void>('resolve_conflict', { id, choice, value: value ?? null })

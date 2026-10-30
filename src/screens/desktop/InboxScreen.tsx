@@ -34,6 +34,12 @@ export default function InboxScreen({ role }: { role: string }) {
         }
       }).catch(() => {}),
     )
+    // My changes the school PC refused — shown to every role, never dropped silently.
+    jobs.push(
+      api.list_sync_problems().then((ps) => {
+        for (const p of ps) collected.push({ kind: 'rejected', title: t('inbox.syncRejected'), sub: p.reason ? t(`error.${p.reason}`) : '' })
+      }).catch(() => {}),
+    )
     if (role === 'principal') {
       jobs.push(api.list_review_flags().then((fs) => { for (const f of fs) collected.push({ kind: 'flag', title: t('inbox.flag'), sub: `${f.kind} · ${f.ref_table}`, link: '/principal/conflicts' }) }).catch(() => {}))
       jobs.push(api.list_conflicts().then((cs) => { for (const c of cs) collected.push({ kind: 'conflict', title: t('inbox.conflict'), sub: `${c.table} · ${c.field}`, link: '/principal/conflicts' }) }).catch(() => {}))
@@ -54,7 +60,7 @@ export default function InboxScreen({ role }: { role: string }) {
                 <span style={{ display: 'block', fontWeight: 500 }}>{it.title}</span>
                 <span style={{ display: 'block', fontSize: '12px', color: 'var(--muted)' }}>{it.sub}</span>
               </span>
-              <Pill variant={it.kind === 'flag' || it.kind === 'conflict' ? 'unpaid' : 'neutral'}>{it.kind}</Pill>
+              <Pill variant={it.kind === 'flag' || it.kind === 'conflict' || it.kind === 'rejected' ? 'unpaid' : 'neutral'}>{it.kind}</Pill>
             </button>
           ))
         )}

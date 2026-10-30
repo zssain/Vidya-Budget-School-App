@@ -52,7 +52,7 @@ fn guardian_visible_to_teacher(conn: &Connection, classes: &BTreeSet<String>, gu
 }
 
 /// The class ids a teacher actor is scoped to (class-teacher-of ∪ taught classes).
-fn teacher_class_ids(conn: &Connection, actor: &Actor) -> rusqlite::Result<BTreeSet<String>> {
+pub fn teacher_class_ids(conn: &Connection, actor: &Actor) -> rusqlite::Result<BTreeSet<String>> {
     let mut ids: BTreeSet<String> = actor.class_teacher_of.iter().cloned().collect();
     if !actor.class_subjects.is_empty() {
         let placeholders = actor.class_subjects.iter().map(|_| "?").collect::<Vec<_>>().join(",");

@@ -187,6 +187,7 @@
     "server_status",
     "sync_status",
     "sync_now",
+    "list_sync_problems",
     "list_conflicts",
     "resolve_conflict",
     "list_review_flags",
