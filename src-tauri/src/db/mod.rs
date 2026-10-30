@@ -40,6 +40,7 @@ pub const MIGRATIONS: &[(i64, &str)] = &[
     (31, include_str!("migrations/0031_v2_device_web_platform.sql")),
     (32, include_str!("migrations/0032_v2_applied_ops_owner.sql")),
     (33, include_str!("migrations/0033_v2_invite_web_secret.sql")),
+    (34, include_str!("migrations/0034_v2_data_revision.sql")),
 ];
 
 // A per-thread frozen clock for deterministic tests. Compiled ONLY in debug
@@ -129,6 +130,56 @@ pub fn is_readable(conn: &Connection) -> bool {
 /// migration is still its own transaction, so an interrupted run leaves
 /// schema_version at the last fully-applied version.
 pub fn run_migrations(conn: &mut Connection) -> rusqlite::Result<i64> {
+    let v = run_migrations_inner(conn)?;
+    install_revision_triggers(conn)?;
+    Ok(v)
+}
+
+/// Tables whose writes do NOT count as a data change for backups: sync/device
+/// bookkeeping and the backup log itself (otherwise every backup would mark the DB
+/// dirty again).
+const REVISION_EXEMPT: &[&str] = &[
+    "data_revision", "backup_run", "app_kv", "sync_cursor", "outbox", "schema_version", "schema_meta",
+];
+
+/// Install (idempotently) AFTER INSERT/UPDATE/DELETE triggers on every data table that
+/// bump `data_revision.rev`. Run after every migration pass so tables added later are
+/// covered. The backup scheduler compares this durable counter with the revision of
+/// the last successful backup.
+pub fn install_revision_triggers(conn: &Connection) -> rusqlite::Result<()> {
+    let has_rev: bool = conn
+        .query_row("SELECT 1 FROM sqlite_master WHERE type='table' AND name='data_revision'", [], |_| Ok(()))
+        .is_ok();
+    if !has_rev {
+        return Ok(());
+    }
+    let tables: Vec<String> = {
+        let mut st = conn.prepare(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' AND sql NOT LIKE 'CREATE VIRTUAL%'",
+        )?;
+        let rows = st.query_map([], |r| r.get::<_, String>(0))?;
+        rows.collect::<rusqlite::Result<_>>()?
+    };
+    for t in tables {
+        if REVISION_EXEMPT.contains(&t.as_str()) || t.contains("_fts") || !crate::sync::protocol::is_safe_ident(&t) {
+            continue;
+        }
+        for ev in ["INSERT", "UPDATE", "DELETE"] {
+            let name = format!("trg_rev_{}_{}", t, ev.to_lowercase());
+            conn.execute_batch(&format!(
+                "CREATE TRIGGER IF NOT EXISTS {name} AFTER {ev} ON {t} BEGIN UPDATE data_revision SET rev = rev + 1 WHERE id = 1; END;"
+            ))?;
+        }
+    }
+    Ok(())
+}
+
+/// The current durable data revision (0 before migration 0034).
+pub fn data_revision(conn: &Connection) -> i64 {
+    conn.query_row("SELECT rev FROM data_revision WHERE id=1", [], |r| r.get(0)).unwrap_or(0)
+}
+
+fn run_migrations_inner(conn: &mut Connection) -> rusqlite::Result<i64> {
     let current: i64 = conn
         .query_row("SELECT COALESCE(MAX(version),0) FROM schema_version", [], |r| r.get(0))
         .unwrap_or(0);

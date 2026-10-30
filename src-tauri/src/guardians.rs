@@ -51,7 +51,9 @@ pub fn ensure_primary_guardian(
     let gid = match existing {
         Some(id) => id,
         None => {
-            let id = format!("grd-{}", uuid::Uuid::now_v7());
+            // Deterministic for a new student's primary guardian, so the device that
+            // admitted the student and the school PC (replaying it) create ONE row.
+            let id = format!("grd-{student_id}-primary");
             tx.execute(
                 "INSERT INTO guardian(id,name,mobile,language,whatsapp_ok,school_id,created_at,updated_at,sync_state) \
                  VALUES (?1,?2,NULLIF(?3,''),'en',1,?4,?5,?5,?6)",
@@ -63,7 +65,7 @@ pub fn ensure_primary_guardian(
     tx.execute(
         "INSERT OR IGNORE INTO student_guardian(id,student_id,guardian_id,is_primary,school_id,created_at,updated_at,sync_state) \
          VALUES (?1,?2,?3,1,?4,?5,?5,?6)",
-        rusqlite::params![format!("sg-{}", uuid::Uuid::now_v7()), student_id, gid, school_id, now, sync_state],
+        rusqlite::params![format!("sg-{student_id}-{gid}"), student_id, gid, school_id, now, sync_state],
     )?;
     Ok(Some(gid))
 }

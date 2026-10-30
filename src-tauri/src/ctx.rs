@@ -161,6 +161,17 @@ impl RtCtx {
         Ok(())
     }
 
+    /// Commands that only the school PC (the Server device) may run: settings,
+    /// structure, approvals, staff/devices, money corrections, backups, … On a joined
+    /// client they would change only local data that never reaches the school record
+    /// (a false "saved"), so they are refused there with SERVER_ONLY (§3 rule 13).
+    pub fn require_server_device(&self) -> CmdResult<()> {
+        if self.device_mode == DeviceMode::Client {
+            return Err(CmdError::new("SERVER_ONLY", "error.SERVER_ONLY", serde_json::Value::Null));
+        }
+        Ok(())
+    }
+
     /// The DB file path inside the app data dir.
     pub fn db_path(&self) -> PathBuf {
         self.data_dir.join("vidya.db")

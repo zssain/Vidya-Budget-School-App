@@ -5,9 +5,13 @@
 //! `<data_dir>/backup-key` (same local trust level as the existing `db-key` file;
 //! moves to the OS keychain with the Android hardening pass).
 //!
-//! The scheduler ticks every `TICK_SECS` and runs a backup only when the data has
-//! CHANGED since the last successful backup (the audit-chain head is the change
-//! signal) — so it never writes identical copies on every tick.
+//! The scheduler ticks every `TICK_SECS`. A backup runs when the durable data
+//! revision (`db::data_revision`, bumped by triggers on every data table) differs
+//! from the revision of the last successful backup, or that backup was only partial
+//! (local copy, Drive failed) — and never more often than `MIN_INTERVAL_SECS`, so a
+//! busy school doesn't export + upload the database every few seconds. A failed run
+//! is retried on a later tick. (Previously the audit head was the only signal, which
+//! missed every unaudited write, and a change could trigger a backup every tick.)
 
 use std::path::{Path, PathBuf};
 
@@ -15,13 +19,15 @@ use rusqlite::{params, Connection, OptionalExtension};
 
 use crate::ctx::RtCtx;
 use crate::error::{CmdError, CmdResult};
-use crate::security::{audit, recovery};
+use crate::security::recovery;
 use crate::sync::drive::{google::GoogleDrive, oauth, DriveApi};
 
 use vidya_core::backup::{slugify, BackupOutcome, DriveState};
 
 /// How often the scheduler checks whether a fresh backup is due.
 pub const TICK_SECS: u64 = 20;
+/// At most one scheduled backup per hour (a pending change waits at most this long).
+pub const MIN_INTERVAL_SECS: i64 = 60 * 60;
 
 const KEY_FILE: &str = "backup-key";
 
@@ -101,6 +107,8 @@ pub fn run_and_record(conn: &mut Connection, data_dir: &Path, key_hex: &str) -> 
     let at = now_rfc3339();
     let today = at.get(0..10).unwrap_or("").to_string();
     let dir = data_dir.join("backups");
+    // Captured BEFORE the export, so a change made during the backup counts as new.
+    let revision = crate::db::data_revision(conn);
 
     // Add a Drive copy when connected; local-only otherwise or on any Drive error.
     let parts = drive_parts(conn);
@@ -121,9 +129,9 @@ pub fn run_and_record(conn: &mut Connection, data_dir: &Path, key_hex: &str) -> 
         _ => "this PC".to_string(),
     });
     conn.execute(
-        "INSERT INTO backup_run (id, started_at, finished_at, status, destination, checksum, chain_head) \
-         VALUES (?1, ?2, ?3, ?4, ?5, NULL, ?6)",
-        params![uuid::Uuid::now_v7().to_string(), at, now_rfc3339(), status, destination, res.chain_head],
+        "INSERT INTO backup_run (id, started_at, finished_at, status, destination, checksum, chain_head, data_revision) \
+         VALUES (?1, ?2, ?3, ?4, ?5, NULL, ?6, ?7)",
+        params![uuid::Uuid::now_v7().to_string(), at, now_rfc3339(), status, destination, res.chain_head, revision],
     )?;
     // Prune to 30 daily + 12 monthly (§12) locally, and the same on Drive when used.
     let _ = super::retain_local(&dir, &today);
@@ -152,6 +160,30 @@ pub fn backup_now(ctx: &RtCtx, recovery_key: Option<&str>) -> CmdResult<()> {
     })
 }
 
+/// Is a scheduled backup due? (pure over the DB → unit-tested) Yes when there has
+/// never been a successful backup, or the data revision moved since the last one, or
+/// the last one was only partial — but not within `MIN_INTERVAL_SECS` of the last
+/// attempt that succeeded at least locally.
+pub fn backup_due(conn: &Connection, now: time::OffsetDateTime) -> CmdResult<bool> {
+    let last: Option<(String, Option<i64>, String)> = conn
+        .query_row(
+            "SELECT status, data_revision, COALESCE(finished_at, started_at) FROM backup_run \
+             WHERE finished_at IS NOT NULL AND status != 'failed' ORDER BY started_at DESC LIMIT 1",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .optional()?;
+    let Some((status, rev, finished)) = last else { return Ok(true) };
+    let changed = rev != Some(crate::db::data_revision(conn));
+    if !changed && status != "partial" {
+        return Ok(false);
+    }
+    let age = time::OffsetDateTime::parse(&finished, &time::format_description::well_known::Rfc3339)
+        .map(|t| (now - t).whole_seconds())
+        .unwrap_or(i64::MAX);
+    Ok(age >= MIN_INTERVAL_SECS)
+}
+
 /// One scheduler tick: back up only if enabled AND the data changed since the last
 /// successful backup. Errors are logged, never propagated (a background task).
 pub fn scheduler_tick(ctx: &RtCtx) {
@@ -160,18 +192,8 @@ pub fn scheduler_tick(ctx: &RtCtx) {
         return; // backups not enabled on this PC yet
     };
     let result = ctx.with_db(|conn| {
-        let head = audit::head_hash(conn).unwrap_or_default();
-        let last_head: Option<String> = conn
-            .query_row(
-                "SELECT chain_head FROM backup_run WHERE finished_at IS NOT NULL AND status != 'failed' \
-                 ORDER BY started_at DESC LIMIT 1",
-                [],
-                |r| r.get::<_, Option<String>>(0),
-            )
-            .optional()?
-            .flatten();
-        if last_head.as_deref() == Some(head.as_str()) {
-            return Ok(()); // no new audited changes → nothing to back up
+        if !backup_due(conn, time::OffsetDateTime::now_utc())? {
+            return Ok(());
         }
         run_and_record(conn, &data_dir, &key_hex)
     });
@@ -183,6 +205,52 @@ pub fn scheduler_tick(ctx: &RtCtx) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn record_run(conn: &Connection, status: &str, finished: &str, rev: i64) {
+        conn.execute(
+            "INSERT INTO backup_run(id,started_at,finished_at,status,data_revision) VALUES (?1,?2,?2,?3,?4)",
+            params![uuid::Uuid::now_v7().to_string(), finished, status, rev],
+        )
+        .unwrap();
+    }
+
+    fn at(s: &str) -> time::OffsetDateTime {
+        time::OffsetDateTime::parse(s, &time::format_description::well_known::Rfc3339).unwrap()
+    }
+
+    #[test]
+    fn backup_due_follows_revision_interval_and_partial_retry() {
+        let mut c = crate::db::open_in_memory("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef").unwrap();
+        crate::db::run_migrations(&mut c).unwrap();
+        // Never backed up → due.
+        assert!(backup_due(&c, at("2026-10-15T09:00:00Z")).unwrap());
+
+        c.execute("INSERT INTO school(id,name,backup_salt,created_at,updated_at) VALUES ('s','S',x'00','t','t')", []).unwrap();
+        c.execute("INSERT INTO class(id,name,display,sort_order) VALUES ('c','V','V',1)", []).unwrap();
+        let rev = crate::db::data_revision(&c);
+        record_run(&c, "verified", "2026-10-15T09:00:00Z", rev);
+        // Nothing changed → not due, however long it has been.
+        assert!(!backup_due(&c, at("2026-10-16T09:00:00Z")).unwrap());
+
+        // An attendance-only change (no audit entry, no other table) moves the revision…
+        c.execute("INSERT INTO attendance_sheet(id,class_id,date,status,created_at,updated_at) VALUES ('sh','c','2026-10-15','draft','t','t')", []).unwrap();
+        assert!(crate::db::data_revision(&c) > rev, "an unaudited attendance write bumps the durable revision");
+        // …but a backup only runs once the minimum interval has passed.
+        assert!(!backup_due(&c, at("2026-10-15T09:30:00Z")).unwrap());
+        assert!(backup_due(&c, at("2026-10-15T10:00:01Z")).unwrap());
+
+        // A partial (local only) backup is retried after the interval even if unchanged.
+        let rev2 = crate::db::data_revision(&c);
+        record_run(&c, "partial", "2026-10-15T11:00:00Z", rev2);
+        assert!(!backup_due(&c, at("2026-10-15T11:10:00Z")).unwrap());
+        assert!(backup_due(&c, at("2026-10-15T12:00:01Z")).unwrap());
+
+        // Recording a backup does not itself make the data look changed.
+        let before = crate::db::data_revision(&c);
+        record_run(&c, "verified", "2026-10-15T12:01:00Z", before);
+        assert_eq!(crate::db::data_revision(&c), before);
+        assert!(!backup_due(&c, at("2026-10-15T14:00:00Z")).unwrap());
+    }
     use crate::db;
 
     fn seeded_dir() -> (tempdir_like::Dir, Connection) {

@@ -305,6 +305,17 @@ pub fn visible_row(conn: &Connection, actor: &Actor, table: &str, id: &str) -> r
                         .optional()?;
                     Ok(if cid.map(|c| classes.contains(&c)).unwrap_or(false) { mk(row, None) } else { None })
                 }
+                // Messages consent of the teacher's own students: an absence alert is
+                // refused without it (DPDP §9), so the phone must hold it to send one.
+                "consent" => {
+                    let cid: Option<String> = conn
+                        .query_row(
+                            "SELECT e.class_id FROM consent c JOIN enrollment e ON e.student_id=c.student_id AND e.to_date IS NULL WHERE c.id=?1 LIMIT 1",
+                            [id], |r| r.get(0),
+                        )
+                        .optional()?;
+                    Ok(if cid.is_some_and(|c| classes.contains(&c)) { mk(row, None) } else { None })
+                }
                 _ => Ok(None),
             }
         }
@@ -475,6 +486,13 @@ pub fn snapshot(conn: &Connection, actor: &Actor) -> rusqlite::Result<Vec<Change
                 if seen_g.insert(g_id.clone()) {
                     push(conn, "guardian", &g_id, Some(&guardian_filter))?;
                 }
+            }
+            for id in ids_of(
+                conn,
+                &format!("SELECT DISTINCT c.id FROM consent c JOIN enrollment e ON e.student_id=c.student_id AND e.to_date IS NULL WHERE e.class_id IN ({ph})"),
+                cargs.as_slice(),
+            )? {
+                push(conn, "consent", &id, None)?;
             }
             for id in ids_of(conn, &format!("SELECT id FROM attendance_sheet WHERE class_id IN ({ph})"), cargs.as_slice())? { push(conn, "attendance_sheet", &id, None)?; }
             // Marks for those sheets.

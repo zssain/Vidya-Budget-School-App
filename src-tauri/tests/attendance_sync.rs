@@ -467,3 +467,113 @@ async fn phone_homework_note_lands_complete() {
         .unwrap();
     assert_eq!((kind.as_str(), text.as_str(), by.as_str()), ("homework", "Read chapter 4", "stf-meena"));
 }
+
+// ---------------------------------------------------------------------------
+// Teacher phone: absence alert, circular read, report remark, delete own note.
+
+use vidya_lib::commands::logic::{delete_homework_note_with, mark_circular_read_logic, record_message_logic, save_report_remark_logic, RecordMessageInput, ReportRemarkInput};
+
+#[tokio::test]
+async fn teacher_phone_messages_reads_remarks_and_note_deletes_sync() {
+    let server = server();
+    let student = roster(&server, "cls-5a")[0].clone();
+    // Fixtures the seed lacks: messages consent, a sent circular, an exam.
+    server.execute("INSERT INTO consent(id,student_id,purpose,method,recorded_at,recorded_by) VALUES ('cn1',?1,'messages','signed_form','t','stf-priya')", [&student]).unwrap();
+    server.execute("INSERT INTO circular(id,number,title,body,status,created_at,updated_at) VALUES ('circ-1','C/1','Holiday','Closed Friday','sent','t','t')", []).unwrap();
+    let exam: String = server.query_row("SELECT id FROM exam LIMIT 1", [], |r| r.get(0)).unwrap();
+    let mut phone = joined_phone(&server, "dev-phone", "stf-meena");
+
+    // 1) Absence alert (tap-to-WhatsApp) for a student in her class.
+    let msg = record_message_logic(&mut phone, &meena(), Some("dev-phone"), DeviceMode::Client, &serde_json::from_value::<RecordMessageInput>(serde_json::json!({
+        "channel": "wa_tap", "kind": "absence_alert", "language": "en", "to_address": "9820011111",
+        "body": "Absent today", "related_table": "student", "related_id": student,
+    })).unwrap()).unwrap();
+    // 2) Circular read. 3) Report remark. 4) Own note created then deleted.
+    mark_circular_read_logic(&mut phone, &meena(), Some("dev-phone"), DeviceMode::Client, "circ-1").unwrap();
+    save_report_remark_logic(&mut phone, &meena(), Some("dev-phone"), DeviceMode::Client, &ReportRemarkInput {
+        exam_id: exam.clone(), student_id: student.clone(), text: "Works hard".into(), template_key: None,
+    }).unwrap();
+    let note = vidya_lib::commands::logic::save_homework_note_logic(&mut phone, &meena(), Some("dev-phone"), DeviceMode::Client,
+        &serde_json::from_value(serde_json::json!({ "class_id": "cls-5a", "class_subject_id": "cs-5a-eng", "kind": "notes", "text": "x" })).unwrap()).unwrap();
+
+    let server = Arc::new(Mutex::new(server));
+    let t = LoopbackTransport::new(server.clone(), DeviceAuth { device_id: "dev-phone".into(), staff_id: "stf-meena".into() }, now());
+    let out = sync_once(&mut phone, &t).await.unwrap();
+    assert_eq!((out.confirmed, out.rejected), (4, 0), "{out:?}");
+
+    delete_homework_note_with(&mut phone, &meena(), Some("dev-phone"), DeviceMode::Client, &note.id).unwrap();
+    let out = sync_once(&mut phone, &t).await.unwrap();
+    assert_eq!((out.confirmed, out.rejected), (1, 0));
+
+    {
+        let s = server.lock().unwrap();
+        let st: String = s.query_row("SELECT status FROM message WHERE id=?1", [&msg.id], |r| r.get(0)).unwrap();
+        assert_eq!(st, "tapped", "same message id on the school PC, honest status");
+        let read: i64 = s.query_row("SELECT COUNT(*) FROM circular_read WHERE circular_id='circ-1' AND staff_id='stf-meena' AND read_at IS NOT NULL", [], |r| r.get(0)).unwrap();
+        assert_eq!(read, 1);
+        let text: String = s.query_row("SELECT text FROM report_remark WHERE exam_id=?1 AND student_id=?2", params![exam, student], |r| r.get(0)).unwrap();
+        assert_eq!(text, "Works hard");
+        let notes: i64 = s.query_row("SELECT COUNT(*) FROM homework_note WHERE id=?1", [&note.id], |r| r.get(0)).unwrap();
+        assert_eq!(notes, 0, "deleted on the school PC");
+    }
+
+    // Another teacher device that had the note receives the tombstone.
+    let mut other = joined_phone(&server.lock().unwrap(), "dev-phone2", "stf-meena");
+    other.execute("INSERT INTO homework_note(id,class_id,kind,text,created_at,updated_at) VALUES (?1,'cls-5a','notes','x','t','t')", [&note.id]).unwrap();
+    server.lock().unwrap().execute("INSERT INTO device(id,staff_id,platform,name,token_hash) VALUES ('dev-phone2','stf-meena','android','P2','h')", []).unwrap();
+    let t2 = LoopbackTransport::new(server.clone(), DeviceAuth { device_id: "dev-phone2".into(), staff_id: "stf-meena".into() }, now());
+    sync_once(&mut other, &t2).await.unwrap();
+    let left: i64 = other.query_row("SELECT COUNT(*) FROM homework_note WHERE id=?1", [&note.id], |r| r.get(0)).unwrap();
+    assert_eq!(left, 0, "tombstone applied on another device");
+}
+
+// ---------------------------------------------------------------------------
+// Accountant's second PC: admission (provisional → official) and an expense.
+
+use vidya_lib::commands::logic::{create_student_logic, record_expense_logic, ExpenseInput, NewStudentInput};
+
+#[tokio::test]
+async fn second_pc_admission_and_expense_reach_the_school_pc() {
+    let server = server();
+    server.execute("INSERT INTO device(id,staff_id,platform,name,token_hash,receipt_series,admission_series) VALUES ('dev-acc2','stf-suresh','windows','PC2','h','A9','A9')", []).unwrap();
+    let account: String = server
+        .query_row("SELECT id FROM ledger_account WHERE kind='expense' LIMIT 1", [], |r| r.get(0))
+        .unwrap();
+    let mut pc2 = joined_phone(&server, "dev-acc2", "stf-suresh");
+    let suresh = SessionStaff { id: "stf-suresh".into(), name: "Suresh".into(), role: "accountant".into() };
+
+    let input: NewStudentInput = serde_json::from_value(serde_json::json!({
+        "name": "Offline Admit", "class_id": "cls-5a", "guardian_name": "Parent", "guardian_mobile": "9876500011",
+        "transport": false, "rte": false,
+    }))
+    .unwrap();
+    let stu = create_student_logic(&mut pc2, &suresh, Some("dev-acc2"), DeviceMode::Client, "2026-10-15", &input).unwrap();
+    let prov: String = pc2.query_row("SELECT provisional_no FROM student WHERE id=?1", [&stu.id], |r| r.get(0)).unwrap();
+    assert!(prov.contains("A9"), "provisional number from the device's own series: {prov}");
+    let exp: ExpenseInput = serde_json::from_value(serde_json::json!({ "category_account_id": account, "amount_paise": 25_000, "paid_via": "cash" })).unwrap();
+    let e = record_expense_logic(&mut pc2, &suresh, Some("dev-acc2"), DeviceMode::Client, "2026-10-15", &exp).unwrap();
+
+    let server = Arc::new(Mutex::new(server));
+    let t = LoopbackTransport::new(server.clone(), DeviceAuth { device_id: "dev-acc2".into(), staff_id: "stf-suresh".into() }, now());
+    let out = sync_once(&mut pc2, &t).await.unwrap();
+    assert_eq!((out.confirmed, out.rejected), (2, 0), "{out:?}");
+
+    {
+        let s = server.lock().unwrap();
+        let (adm, p): (Option<String>, String) = s.query_row("SELECT admission_no, provisional_no FROM student WHERE id=?1", [&stu.id], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
+        assert!(adm.is_some(), "the school PC assigned the official admission number");
+        assert_eq!(p, prov, "same provisional number");
+        let enr: i64 = s.query_row("SELECT COUNT(*) FROM enrollment WHERE student_id=?1", [&stu.id], |r| r.get(0)).unwrap();
+        assert_eq!(enr, 1);
+        let v: i64 = s.query_row("SELECT COUNT(*) FROM expense WHERE id=?1 AND voucher_id IS NOT NULL", [&e.id], |r| r.get(0)).unwrap();
+        assert_eq!(v, 1, "expense recorded with its voucher on the school PC");
+    }
+    // After pulling, the PC2 has ONE student row (now with the official number) and
+    // one enrolment — no duplicates from the round trip.
+    sync_once(&mut pc2, &t).await.unwrap();
+    let (n, adm): (i64, Option<String>) = pc2.query_row("SELECT COUNT(*), MAX(admission_no) FROM student WHERE name='Offline Admit'", [], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
+    assert_eq!(n, 1);
+    assert!(adm.is_some(), "official number reached the device");
+    let enr: i64 = pc2.query_row("SELECT COUNT(*) FROM enrollment WHERE student_id=?1", [&stu.id], |r| r.get(0)).unwrap();
+    assert_eq!(enr, 1, "no duplicate enrolment");
+}

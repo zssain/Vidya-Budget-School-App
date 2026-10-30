@@ -385,6 +385,9 @@ pub fn push(conn: &mut Connection, auth: &DeviceAuth, ops: &[Op], now: time::Off
 
 // ----------------------------------------------------------- /sync/pull ------
 
+/// Tables with a delete path whose deletions are delivered as pull tombstones.
+const TOMBSTONE_TABLES: &[&str] = &["homework_note"];
+
 /// Incremental changes since `cursor` (op_log server_seq), scoped to the device's
 /// current actor. Rows the actor may no longer see are omitted; explicit row
 /// deletes surface in `deletes` (broad delete-on-lost-assignment is Phase 6+).
@@ -399,22 +402,29 @@ pub fn pull(conn: &Connection, auth: &DeviceAuth, since: i64, limit: i64, now: t
         .unwrap_or_default();
 
     let mut changes = Vec::new();
+    let mut deletes = Vec::new();
     let mut next_cursor = since;
     let mut has_more = false;
 
     if let Some(actor) = actor {
         let mut stmt = conn.prepare(
-            "SELECT server_seq, \"table\", record_id, hlc FROM op_log WHERE server_seq > ?1 ORDER BY server_seq ASC LIMIT ?2",
+            "SELECT server_seq, \"table\", record_id, hlc, kind FROM op_log WHERE server_seq > ?1 ORDER BY server_seq ASC LIMIT ?2",
         )?;
-        let rows: Vec<(i64, String, String, String)> = stmt
-            .query_map(params![since, limit + 1], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
+        let rows: Vec<(i64, String, String, String, String)> = stmt
+            .query_map(params![since, limit + 1], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)))?
             .collect::<rusqlite::Result<_>>()?;
-        for (i, (seq, table, record_id, hlc)) in rows.iter().enumerate() {
+        for (i, (seq, table, record_id, hlc, kind)) in rows.iter().enumerate() {
             if i as i64 >= limit {
                 has_more = true;
                 break;
             }
             next_cursor = *seq;
+            // Tombstone: a row the school PC deleted (only for tables with a delete
+            // path). Sent to every device — deleting a row it doesn't hold is a no-op.
+            if kind == "delete" && TOMBSTONE_TABLES.contains(&table.as_str()) {
+                deletes.push(Delete { table: table.clone(), record_id: record_id.clone() });
+                continue;
+            }
             if let Some(mut c) = scope::visible_row(conn, &actor, table, record_id)? {
                 c.server_seq = *seq;
                 c.hlc = Some(hlc.clone());
@@ -425,7 +435,7 @@ pub fn pull(conn: &Connection, auth: &DeviceAuth, since: i64, limit: i64, now: t
 
     Ok(PullResp {
         changes,
-        deletes: Vec::new(),
+        deletes,
         next_cursor,
         has_more,
         server_time: now.format(&time::format_description::well_known::Rfc3339).unwrap_or_default(),

@@ -547,8 +547,11 @@ fn apply_op_routed(conn: &mut Connection, op: &Op, route: &str) -> rusqlite::Res
     // `request`/`action` is a replayed request command (raise / leave / cancel) whose
     // permission rules live in commands::logic::request_command (run as the author).
     let request_cmd = op.table == "request" && op.kind == "action";
+    // A ClientCmd (message / circular read / note delete / report remark): replayed as
+    // the author; permission + module rules live in that logic.
+    let client_cmd = op.kind == "action" && CLIENT_CMD_TABLES.contains(&op.table.as_str());
     if !matches!(op.kind.as_str(), "insert" | "update" | "action")
-        || (!request_cmd && op.table != "staff_attendance" && action_for(&op.table, &op.kind).is_none())
+        || (!request_cmd && !client_cmd && op.table != "staff_attendance" && action_for(&op.table, &op.kind).is_none())
     {
         return finalize(conn, op, rejected(&op.op_id, codes::UNSUPPORTED_OP));
     }
@@ -596,6 +599,10 @@ fn apply_op_routed(conn: &mut Connection, op: &Op, route: &str) -> rusqlite::Res
         if !crate::modules::is_enabled(conn, module)? {
             return finalize(conn, op, rejected(&op.op_id, codes::MODULE_OFF));
         }
+    }
+
+    if client_cmd {
+        return apply_client_cmd(conn, op);
     }
 
     // 4b) Permission (vidya-core decides) for tables mapped to an Action. NOTE:
@@ -691,6 +698,43 @@ fn apply_op_routed(conn: &mut Connection, op: &Op, route: &str) -> rusqlite::Res
     }
 
     apply_upsert(conn, op)
+}
+
+/// Tables whose `action` ops carry a commands::logic::ClientCmd.
+const CLIENT_CMD_TABLES: &[&str] = &["message", "circular_read", "homework_note", "report_remark", "student", "expense"];
+
+/// Replay a device's ClientCmd on the school PC as its author.
+fn apply_client_cmd(conn: &mut Connection, op: &Op) -> rusqlite::Result<OpResult> {
+    let Ok(cmd) = serde_json::from_value::<crate::commands::logic::ClientCmd>(op.payload.clone()) else {
+        return finalize(conn, op, rejected(&op.op_id, codes::MALFORMED));
+    };
+    // The command must be about the op's own table (so the module gate above applied).
+    let table_ok = matches!(
+        (&cmd, op.table.as_str()),
+        (crate::commands::logic::ClientCmd::RecordMessage { .. }, "message")
+            | (crate::commands::logic::ClientCmd::MarkCircularRead { .. }, "circular_read")
+            | (crate::commands::logic::ClientCmd::DeleteHomeworkNote { .. }, "homework_note")
+            | (crate::commands::logic::ClientCmd::SaveReportRemark { .. }, "report_remark")
+            | (crate::commands::logic::ClientCmd::CreateStudent { .. }, "student")
+            | (crate::commands::logic::ClientCmd::RecordExpense { .. }, "expense")
+    );
+    if !table_ok {
+        return finalize(conn, op, rejected(&op.op_id, codes::MALFORMED));
+    }
+    let staff: Option<(String, String)> = conn
+        .query_row("SELECT name, role FROM staff WHERE id=?1", params![op.staff_id], |r| Ok((r.get(0)?, r.get(1)?)))
+        .optional()?;
+    let Some((name, role)) = staff else {
+        return finalize(conn, op, rejected(&op.op_id, codes::DEVICE_REVOKED_OR_UNKNOWN));
+    };
+    let author = crate::state::SessionStaff { id: op.staff_id.clone(), name, role };
+    match crate::commands::logic::run_client_cmd(conn, &author, &op.device_id, &cmd) {
+        Ok(()) => {
+            let seq: i64 = conn.query_row("SELECT COALESCE(MAX(server_seq),0) FROM op_log", [], |r| r.get(0))?;
+            finalize(conn, op, confirmed(&op.op_id, seq, None))
+        }
+        Err(e) => finalize(conn, op, rejected(&op.op_id, &e.code)),
+    }
 }
 
 /// Replay a staff check-in / check-out as its author. The check-in route is the

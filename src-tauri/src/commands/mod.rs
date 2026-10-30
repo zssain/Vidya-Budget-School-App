@@ -414,6 +414,7 @@ pub fn check_duplicate_students(state: State<RtCtx>, name: String, dob: Option<S
 
 #[tauri::command]
 pub fn transfer_student(state: State<RtCtx>, student_id: String, class_id: String, roll_no: Option<i64>) -> CmdResult<StudentDto> {
+    state.require_server_device()?;
     let actor = state.require_session()?;
     let device_id = state.device_id.lock().map_err(|_| crate::error::CmdError::internal("lock"))?.clone();
     let mode = state.device_mode;
@@ -422,6 +423,7 @@ pub fn transfer_student(state: State<RtCtx>, student_id: String, class_id: Strin
 
 #[tauri::command]
 pub fn mark_student_left(state: State<RtCtx>, student_id: String, left_on: String, reason: String) -> CmdResult<StudentProfileDto> {
+    state.require_server_device()?;
     let actor = state.require_session()?;
     let device_id = state.device_id.lock().map_err(|_| crate::error::CmdError::internal("lock"))?.clone();
     let mode = state.device_mode;
@@ -452,6 +454,7 @@ pub fn import_students_dry_run(state: State<RtCtx>, path: String) -> CmdResult<I
 
 #[tauri::command]
 pub fn import_students_commit(state: State<RtCtx>, path: String) -> CmdResult<ImportResultDto> {
+    state.require_server_device()?;
     let actor = state.require_session()?;
     let mode = state.device_mode;
     state.with_db(|conn| import_students_commit_logic(conn, &actor, mode, &today(), &path))
@@ -473,6 +476,7 @@ pub fn list_fee_heads(state: State<RtCtx>) -> CmdResult<Vec<FeeHeadDto>> {
 
 #[tauri::command]
 pub fn create_fee_head(state: State<RtCtx>, input: FeeHeadInput) -> CmdResult<FeeHeadDto> {
+    state.require_server_device()?;
     let actor = state.require_session()?;
     state.with_db(|conn| create_fee_head_logic(conn, &actor, &input))
 }
@@ -485,12 +489,14 @@ pub fn preview_fee_head_change(state: State<RtCtx>, id: String, new_amount: i64,
 
 #[tauri::command]
 pub fn update_fee_head(state: State<RtCtx>, id: String, input: FeeHeadInput) -> CmdResult<FeeHeadDto> {
+    state.require_server_device()?;
     let actor = state.require_session()?;
     state.with_db(|conn| update_fee_head_logic(conn, &actor, &id, &input))
 }
 
 #[tauri::command]
 pub fn deactivate_fee_head(state: State<RtCtx>, id: String) -> CmdResult<()> {
+    state.require_server_device()?;
     let actor = state.require_session()?;
     state.with_db(|conn| deactivate_fee_head_logic(conn, &actor, &id))
 }
@@ -561,6 +567,7 @@ fn attachment_err(e: crate::attachments::AttachmentError) -> crate::error::CmdEr
 
 #[tauri::command]
 pub fn reverse_expense(state: State<RtCtx>, expense_id: String, reason: String) -> CmdResult<()> {
+    state.require_server_device()?;
     let actor = state.require_session()?;
     let device_id = state.device_id.lock().map_err(|_| crate::error::CmdError::internal("lock"))?.clone();
     let mode = state.device_mode;
@@ -577,6 +584,7 @@ pub fn get_opening_balance(state: State<RtCtx>) -> CmdResult<OpeningBalanceDto> 
 
 #[tauri::command]
 pub fn set_opening_balance(state: State<RtCtx>, cash_paise: i64, bank_paise: i64) -> CmdResult<OpeningBalanceDto> {
+    state.require_server_device()?;
     let actor = state.require_session()?;
     let device_id = state.device_id.lock().map_err(|_| crate::error::CmdError::internal("lock"))?.clone();
     let mode = state.device_mode;
@@ -606,6 +614,7 @@ pub fn salary_register(state: State<RtCtx>, month: String, days: Vec<StaffDaysIn
 
 #[tauri::command]
 pub fn set_salary_structure(state: State<RtCtx>, input: SalaryStructureInput) -> CmdResult<()> {
+    state.require_server_device()?;
     let actor = state.require_session()?;
     let today = crate::db::now_iso();
     state.with_db(|conn| set_salary_structure_logic(conn, &actor, &today, &input))
@@ -613,6 +622,7 @@ pub fn set_salary_structure(state: State<RtCtx>, input: SalaryStructureInput) ->
 
 #[tauri::command]
 pub fn give_advance(state: State<RtCtx>, input: AdvanceInput) -> CmdResult<()> {
+    state.require_server_device()?;
     let actor = state.require_session()?;
     let device_id = state.device_id.lock().map_err(|_| crate::error::CmdError::internal("lock"))?.clone();
     let mode = state.device_mode;
@@ -622,6 +632,7 @@ pub fn give_advance(state: State<RtCtx>, input: AdvanceInput) -> CmdResult<()> {
 
 #[tauri::command]
 pub fn pay_salaries(state: State<RtCtx>, month: String, mode: String, days: Vec<StaffDaysInput>) -> CmdResult<PaySalariesResult> {
+    state.require_server_device()?;
     let actor = state.require_session()?;
     let device_id = state.device_id.lock().map_err(|_| crate::error::CmdError::internal("lock"))?.clone();
     let dmode = state.device_mode;
@@ -638,12 +649,16 @@ pub fn list_store_items(state: State<RtCtx>, include_inactive: Option<bool>) -> 
 
 #[tauri::command]
 pub fn save_store_item(state: State<RtCtx>, input: StoreItemInput) -> CmdResult<StoreItemDto> {
+    state.require_server_device()?;
     let actor = state.require_session()?;
     state.with_db(|conn| save_store_item_logic(conn, &actor, &input))
 }
 
 #[tauri::command]
 pub fn record_store_sale(state: State<RtCtx>, input: StoreSaleInput) -> CmdResult<StoreSaleDto> {
+    // Store sales stay on the school PC for now: replaying one after stock changed
+    // could mean refusing money already taken (§8.6). Module `store` is off by default.
+    state.require_server_device()?;
     let actor = state.require_session()?;
     let device_id = state.device_id.lock().map_err(|_| crate::error::CmdError::internal("lock"))?.clone();
     let mode = state.device_mode;
@@ -653,6 +668,7 @@ pub fn record_store_sale(state: State<RtCtx>, input: StoreSaleInput) -> CmdResul
 
 #[tauri::command]
 pub fn stock_adjust(state: State<RtCtx>, input: StockAdjustInput) -> CmdResult<StoreItemDto> {
+    state.require_server_device()?;
     let actor = state.require_session()?;
     let today = crate::db::now_iso();
     state.with_db(|conn| stock_adjust_logic(conn, &actor, &today, &input))
@@ -674,24 +690,28 @@ pub fn my_timetable(state: State<RtCtx>) -> CmdResult<TeacherTimetableDto> {
 
 #[tauri::command]
 pub fn save_timetable_slot(state: State<RtCtx>, input: TimetableSlotInput) -> CmdResult<TimetableSlotDto> {
+    state.require_server_device()?;
     let actor = state.require_session()?;
     state.with_db(|conn| save_timetable_slot_logic(conn, &actor, &input))
 }
 
 #[tauri::command]
 pub fn delete_timetable_slot(state: State<RtCtx>, slot_id: String) -> CmdResult<()> {
+    state.require_server_device()?;
     let actor = state.require_session()?;
     state.with_db(|conn| delete_timetable_slot_logic(conn, &actor, &slot_id))
 }
 
 #[tauri::command]
 pub fn copy_timetable_week(state: State<RtCtx>, from_class_id: String, to_class_id: String) -> CmdResult<CopyWeekResult> {
+    state.require_server_device()?;
     let actor = state.require_session()?;
     state.with_db(|conn| copy_timetable_week_logic(conn, &actor, &from_class_id, &to_class_id))
 }
 
 #[tauri::command]
 pub fn save_periods(state: State<RtCtx>, periods: Vec<PeriodInput>) -> CmdResult<Vec<PeriodDto>> {
+    state.require_server_device()?;
     let actor = state.require_session()?;
     state.with_db(|conn| save_periods_logic(conn, &actor, &periods))
 }
@@ -704,6 +724,7 @@ pub fn substitute_plan(state: State<RtCtx>, date: String, absent_teacher_id: Str
 
 #[tauri::command]
 pub fn assign_substitute(state: State<RtCtx>, date: String, absent_teacher_id: String, substitute_teacher_id: String) -> CmdResult<AssignSubstituteResult> {
+    state.require_server_device()?;
     let actor = state.require_session()?;
     state.with_db(|conn| assign_substitute_logic(conn, &actor, &date, &absent_teacher_id, &substitute_teacher_id))
 }
@@ -725,11 +746,14 @@ pub fn save_homework_note(state: State<RtCtx>, input: HomeworkNoteInput) -> CmdR
 #[tauri::command]
 pub fn delete_homework_note(state: State<RtCtx>, id: String) -> CmdResult<()> {
     let actor = state.require_session()?;
-    state.with_db(|conn| delete_homework_note_logic(conn, &actor, &id))
+    let device_id = state.device_id.lock().map_err(|_| crate::error::CmdError::internal("lock"))?.clone();
+    let mode = state.device_mode;
+    state.with_db(|conn| delete_homework_note_with(conn, &actor, device_id.as_deref(), mode, &id))
 }
 
 #[tauri::command]
 pub fn email_homework_note(state: State<RtCtx>, id: String) -> CmdResult<NoteShareResult> {
+    state.require_server_device()?;
     let actor = state.require_session()?;
     let device_id = state.device_id.lock().map_err(|_| crate::error::CmdError::internal("lock"))?.clone();
     let mode = state.device_mode;
@@ -758,6 +782,7 @@ pub fn save_report_remark(state: State<RtCtx>, input: ReportRemarkInput) -> CmdR
 
 #[tauri::command]
 pub fn finalize_report_cards(state: State<RtCtx>, exam_id: String) -> CmdResult<()> {
+    state.require_server_device()?;
     let actor = state.require_session()?;
     state.with_db(|conn| finalize_report_cards_logic(conn, &actor, &exam_id))
 }
@@ -776,24 +801,28 @@ pub fn get_exam_seating(state: State<RtCtx>, exam_id: String) -> CmdResult<ExamS
 
 #[tauri::command]
 pub fn save_exam_room(state: State<RtCtx>, input: ExamRoomInput) -> CmdResult<()> {
+    state.require_server_device()?;
     let actor = state.require_session()?;
     state.with_db(|conn| save_exam_room_logic(conn, &actor, &input))
 }
 
 #[tauri::command]
 pub fn delete_exam_room(state: State<RtCtx>, room_id: String) -> CmdResult<()> {
+    state.require_server_device()?;
     let actor = state.require_session()?;
     state.with_db(|conn| delete_exam_room_logic(conn, &actor, &room_id))
 }
 
 #[tauri::command]
 pub fn generate_seating(state: State<RtCtx>, exam_id: String) -> CmdResult<SeatingResult> {
+    state.require_server_device()?;
     let actor = state.require_session()?;
     state.with_db(|conn| generate_seating_logic(conn, &actor, &exam_id))
 }
 
 #[tauri::command]
 pub fn save_exam_schedule(state: State<RtCtx>, input: ExamScheduleInput) -> CmdResult<()> {
+    state.require_server_device()?;
     let actor = state.require_session()?;
     state.with_db(|conn| save_exam_schedule_logic(conn, &actor, &input))
 }
@@ -814,6 +843,7 @@ pub fn search_receipts(state: State<RtCtx>, query: String) -> CmdResult<Vec<Rece
 
 #[tauri::command]
 pub fn reverse_payment(state: State<RtCtx>, payment_id: String, reason: String) -> CmdResult<RequestDto> {
+    state.require_server_device()?;
     let actor = state.require_session()?;
     let mode = state.device_mode;
     state.with_db(|conn| reverse_payment_logic(conn, &actor, mode, &payment_id, &reason))
@@ -877,6 +907,7 @@ pub fn attendance_month(state: State<RtCtx>, class_id: String, month: String) ->
 
 #[tauri::command]
 pub fn correct_attendance(state: State<RtCtx>, class_id: String, date: String, student_id: String, mark: String, reason: String) -> CmdResult<()> {
+    state.require_server_device()?;
     let actor = state.require_session()?;
     let mode = state.device_mode;
     state.with_db(|conn| correct_attendance_mark_logic(conn, &actor, mode, &class_id, &date, &student_id, &mark, &reason))
@@ -892,6 +923,7 @@ pub fn list_modules(state: State<RtCtx>) -> CmdResult<Vec<ModuleDto>> {
 
 #[tauri::command]
 pub fn set_module(state: State<RtCtx>, key: String, enabled: bool) -> CmdResult<()> {
+    state.require_server_device()?;
     let actor = state.require_session()?;
     state.with_db(|conn| set_module_logic(conn, &actor, &key, enabled))
 }
@@ -906,6 +938,7 @@ pub fn get_hr_settings(state: State<RtCtx>) -> CmdResult<HrSettingsDto> {
 
 #[tauri::command]
 pub fn set_hr_settings(state: State<RtCtx>, input: HrSettingsInput) -> CmdResult<()> {
+    state.require_server_device()?;
     let actor = state.require_session()?;
     state.with_db(|conn| set_hr_settings_logic(conn, &actor, &input))
 }
@@ -918,6 +951,7 @@ pub fn list_leave_types(state: State<RtCtx>) -> CmdResult<Vec<LeaveTypeDto>> {
 
 #[tauri::command]
 pub fn save_leave_type(state: State<RtCtx>, input: LeaveTypeInput) -> CmdResult<LeaveTypeDto> {
+    state.require_server_device()?;
     let actor = state.require_session()?;
     state.with_db(|conn| save_leave_type_logic(conn, &actor, &input))
 }
@@ -958,6 +992,7 @@ pub fn staff_attendance_month(state: State<RtCtx>, month: String) -> CmdResult<S
 
 #[tauri::command]
 pub fn accept_away_checkin(state: State<RtCtx>, id: String) -> CmdResult<()> {
+    state.require_server_device()?;
     let actor = state.require_session()?;
     let device_id = state.device_id.lock().map_err(|_| crate::error::CmdError::internal("lock"))?.clone();
     let mode = state.device_mode;
@@ -966,6 +1001,7 @@ pub fn accept_away_checkin(state: State<RtCtx>, id: String) -> CmdResult<()> {
 
 #[tauri::command]
 pub fn reject_away_checkin(state: State<RtCtx>, id: String) -> CmdResult<()> {
+    state.require_server_device()?;
     let actor = state.require_session()?;
     let device_id = state.device_id.lock().map_err(|_| crate::error::CmdError::internal("lock"))?.clone();
     let mode = state.device_mode;
@@ -974,6 +1010,7 @@ pub fn reject_away_checkin(state: State<RtCtx>, id: String) -> CmdResult<()> {
 
 #[tauri::command]
 pub fn mark_staff_attendance(state: State<RtCtx>, input: MarkStaffAttendanceInput) -> CmdResult<()> {
+    state.require_server_device()?;
     let actor = state.require_session()?;
     let device_id = state.device_id.lock().map_err(|_| crate::error::CmdError::internal("lock"))?.clone();
     let mode = state.device_mode;
@@ -1005,6 +1042,7 @@ pub fn get_payment_settings(state: State<RtCtx>) -> CmdResult<crate::upi::Paymen
 
 #[tauri::command]
 pub fn set_payment_settings(state: State<RtCtx>, input: PaymentSettingsInput) -> CmdResult<()> {
+    state.require_server_device()?;
     let actor = state.require_session()?;
     state.with_db(|conn| set_payment_settings_logic(conn, &actor, &input))
 }
@@ -1023,6 +1061,7 @@ pub fn get_wa_auto_config(state: State<RtCtx>) -> CmdResult<WaAutoConfigDto> {
 
 #[tauri::command]
 pub fn set_wa_auto_config(state: State<RtCtx>, input: WaAutoConfigInput) -> CmdResult<()> {
+    state.require_server_device()?;
     let actor = state.require_session()?;
     state.with_db(|conn| set_wa_auto_config_logic(conn, &actor, &input))
 }
@@ -1059,6 +1098,7 @@ pub fn preview_fee_reminder(state: State<RtCtx>, student_id: String, language: O
 
 #[tauri::command]
 pub fn queue_fee_reminders(state: State<RtCtx>, student_ids: Vec<String>, language: Option<String>) -> CmdResult<BulkReminderDto> {
+    state.require_server_device()?;
     let actor = state.require_session()?;
     let device_id = state.device_id.lock().map_err(|_| crate::error::CmdError::internal("lock"))?.clone();
     let mode = state.device_mode;
@@ -1083,6 +1123,7 @@ pub fn list_circulars(state: State<RtCtx>) -> CmdResult<Vec<CircularDto>> {
 
 #[tauri::command]
 pub fn save_circular(state: State<RtCtx>, input: CircularInput) -> CmdResult<CircularDto> {
+    state.require_server_device()?;
     let actor = state.require_session()?;
     let device_id = state.device_id.lock().map_err(|_| crate::error::CmdError::internal("lock"))?.clone();
     let mode = state.device_mode;
@@ -1091,6 +1132,7 @@ pub fn save_circular(state: State<RtCtx>, input: CircularInput) -> CmdResult<Cir
 
 #[tauri::command]
 pub fn send_circular(state: State<RtCtx>, id: String) -> CmdResult<CircularDto> {
+    state.require_server_device()?;
     let actor = state.require_session()?;
     let device_id = state.device_id.lock().map_err(|_| crate::error::CmdError::internal("lock"))?.clone();
     let mode = state.device_mode;
@@ -1121,6 +1163,7 @@ pub fn working_days(state: State<RtCtx>, from: String, to: String) -> CmdResult<
 
 #[tauri::command]
 pub fn set_weekly_offs(state: State<RtCtx>, working: Vec<bool>) -> CmdResult<()> {
+    state.require_server_device()?;
     let actor = state.require_session()?;
     let device_id = state.device_id.lock().map_err(|_| crate::error::CmdError::internal("lock"))?.clone();
     let mode = state.device_mode;
@@ -1129,6 +1172,7 @@ pub fn set_weekly_offs(state: State<RtCtx>, working: Vec<bool>) -> CmdResult<()>
 
 #[tauri::command]
 pub fn add_calendar_event(state: State<RtCtx>, input: CalendarEventInput) -> CmdResult<CalendarEventDto> {
+    state.require_server_device()?;
     let actor = state.require_session()?;
     let device_id = state.device_id.lock().map_err(|_| crate::error::CmdError::internal("lock"))?.clone();
     let mode = state.device_mode;
@@ -1137,6 +1181,7 @@ pub fn add_calendar_event(state: State<RtCtx>, input: CalendarEventInput) -> Cmd
 
 #[tauri::command]
 pub fn update_calendar_event(state: State<RtCtx>, id: String, input: CalendarEventInput) -> CmdResult<CalendarEventDto> {
+    state.require_server_device()?;
     let actor = state.require_session()?;
     let device_id = state.device_id.lock().map_err(|_| crate::error::CmdError::internal("lock"))?.clone();
     let mode = state.device_mode;
@@ -1145,6 +1190,7 @@ pub fn update_calendar_event(state: State<RtCtx>, id: String, input: CalendarEve
 
 #[tauri::command]
 pub fn delete_calendar_event(state: State<RtCtx>, id: String) -> CmdResult<()> {
+    state.require_server_device()?;
     let actor = state.require_session()?;
     let device_id = state.device_id.lock().map_err(|_| crate::error::CmdError::internal("lock"))?.clone();
     let mode = state.device_mode;
@@ -1159,6 +1205,7 @@ fn cur_device(state: &State<RtCtx>) -> CmdResult<Option<String>> {
 
 #[tauri::command]
 pub fn add_guardian(state: State<RtCtx>, student_id: String, input: GuardianEditInput) -> CmdResult<Vec<crate::guardians::GuardianDto>> {
+    state.require_server_device()?;
     let actor = state.require_session()?;
     let device_id = cur_device(&state)?;
     let mode = state.device_mode;
@@ -1167,6 +1214,7 @@ pub fn add_guardian(state: State<RtCtx>, student_id: String, input: GuardianEdit
 
 #[tauri::command]
 pub fn update_guardian(state: State<RtCtx>, student_id: String, guardian_id: String, input: GuardianEditInput) -> CmdResult<Vec<crate::guardians::GuardianDto>> {
+    state.require_server_device()?;
     let actor = state.require_session()?;
     let device_id = cur_device(&state)?;
     let mode = state.device_mode;
@@ -1175,6 +1223,7 @@ pub fn update_guardian(state: State<RtCtx>, student_id: String, guardian_id: Str
 
 #[tauri::command]
 pub fn set_primary_guardian(state: State<RtCtx>, student_id: String, guardian_id: String) -> CmdResult<Vec<crate::guardians::GuardianDto>> {
+    state.require_server_device()?;
     let actor = state.require_session()?;
     let device_id = cur_device(&state)?;
     let mode = state.device_mode;
@@ -1183,6 +1232,7 @@ pub fn set_primary_guardian(state: State<RtCtx>, student_id: String, guardian_id
 
 #[tauri::command]
 pub fn remove_guardian(state: State<RtCtx>, student_id: String, guardian_id: String) -> CmdResult<Vec<crate::guardians::GuardianDto>> {
+    state.require_server_device()?;
     let actor = state.require_session()?;
     let device_id = cur_device(&state)?;
     let mode = state.device_mode;
@@ -1199,6 +1249,7 @@ pub fn list_custom_fields(state: State<RtCtx>, entity: String, include_inactive:
 
 #[tauri::command]
 pub fn create_custom_field(state: State<RtCtx>, input: CustomFieldInput) -> CmdResult<CustomFieldDto> {
+    state.require_server_device()?;
     let actor = state.require_session()?;
     let device_id = cur_device(&state)?;
     let mode = state.device_mode;
@@ -1207,6 +1258,7 @@ pub fn create_custom_field(state: State<RtCtx>, input: CustomFieldInput) -> CmdR
 
 #[tauri::command]
 pub fn update_custom_field(state: State<RtCtx>, id: String, input: CustomFieldInput) -> CmdResult<CustomFieldDto> {
+    state.require_server_device()?;
     let actor = state.require_session()?;
     let device_id = cur_device(&state)?;
     let mode = state.device_mode;
@@ -1215,6 +1267,7 @@ pub fn update_custom_field(state: State<RtCtx>, id: String, input: CustomFieldIn
 
 #[tauri::command]
 pub fn set_custom_field_active(state: State<RtCtx>, id: String, active: bool) -> CmdResult<CustomFieldDto> {
+    state.require_server_device()?;
     let actor = state.require_session()?;
     let device_id = cur_device(&state)?;
     let mode = state.device_mode;
@@ -1229,6 +1282,7 @@ pub fn get_custom_values(state: State<RtCtx>, entity: String, entity_id: String)
 
 #[tauri::command]
 pub fn set_custom_values(state: State<RtCtx>, entity: String, entity_id: String, values: Vec<CustomValueSet>) -> CmdResult<Vec<CustomFieldValueDto>> {
+    state.require_server_device()?;
     let actor = state.require_session()?;
     let device_id = cur_device(&state)?;
     let mode = state.device_mode;
@@ -1245,6 +1299,7 @@ pub fn list_consent(state: State<RtCtx>, student_id: String) -> CmdResult<Vec<Co
 
 #[tauri::command]
 pub fn record_consent(state: State<RtCtx>, student_id: String, guardian_id: Option<String>, purpose: String, method: String) -> CmdResult<Vec<ConsentDto>> {
+    state.require_server_device()?;
     let actor = state.require_session()?;
     let device_id = cur_device(&state)?;
     let mode = state.device_mode;
@@ -1253,6 +1308,7 @@ pub fn record_consent(state: State<RtCtx>, student_id: String, guardian_id: Opti
 
 #[tauri::command]
 pub fn withdraw_consent(state: State<RtCtx>, id: String) -> CmdResult<Vec<ConsentDto>> {
+    state.require_server_device()?;
     let actor = state.require_session()?;
     let device_id = cur_device(&state)?;
     let mode = state.device_mode;
@@ -1261,12 +1317,14 @@ pub fn withdraw_consent(state: State<RtCtx>, id: String) -> CmdResult<Vec<Consen
 
 #[tauri::command]
 pub fn export_student(state: State<RtCtx>, student_id: String) -> CmdResult<String> {
+    state.require_server_device()?;
     let actor = state.require_session()?;
     state.with_db(|conn| export_student_logic(conn, &actor, &student_id, &today()))
 }
 
 #[tauri::command]
 pub fn erase_student(state: State<RtCtx>, student_id: String) -> CmdResult<()> {
+    state.require_server_device()?;
     let actor = state.require_session()?;
     let device_id = cur_device(&state)?;
     let mode = state.device_mode;
@@ -1281,6 +1339,7 @@ pub fn get_retention(state: State<RtCtx>) -> CmdResult<String> {
 
 #[tauri::command]
 pub fn set_retention(state: State<RtCtx>, value: String) -> CmdResult<()> {
+    state.require_server_device()?;
     let actor = state.require_session()?;
     state.with_db(|conn| set_retention_logic(conn, &actor, &value))
 }
@@ -1293,6 +1352,7 @@ pub fn list_incidents(state: State<RtCtx>) -> CmdResult<Vec<IncidentDto>> {
 
 #[tauri::command]
 pub fn add_incident(state: State<RtCtx>, input: IncidentInput) -> CmdResult<Vec<IncidentDto>> {
+    state.require_server_device()?;
     let actor = state.require_session()?;
     state.with_db(|conn| add_incident_logic(conn, &actor, &input))
 }
@@ -1313,6 +1373,7 @@ pub fn list_grade_bands(state: State<RtCtx>) -> CmdResult<Vec<GradeBandDto>> {
 
 #[tauri::command]
 pub fn update_grade_bands(state: State<RtCtx>, bands: Vec<GradeBandDto>) -> CmdResult<Vec<GradeBandDto>> {
+    state.require_server_device()?;
     let actor = state.require_session()?;
     state.with_db(|conn| update_grade_bands_logic(conn, &actor, &bands))
 }
@@ -1331,6 +1392,7 @@ pub fn list_exams(state: State<RtCtx>) -> CmdResult<Vec<ExamDto>> {
 
 #[tauri::command]
 pub fn create_exam(state: State<RtCtx>, input: NewExamInput) -> CmdResult<ExamDto> {
+    state.require_server_device()?;
     let actor = state.require_session()?;
     state.with_db(|conn| create_exam_logic(conn, &actor, &input))
 }
@@ -1456,6 +1518,7 @@ pub fn get_request(state: State<RtCtx>, id: String) -> CmdResult<RequestDto> {
 
 #[tauri::command]
 pub fn decide_request(state: State<RtCtx>, id: String, decision: String, note: Option<String>) -> CmdResult<RequestDto> {
+    state.require_server_device()?;
     let actor = state.require_session()?;
     let mode = state.device_mode;
     state.with_db(|conn| decide_request_logic(conn, &actor, mode, &id, &decision, note.as_deref()))
@@ -1511,6 +1574,7 @@ pub fn backup_status(state: State<RtCtx>) -> CmdResult<BackupStatusDto> {
 /// enabled). Runs one encrypted, verified backup and records it.
 #[tauri::command]
 pub fn backup_now(state: State<RtCtx>, recovery_key: Option<String>) -> CmdResult<BackupStatusDto> {
+    state.require_server_device()?;
     state.require_role(&["principal"])?;
     crate::backup::schedule::backup_now(&state, recovery_key.as_deref())?;
     let enabled = crate::backup::schedule::read_cached_key(&state.data_dir).is_some();
@@ -1875,42 +1939,49 @@ pub fn list_staff_access(state: State<RtCtx>) -> CmdResult<Vec<StaffFullDto>> {
 
 #[tauri::command]
 pub fn add_staff(state: State<RtCtx>, input: AddStaffInput) -> CmdResult<InviteDto> {
+    state.require_server_device()?;
     let actor = state.require_session()?;
     state.with_db(|conn| add_staff_logic(conn, &actor, &input, now_utc()))
 }
 
 #[tauri::command]
 pub fn suspend_staff(state: State<RtCtx>, id: String) -> CmdResult<()> {
+    state.require_server_device()?;
     let actor = state.require_session()?;
     state.with_db(|conn| suspend_staff_logic(conn, &actor, &id))
 }
 
 #[tauri::command]
 pub fn remove_staff(state: State<RtCtx>, id: String) -> CmdResult<()> {
+    state.require_server_device()?;
     let actor = state.require_session()?;
     state.with_db(|conn| remove_staff_logic(conn, &actor, &id))
 }
 
 #[tauri::command]
 pub fn create_invite(state: State<RtCtx>, staff_id: String) -> CmdResult<InviteDto> {
+    state.require_server_device()?;
     let actor = state.require_session()?;
     state.with_db(|conn| create_invite_logic(conn, &actor, &staff_id, now_utc()))
 }
 
 #[tauri::command]
 pub fn revoke_invite(state: State<RtCtx>, staff_id: String) -> CmdResult<()> {
+    state.require_server_device()?;
     let actor = state.require_session()?;
     state.with_db(|conn| revoke_invite_logic(conn, &actor, &staff_id))
 }
 
 #[tauri::command]
 pub fn set_class_teacher(state: State<RtCtx>, class_id: String, staff_id: Option<String>) -> CmdResult<()> {
+    state.require_server_device()?;
     let actor = state.require_session()?;
     state.with_db(|conn| set_class_teacher_logic(conn, &actor, &class_id, staff_id.as_deref()))
 }
 
 #[tauri::command]
 pub fn assign_subject_teacher(state: State<RtCtx>, class_subject_id: String, staff_id: Option<String>) -> CmdResult<()> {
+    state.require_server_device()?;
     let actor = state.require_session()?;
     state.with_db(|conn| assign_subject_teacher_logic(conn, &actor, &class_subject_id, staff_id.as_deref()))
 }
@@ -1931,6 +2002,7 @@ pub fn list_devices(state: State<RtCtx>) -> CmdResult<Vec<DeviceDto>> {
 
 #[tauri::command]
 pub fn revoke_device(state: State<RtCtx>, id: String) -> CmdResult<()> {
+    state.require_server_device()?;
     let actor = state.require_session()?;
     state.with_db(|conn| revoke_device_logic(conn, &actor, &id, now_utc()))
 }
@@ -1965,6 +2037,7 @@ pub fn list_conflicts(state: State<RtCtx>) -> CmdResult<Vec<ConflictDto>> {
 
 #[tauri::command]
 pub fn resolve_conflict(state: State<RtCtx>, id: String, choice: String, value: Option<String>) -> CmdResult<()> {
+    state.require_server_device()?;
     let actor = state.require_session()?;
     state.with_db(|conn| resolve_conflict_logic(conn, &actor, &id, &choice, value.as_deref()))
 }
@@ -1977,6 +2050,7 @@ pub fn list_review_flags(state: State<RtCtx>) -> CmdResult<Vec<ReviewFlagDto>> {
 
 #[tauri::command]
 pub fn resolve_review_flag(state: State<RtCtx>, id: String) -> CmdResult<()> {
+    state.require_server_device()?;
     let actor = state.require_session()?;
     state.with_db(|conn| resolve_review_flag_logic(conn, &actor, &id))
 }

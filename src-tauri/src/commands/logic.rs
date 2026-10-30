@@ -598,7 +598,7 @@ pub fn list_students_page_logic(conn: &mut Connection, q: &StudentQuery) -> CmdR
     Ok(StudentsPageDto { rows, total })
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NewStudentInput {
     pub name: String,
     pub class_id: String,
@@ -617,14 +617,22 @@ pub struct NewStudentInput {
 /// This device's admission series (A1 = server) and the highest provisional seq
 /// already issued on it, so the next provisional number is series-unique.
 fn admission_series_and_last(conn: &Connection, device_id: Option<&str>) -> rusqlite::Result<(String, u32)> {
-    let series: String = match device_id {
-        Some(d) => conn
+    // A joined client uses the admission series assigned at join (its local DB has no
+    // device registry; the fallback below would be the school PC's own "A1").
+    let client_series = crate::sync::client::load(conn).map(|id| id.admission_series);
+    let series: String = match (client_series, device_id) {
+        (Some(s), _) => s,
+        (None, None) => "A1".to_string(),
+        (None, Some(d)) => conn
             .query_row("SELECT admission_series FROM device WHERE id=?1", params![d], |r| r.get(0))
             .optional()?
             .flatten()
             .unwrap_or_else(|| "A1".to_string()),
-        None => "A1".to_string(),
     };
+    admission_last_for(conn, series)
+}
+
+fn admission_last_for(conn: &Connection, series: String) -> rusqlite::Result<(String, u32)> {
     let prefix = format!("P-{series}-");
     let last: u32 = conn
         .query_row(
@@ -721,6 +729,25 @@ pub fn create_student_logic(
     today: &str,
     input: &NewStudentInput,
 ) -> CmdResult<StudentDto> {
+    create_student_with(conn, actor_s, device_id, device_mode, today, input, None, None)
+}
+
+/// Admission. On a joined device: a provisional number from the device's admission
+/// series, and the command is queued; the school PC replays it with the SAME student
+/// id + provisional number and assigns the official admission number (§8.7). Child
+/// rows (enrolment, dues, guardian link) get deterministic ids so the device's copy
+/// and the canonical rows are the same rows.
+#[allow(clippy::too_many_arguments)]
+pub fn create_student_with(
+    conn: &mut Connection,
+    actor_s: &SessionStaff,
+    device_id: Option<&str>,
+    device_mode: DeviceMode,
+    today: &str,
+    input: &NewStudentInput,
+    fixed_id: Option<&str>,
+    fixed_provisional: Option<&str>,
+) -> CmdResult<StudentDto> {
     let actor = actor_from(conn, actor_s)?;
     require_allow(&actor, Action::CreateStudent, &Target::of(TargetKind::Student))?;
     let name = vidya_core::validation::validate_name(&input.name)?;
@@ -729,7 +756,7 @@ pub fn create_student_logic(
             vidya_core::validation::validate_mobile(m)?;
         }
     }
-    let sid = new_id("stu");
+    let sid = fixed_id.map(str::to_string).unwrap_or_else(|| new_id("stu"));
     let now = now_iso();
     let transport = input.transport.unwrap_or(false);
     let rte = input.rte.unwrap_or(false);
@@ -738,8 +765,13 @@ pub fn create_student_logic(
     // Offline devices get a provisional number; the school server assigns the
     // official admission_no when it confirms (§8.7). In single-PC Server mode
     // this device IS the server, so it assigns the official number now.
-    let (series, last) = admission_series_and_last(conn, device_id)?;
-    let provisional = vidya_core::admissions::provisional_no(&series, last + 1);
+    let provisional = match fixed_provisional {
+        Some(p) => p.to_string(),
+        None => {
+            let (series, last) = admission_series_and_last(conn, device_id)?;
+            vidya_core::admissions::provisional_no(&series, last + 1)
+        }
+    };
     let admission_no: Option<String> = if device_mode == DeviceMode::Server {
         let year: i32 = today.get(0..4).and_then(|y| y.parse().ok()).unwrap_or(0);
         let last_adm: i64 = conn
@@ -791,14 +823,14 @@ pub fn create_student_logic(
             tx.execute(
                 "INSERT INTO enrollment(id,student_id,class_id,session_id,roll_no,from_date,created_at,updated_at,sync_state) \
                  VALUES (?1,?2,?3,?4,?5,?6,?7,?7,?8)",
-                params![new_id("enr"), sid2, input.class_id, sess, roll_no, now, now, sync_state],
+                params![format!("enr-{sid2}-{sess}"), sid2, input.class_id, sess, roll_no, now, now, sync_state],
             )?;
         }
         for d in &dues {
             tx.execute(
                 "INSERT INTO fee_due(id,student_id,fee_head_id,period,amount_paise,instalment_no,due_date,created_at,updated_at,sync_state) \
                  VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?8,?9)",
-                params![new_id("due"), sid2, d.fee_head_id, d.period, d.amount_paise.get(), d.instalment_no, d.due_date, now, sync_state],
+                params![format!("due-{sid2}-{}-{}-{}", d.fee_head_id, d.period, d.instalment_no), sid2, d.fee_head_id, d.period, d.amount_paise.get(), d.instalment_no, d.due_date, now, sync_state],
             )?;
         }
         let audit = AuditEntry {
@@ -818,8 +850,14 @@ pub fn create_student_logic(
             audience: "finance".into(),
             table: "student".into(),
             record_id: sid2.clone(),
-            kind: "insert".into(),
-            payload: "{}".into(),
+            kind: if device_mode == DeviceMode::Server { "insert".into() } else { "action".into() },
+            payload: if device_mode == DeviceMode::Server {
+                "{}".into()
+            } else {
+                client_cmd_payload(&ClientCmd::CreateStudent {
+                    id: sid2.clone(), today: today.to_string(), provisional_no: provisional.clone(), input: input.clone(),
+                })
+            },
             base_version: None,
             server_epoch: 1,
         };
@@ -1987,7 +2025,7 @@ fn account_balance(conn: &Connection, account_id: &str) -> rusqlite::Result<i64>
     )
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExpenseInput {
     pub category_account_id: String,
     pub amount_paise: i64,
@@ -2029,6 +2067,21 @@ pub fn record_expense_logic(
     today: &str,
     input: &ExpenseInput,
 ) -> CmdResult<ExpenseDto> {
+    record_expense_with(conn, actor_s, device_id, device_mode, today, input, None)
+}
+
+/// Record an expense. On a joined device the command is queued (no voucher there);
+/// the school PC replays it with the same id and posts the balanced voucher.
+#[allow(clippy::too_many_arguments)]
+pub fn record_expense_with(
+    conn: &mut Connection,
+    actor_s: &SessionStaff,
+    device_id: Option<&str>,
+    device_mode: DeviceMode,
+    today: &str,
+    input: &ExpenseInput,
+    fixed_id: Option<&str>,
+) -> CmdResult<ExpenseDto> {
     let actor = actor_from(conn, actor_s)?;
     require_allow(&actor, Action::RecordExpense, &Target::of(TargetKind::Fee))?;
     require_module_enabled(conn, vidya_core::modules::Module::Accounts)?;
@@ -2056,8 +2109,9 @@ pub fn record_expense_logic(
 
     let spent_on = input.spent_on.clone().unwrap_or_else(|| today[..today.len().min(10)].to_string());
     let now = now_iso();
-    let exp_id = new_id("exp");
+    let exp_id = fixed_id.map(str::to_string).unwrap_or_else(|| new_id("exp"));
     let confirmed = device_mode == DeviceMode::Server;
+    let cmd_payload = client_cmd_payload(&ClientCmd::RecordExpense { id: exp_id.clone(), today: today.to_string(), input: input.clone() });
     let (series, _) = receipt_series_and_last(conn, device_id)?;
     let school_id = single_school_id(conn)?;
     let ctx = WriteCtx { mode: device_mode };
@@ -2111,8 +2165,8 @@ pub fn record_expense_logic(
             audience: "finance".into(),
             table: "expense".into(),
             record_id: exp_id2.clone(),
-            kind: "insert".into(),
-            payload: "{}".into(),
+            kind: if confirmed { "insert".into() } else { "action".into() },
+            payload: if confirmed { "{}".into() } else { cmd_payload.clone() },
             base_version: None,
             server_epoch: 1,
         };
@@ -3924,6 +3978,13 @@ pub fn save_homework_note_logic(conn: &mut Connection, actor_s: &SessionStaff, d
 
 /// Delete one's own note within 24 h (audited). Principal may delete any.
 pub fn delete_homework_note_logic(conn: &mut Connection, actor_s: &SessionStaff, id: &str) -> CmdResult<()> {
+    delete_homework_note_with(conn, actor_s, None, DeviceMode::Server, id)
+}
+
+/// Delete a homework note. Principal: any note; a teacher: only their own within
+/// 24 h. One transaction: delete + audit + sync record (a client queues the command;
+/// the school PC writes a `delete` op_log entry → a tombstone for other devices).
+pub fn delete_homework_note_with(conn: &mut Connection, actor_s: &SessionStaff, device_id: Option<&str>, device_mode: DeviceMode, id: &str) -> CmdResult<()> {
     let actor = actor_from(conn, actor_s)?;
     require_module_enabled(conn, vidya_core::modules::Module::Classroom)?;
     let (created_by, created_at, class_id): (Option<String>, String, String) = conn
@@ -3932,21 +3993,68 @@ pub fn delete_homework_note_logic(conn: &mut Connection, actor_s: &SessionStaff,
         .ok_or_else(CmdError::not_found)?;
     let is_author = created_by.as_deref() == Some(actor_s.id.as_str());
     let now = now_iso();
-    // Principal may delete any note; a teacher only their own within 24 h.
     let allowed = if actor.role == Role::Principal {
-        require_allow(&actor, Action::ManageNotes, &Target { kind: TargetKind::Attendance, class_id: Some(class_id), ..Default::default() }).is_ok()
+        require_allow(&actor, Action::ManageNotes, &Target { kind: TargetKind::Attendance, class_id: Some(class_id.clone()), ..Default::default() }).is_ok()
     } else {
         vidya_core::notes::can_delete_own(is_author, elapsed_ms(&created_at, &now))
     };
     if !allowed {
         return Err(CmdError::forbidden("not_deletable"));
     }
-    conn.execute("DELETE FROM homework_note WHERE id=?1", params![id])?;
-    audit_action(conn, AuditEntry {
-        at: now, staff_id: Some(actor_s.id.clone()), action: "delete_homework_note".into(),
-        table: Some("homework_note".into()), record_id: Some(id.to_string()), ..Default::default()
+    let dev = device_id.unwrap_or_default().to_string();
+    let payload = if device_mode == DeviceMode::Server {
+        "{}".to_string()
+    } else {
+        client_cmd_payload(&ClientCmd::DeleteHomeworkNote { id: id.to_string() })
+    };
+    with_write(conn, &WriteCtx { mode: device_mode }, |tx| {
+        tx.execute("DELETE FROM homework_note WHERE id=?1", params![id])?;
+        let audit = AuditEntry {
+            at: now.clone(), staff_id: Some(actor_s.id.clone()), action: "delete_homework_note".into(),
+            table: Some("homework_note".into()), record_id: Some(id.to_string()), ..Default::default()
+        };
+        let op = Op {
+            op_id: new_id("op"), hlc: now.clone(), device_id: dev.clone(), staff_id: actor_s.id.clone(),
+            audience: format!("class:{class_id}"), table: "homework_note".into(), record_id: id.to_string(),
+            kind: if device_mode == DeviceMode::Server { "delete".into() } else { "action".into() },
+            payload: payload.clone(), base_version: None, server_epoch: 1,
+        };
+        Ok(Effect { value: (), audit, op })
     })?;
     Ok(())
+}
+
+/// A device-originated command that the school PC replays as its author (see
+/// sync::apply). Each one is also what the device ran locally.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "cmd", rename_all = "snake_case")]
+pub enum ClientCmd {
+    RecordMessage { input: RecordMessageInput },
+    MarkCircularRead { circular_id: String },
+    DeleteHomeworkNote { id: String },
+    SaveReportRemark { input: ReportRemarkInput },
+    CreateStudent { id: String, today: String, provisional_no: String, input: NewStudentInput },
+    RecordExpense { id: String, today: String, input: ExpenseInput },
+}
+
+pub fn client_cmd_payload(cmd: &ClientCmd) -> String {
+    serde_json::to_string(cmd).unwrap_or_default()
+}
+
+/// Replay a [`ClientCmd`] on the school PC as `author` (same logic, Server mode).
+pub fn run_client_cmd(conn: &mut Connection, author: &SessionStaff, device_id: &str, cmd: &ClientCmd) -> CmdResult<()> {
+    let dev = Some(device_id);
+    let mode = DeviceMode::Server;
+    match cmd {
+        ClientCmd::RecordMessage { input } => record_message_logic(conn, author, dev, mode, input).map(|_| ()),
+        ClientCmd::MarkCircularRead { circular_id } => mark_circular_read_logic(conn, author, dev, mode, circular_id),
+        ClientCmd::DeleteHomeworkNote { id } => delete_homework_note_with(conn, author, dev, mode, id),
+        ClientCmd::SaveReportRemark { input } => save_report_remark_logic(conn, author, dev, mode, input),
+        ClientCmd::CreateStudent { id, today, provisional_no, input } => {
+            create_student_with(conn, author, dev, mode, today, input, Some(id), Some(provisional_no)).map(|_| ())
+        }
+        ClientCmd::RecordExpense { id, today, input } => record_expense_with(conn, author, dev, mode, today, input, Some(id)).map(|_| ()),
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -4005,7 +4113,7 @@ pub fn email_homework_note_logic(conn: &mut Connection, actor_s: &SessionStaff, 
         insert_message_in_tx(
             &tx, ctx.mode, &actor_s.id, dev.as_deref(), "email", "homework", &lang,
             Some(gid), None, email.as_deref(), Some(subject), Some(&text),
-            Some("homework_note"), Some(id), "queued", school_id.as_deref(), &now,
+            Some("homework_note"), Some(id), "queued", school_id.as_deref(), &now, None, None,
         )?;
         queued += 1;
     }
@@ -5210,7 +5318,7 @@ pub fn queue_fee_reminders_logic(
         insert_message_in_tx(
             &tx, device_mode, &actor_s.id, device_id, "email", "fee_reminder", &r.language,
             r.guardian_id.as_deref(), None, r.guardian_email.as_deref(), r.subject.as_deref(), Some(&r.body),
-            Some("student"), Some(sid), "queued", school_id.as_deref(), &now,
+            Some("student"), Some(sid), "queued", school_id.as_deref(), &now, None, None,
         )?;
         queued += 1;
     }
@@ -6487,7 +6595,7 @@ pub fn list_report_templates_logic(conn: &mut Connection, _actor_s: &SessionStaf
     Ok(load_report_templates(conn, &language)?)
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ReportRemarkInput {
     pub exam_id: String,
     pub student_id: String,
@@ -6513,10 +6621,12 @@ pub fn save_report_remark_logic(conn: &mut Connection, actor_s: &SessionStaff, d
     }
     let now = now_iso();
     let school_id = single_school_id(conn)?;
-    let id = new_id("rmk");
+    // One remark per (exam, student): a deterministic id shared by device and PC.
+    let id = format!("rmk-{}-{}", input.exam_id, input.student_id);
     let sync_state = if device_mode == DeviceMode::Server { "confirmed" } else { "on_device" };
     let ctx = WriteCtx { mode: device_mode };
     let dev = device_id.map(str::to_string);
+    let cmd_payload = client_cmd_payload(&ClientCmd::SaveReportRemark { input: input.clone() });
     let exam_id = input.exam_id.clone();
     let student_id = input.student_id.clone();
     let text = input.text.trim().to_string();
@@ -6553,8 +6663,9 @@ pub fn save_report_remark_logic(conn: &mut Connection, actor_s: &SessionStaff, d
         };
         let op = Op {
             op_id: new_id("op"), hlc: now.clone(), device_id: dev.clone().unwrap_or_default(), staff_id: actor_s.id.clone(),
-            audience: format!("class:{class_id2}"), table: "report_remark".into(), record_id, kind: "insert".into(),
-            payload: serde_json::json!({ "class_id": class_id2, "student_id": student_id }).to_string(),
+            audience: format!("class:{class_id2}"), table: "report_remark".into(), record_id,
+            kind: if device_mode == DeviceMode::Server { "insert".into() } else { "action".into() },
+            payload: if device_mode == DeviceMode::Server { "{}".into() } else { cmd_payload },
             base_version: None, server_epoch: 1,
         };
         Ok(Effect { value: (), audit, op })
@@ -8325,8 +8436,12 @@ fn map_message(r: &rusqlite::Row) -> rusqlite::Result<MessageDto> {
     })
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RecordMessageInput {
+    /// Chosen by the originating device so its local row and the school PC's row are
+    /// one row (set automatically; callers may leave it empty).
+    #[serde(default)]
+    pub id: Option<String>,
     /// `email | wa_tap | wa_auto | app`.
     pub channel: String,
     /// The purpose / template key (`receipt_share`, later `fee_reminder`,
@@ -8386,9 +8501,11 @@ fn insert_message_in_tx(
     status: &str,
     school_id: Option<&str>,
     now: &str,
+    id: Option<&str>,
+    client_cmd: Option<&ClientCmd>,
 ) -> rusqlite::Result<String> {
     let sync_state = if mode == DeviceMode::Server { "confirmed" } else { "on_device" };
-    let id = new_id("msg");
+    let id = id.map(str::to_string).unwrap_or_else(|| new_id("msg"));
     tx.execute(
         "INSERT INTO message(id,kind,channel,language,to_guardian_id,to_staff_id,to_address,subject,body,status,related_table,related_id,created_by,school_id,created_at,updated_at,updated_by_staff,updated_by_device,sync_state) \
          VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?15,?13,?16,?17)",
@@ -8412,8 +8529,8 @@ fn insert_message_in_tx(
         audience: "admin".into(),
         table: "message".into(),
         record_id: id.clone(),
-        kind: "insert".into(),
-        payload: "{}".into(),
+        kind: if mode == DeviceMode::Client && client_cmd.is_some() { "action".into() } else { "insert".into() },
+        payload: client_cmd.map(client_cmd_payload).unwrap_or_else(|| "{}".into()),
         base_version: None,
         server_epoch: 1,
     })?;
@@ -8483,13 +8600,17 @@ pub fn record_message_logic(
 
     let now = now_iso();
     let school_id = single_school_id(conn)?;
+    // The device picks the id; a client queues the command itself (the school PC
+    // replays it as the author and alone performs any email / WhatsApp sending).
+    let msg_id = input.id.clone().unwrap_or_else(|| new_id("msg"));
+    let cmd = ClientCmd::RecordMessage { input: RecordMessageInput { id: Some(msg_id.clone()), ..input.clone() } };
     let tx = conn.transaction()?;
     let id = insert_message_in_tx(
         &tx, device_mode, &actor_s.id, device_id, channel.as_str(), &input.kind, &input.language,
         input.to_guardian_id.as_deref(), input.to_staff_id.as_deref(), input.to_address.as_deref(),
         input.subject.as_deref(), input.body.as_deref(), input.related_table.as_deref(),
-        input.related_id.as_deref(), status.as_str(), school_id.as_deref(), &now,
-    )?;
+        input.related_id.as_deref(), status.as_str(), school_id.as_deref(), &now, Some(&msg_id), Some(&cmd),
+        )?;
     tx.commit()?;
 
     conn.query_row("SELECT * FROM message WHERE id=?1", params![id], map_message).map_err(Into::into)
@@ -8791,10 +8912,12 @@ pub fn mark_circular_read_logic(conn: &mut Connection, actor_s: &SessionStaff, d
     if conn.query_row("SELECT 1 FROM circular_read WHERE circular_id=?1 AND staff_id=?2 AND read_at IS NOT NULL", params![circular_id, actor_s.id], |_| Ok(())).optional()?.is_some() {
         return Ok(()); // already read — idempotent
     }
-    let id = new_id("crd");
+    // One read per (circular, staff): a deterministic id shared by device and PC.
+    let id = format!("crd-{circular_id}-{}", actor_s.id);
     let now = now_iso();
     let school_id = single_school_id(conn)?;
     let sync_state = if device_mode == DeviceMode::Server { "confirmed" } else { "on_device" };
+    let cmd_payload = client_cmd_payload(&ClientCmd::MarkCircularRead { circular_id: circular_id.to_string() });
     let ctx = WriteCtx { mode: device_mode };
     let dev = device_id.map(str::to_string);
     let (id2, staff, cid, now2) = (id.clone(), actor_s.id.clone(), circular_id.to_string(), now.clone());
@@ -8806,7 +8929,7 @@ pub fn mark_circular_read_logic(conn: &mut Connection, actor_s: &SessionStaff, d
             params![id2, cid, staff, now2, school_id, dev, sync_state],
         )?;
         let audit = AuditEntry { at: now2.clone(), staff_id: Some(staff.clone()), action: "mark_circular_read".into(), table: Some("circular_read".into()), record_id: Some(id2.clone()), after_json: Some(serde_json::json!({"circular_id": cid}).to_string()), ..Default::default() };
-        let op = Op { op_id: new_id("op"), hlc: now2.clone(), device_id: dev.clone().unwrap_or_default(), staff_id: staff.clone(), audience: "admin".into(), table: "circular_read".into(), record_id: id2.clone(), kind: "insert".into(), payload: "{}".into(), base_version: None, server_epoch: 1 };
+        let op = Op { op_id: new_id("op"), hlc: now2.clone(), device_id: dev.clone().unwrap_or_default(), staff_id: staff.clone(), audience: "admin".into(), table: "circular_read".into(), record_id: id2.clone(), kind: if device_mode == DeviceMode::Server { "insert".into() } else { "action".into() }, payload: if device_mode == DeviceMode::Server { "{}".into() } else { cmd_payload.clone() }, base_version: None, server_epoch: 1 };
         Ok(Effect { value: (), audit, op })
     })?;
     Ok(())
@@ -10238,6 +10361,7 @@ mod tests {
     // ---- Phase 14: messaging outbox ---------------------------------------
     fn wa_tap_input() -> RecordMessageInput {
         RecordMessageInput {
+            id: None,
             channel: "wa_tap".into(),
             kind: "receipt_share".into(),
             language: "en".into(),
@@ -10384,6 +10508,7 @@ mod tests {
 
     fn absence_input(student_id: &str) -> RecordMessageInput {
         RecordMessageInput {
+            id: None,
             channel: "wa_tap".into(), kind: "absence_alert".into(), language: "en".into(),
             to_guardian_id: None, to_staff_id: None, to_address: Some("9876543210".into()),
             subject: None, body: Some("Absent today".into()),
@@ -10493,7 +10618,7 @@ mod tests {
         set_module_logic(&mut c, &principal(), "wa_auto", true).unwrap();
         assert_eq!(set_wa_auto_config_logic(&mut c, &accountant(), &wa_cfg("1", Some("t"))).unwrap_err().code, "FORBIDDEN");
         // A wa_auto message queues only while the module is on.
-        let wa_msg = RecordMessageInput { channel: "wa_auto".into(), kind: "fee_reminder".into(), language: "en".into(), to_guardian_id: None, to_staff_id: None, to_address: Some("9876543210".into()), subject: None, body: Some("x".into()), related_table: None, related_id: None };
+        let wa_msg = RecordMessageInput { id: None, channel: "wa_auto".into(), kind: "fee_reminder".into(), language: "en".into(), to_guardian_id: None, to_staff_id: None, to_address: Some("9876543210".into()), subject: None, body: Some("x".into()), related_table: None, related_id: None };
         assert!(record_message_logic(&mut c, &accountant(), None, DeviceMode::Server, &wa_msg).is_ok());
         set_module_logic(&mut c, &principal(), "wa_auto", false).unwrap();
         assert_eq!(record_message_logic(&mut c, &accountant(), None, DeviceMode::Server, &wa_msg).unwrap_err().code, "MODULE_OFF");
