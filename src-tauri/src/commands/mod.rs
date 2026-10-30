@@ -856,13 +856,17 @@ pub fn get_attendance_sheet(state: State<RtCtx>, class_id: String, date: String)
 #[tauri::command]
 pub fn save_attendance_draft(state: State<RtCtx>, class_id: String, date: String, marks: Vec<MarkInput>) -> CmdResult<()> {
     let actor = state.require_session()?;
-    state.with_db(|conn| save_attendance_draft_logic(conn, &actor, &class_id, &date, &marks))
+    let device_id = state.device_id.lock().map_err(|_| crate::error::CmdError::internal("lock"))?.clone();
+    let mode = state.device_mode;
+    state.with_db(|conn| attendance_write(conn, &actor, device_id.as_deref(), mode, &class_id, &date, &marks, false))
 }
 
 #[tauri::command]
 pub fn submit_attendance(state: State<RtCtx>, class_id: String, date: String, marks: Vec<MarkInput>) -> CmdResult<()> {
     let actor = state.require_session()?;
-    state.with_db(|conn| submit_attendance_logic(conn, &actor, &class_id, &date, &marks))
+    let device_id = state.device_id.lock().map_err(|_| crate::error::CmdError::internal("lock"))?.clone();
+    let mode = state.device_mode;
+    state.with_db(|conn| attendance_write(conn, &actor, device_id.as_deref(), mode, &class_id, &date, &marks, true))
 }
 
 #[tauri::command]
@@ -979,7 +983,16 @@ pub fn mark_staff_attendance(state: State<RtCtx>, input: MarkStaffAttendanceInpu
 #[tauri::command]
 pub fn request_leave(state: State<RtCtx>, input: LeaveRequestInput) -> CmdResult<RequestDto> {
     let actor = state.require_session()?;
-    state.with_db(|conn| request_leave_logic(conn, &actor, &input))
+    let device_id = state.device_id.lock().map_err(|_| crate::error::CmdError::internal("lock"))?.clone();
+    let mode = state.device_mode;
+    let cmd = RequestCmd::Leave { id: new_request_id(), input: input.clone() };
+    state.with_db(|conn| request_command(conn, &actor, device_id.as_deref(), mode, &cmd))
+        .map(|d| d.expect("request command returns the request"))
+}
+
+/// A fresh request id (chosen on the originating device; see RequestCmd).
+fn new_request_id() -> String {
+    format!("req-{}", uuid::Uuid::now_v7())
 }
 
 // --------------------------------------------------------------- payments -----
@@ -1331,15 +1344,17 @@ pub fn get_marks_sheet(state: State<RtCtx>, exam_subject_id: String) -> CmdResul
 #[tauri::command]
 pub fn save_marks_draft(state: State<RtCtx>, exam_subject_id: String, entries: Vec<MarkEntryInput>) -> CmdResult<()> {
     let actor = state.require_session()?;
+    let device_id = state.device_id.lock().map_err(|_| crate::error::CmdError::internal("lock"))?.clone();
     let mode = state.device_mode;
-    state.with_db(|conn| save_marks_draft_logic(conn, &actor, mode, &exam_subject_id, &entries))
+    state.with_db(|conn| upsert_marks(conn, &actor, device_id.as_deref(), mode, &exam_subject_id, &entries, false))
 }
 
 #[tauri::command]
 pub fn submit_marks(state: State<RtCtx>, exam_subject_id: String, entries: Vec<MarkEntryInput>) -> CmdResult<()> {
     let actor = state.require_session()?;
+    let device_id = state.device_id.lock().map_err(|_| crate::error::CmdError::internal("lock"))?.clone();
     let mode = state.device_mode;
-    state.with_db(|conn| submit_marks_logic(conn, &actor, mode, &exam_subject_id, &entries))
+    state.with_db(|conn| upsert_marks(conn, &actor, device_id.as_deref(), mode, &exam_subject_id, &entries, true))
 }
 
 #[tauri::command]
@@ -1405,13 +1420,20 @@ pub fn list_payments(state: State<RtCtx>, student_id: Option<String>) -> CmdResu
 #[tauri::command]
 pub fn create_request(state: State<RtCtx>, input: RequestInput) -> CmdResult<RequestDto> {
     let actor = state.require_session()?;
-    state.with_db(|conn| create_request_logic(conn, &actor, &input))
+    let device_id = state.device_id.lock().map_err(|_| crate::error::CmdError::internal("lock"))?.clone();
+    let mode = state.device_mode;
+    let cmd = RequestCmd::Create { id: new_request_id(), input: input.clone() };
+    state.with_db(|conn| request_command(conn, &actor, device_id.as_deref(), mode, &cmd))
+        .map(|d| d.expect("request command returns the request"))
 }
 
 #[tauri::command]
 pub fn cancel_request(state: State<RtCtx>, id: String) -> CmdResult<()> {
     let actor = state.require_session()?;
-    state.with_db(|conn| cancel_request_logic(conn, &actor, &id))
+    let device_id = state.device_id.lock().map_err(|_| crate::error::CmdError::internal("lock"))?.clone();
+    let mode = state.device_mode;
+    state.with_db(|conn| request_command(conn, &actor, device_id.as_deref(), mode, &RequestCmd::Cancel { id: id.clone() }))
+        .map(|_| ())
 }
 
 #[tauri::command]

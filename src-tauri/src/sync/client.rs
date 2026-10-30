@@ -10,7 +10,7 @@
 
 use crate::kv;
 use crate::sync::protocol::{AudienceKey, JoinPayload, JoinReq, JoinResp};
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
 /// `app_kv` key for the client-identity blob.
@@ -79,7 +79,25 @@ pub fn apply_join_response(
 }
 
 pub fn store(conn: &Connection, id: &ClientIdentity) -> rusqlite::Result<()> {
-    kv::set(conn, KV_CLIENT, id)
+    kv::set(conn, KV_CLIENT, id)?;
+    ensure_self_device_row(conn, id)
+}
+
+/// A client's local DB never receives the school's device registry (it holds token
+/// hashes), but this device's own rows (payments, check-ins, …) reference
+/// `device(id)`. Keep a minimal row for THIS device only — no token, no session key —
+/// so those local writes satisfy their foreign key. Idempotent; also run at startup
+/// for devices joined before this existed.
+pub fn ensure_self_device_row(conn: &Connection, id: &ClientIdentity) -> rusqlite::Result<()> {
+    if conn.query_row("SELECT 1 FROM staff WHERE id=?1", rusqlite::params![id.staff_id], |_| Ok(())).optional()?.is_none() {
+        return Ok(()); // staff row arrives with the bootstrap; retried at next startup
+    }
+    conn.execute(
+        "INSERT OR IGNORE INTO device(id,staff_id,platform,name,token_hash,receipt_series,admission_series,needs_rejoin) \
+         VALUES (?1,?2,'android','This device','',?3,?4,0)",
+        rusqlite::params![id.device_id, id.staff_id, id.receipt_series, id.admission_series],
+    )?;
+    Ok(())
 }
 
 pub fn load(conn: &Connection) -> Option<ClientIdentity> {

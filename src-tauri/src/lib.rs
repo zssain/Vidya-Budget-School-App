@@ -68,6 +68,8 @@ fn build_ctx(data_dir: std::path::PathBuf) -> RtCtx {
     // Phase B: a device that has joined a school runs as a Client; otherwise it is the
     // single-PC Server. Decided here from the persisted client identity.
     let mut device_mode = DeviceMode::Server;
+    // A joined client's own device id (its ops are stamped with it; write::stamp_client_op).
+    let mut client_device_id: Option<String> = None;
     let (db, key_missing) = match security::keys::ensure_key(key_store.as_ref(), db_exists) {
         Ok(key) => {
             let hex = security::keys::to_hex(&key);
@@ -88,8 +90,10 @@ fn build_ctx(data_dir: std::path::PathBuf) -> RtCtx {
                         }
                         // A joined client starts LOCKED like any device: the join token
                         // authenticates sync, never a human session (security::device_pin).
-                        if crate::sync::client::is_client(&conn) {
+                        if let Some(cid) = crate::sync::client::load(&conn) {
+                            let _ = crate::sync::client::ensure_self_device_row(&conn, &cid);
                             device_mode = DeviceMode::Client;
+                            client_device_id = Some(cid.device_id);
                         }
                         (Some(conn), false)
                     }
@@ -116,7 +120,7 @@ fn build_ctx(data_dir: std::path::PathBuf) -> RtCtx {
         session: Mutex::new(None),
         last_activity_ms: Mutex::new(0),
         machine_id,
-        device_id: Mutex::new(None),
+        device_id: Mutex::new(client_device_id),
         device_mode,
         http: reqwest::Client::new(),
         recovery: Mutex::new(None),

@@ -420,6 +420,10 @@ fn attendance_op_grant_allows(conn: &Connection, actor: &Actor, target: &Target,
 pub struct OpAuth<'a> {
     pub device_id: &'a str,
     pub staff_id: &'a str,
+    /// How the op actually reached the school PC: `"lan"` (pinned TLS on the school
+    /// network / relay) or `"drive"`. Server-side truth — a device's own claim of its
+    /// route is never trusted (staff check-in "at school" needs the LAN, §9 decision).
+    pub route: &'a str,
 }
 
 /// SHA-256 over everything an op asserts, so a replayed op_id with different
@@ -496,7 +500,7 @@ pub fn apply_client_op(conn: &mut Connection, auth: &OpAuth, op: &Op) -> rusqlit
     // apply_op's domain writes run in their own transaction, so an error leaves no
     // partial row behind; it is turned into a remembered rejection instead of
     // aborting the whole push / Drive import.
-    match apply_op(conn, op) {
+    match apply_op_routed(conn, op, auth.route) {
         Ok(res) => remember(conn, res),
         Err(e) => {
             tracing::warn!(table = %op.table, kind = %op.kind, "client op failed to apply: {e}");
@@ -505,8 +509,13 @@ pub fn apply_client_op(conn: &mut Connection, auth: &OpAuth, op: &Op) -> rusqlit
     }
 }
 
-/// Apply one op. Idempotent by `op_id`. Returns the per-op result.
+/// Apply one op. Idempotent by `op_id`. Returns the per-op result. (Server-local
+/// callers; inbound device ops go through `apply_client_op`, which knows the route.)
 pub fn apply_op(conn: &mut Connection, op: &Op) -> rusqlite::Result<OpResult> {
+    apply_op_routed(conn, op, "lan")
+}
+
+fn apply_op_routed(conn: &mut Connection, op: &Op, route: &str) -> rusqlite::Result<OpResult> {
     // 1) Idempotency — same op via LAN and Drive applies once (§8.4).
     if let Some(result) = conn
         .query_row("SELECT result FROM applied_ops WHERE op_id=?1", params![op.op_id], |r| r.get::<_, Option<String>>(0))
@@ -535,8 +544,11 @@ pub fn apply_op(conn: &mut Connection, op: &Op) -> rusqlite::Result<OpResult> {
     // 1d) Deny by default: an op is applied only if the server has a rule for its
     //     (table, kind). Unknown tables (staff, device, invite, app_kv, request,
     //     class, …) and `delete` (no tombstone path yet) are refused, never upserted.
+    // `request`/`action` is a replayed request command (raise / leave / cancel) whose
+    // permission rules live in commands::logic::request_command (run as the author).
+    let request_cmd = op.table == "request" && op.kind == "action";
     if !matches!(op.kind.as_str(), "insert" | "update" | "action")
-        || (op.table != "staff_attendance" && action_for(&op.table, &op.kind).is_none())
+        || (!request_cmd && op.table != "staff_attendance" && action_for(&op.table, &op.kind).is_none())
     {
         return finalize(conn, op, rejected(&op.op_id, codes::UNSUPPORTED_OP));
     }
@@ -637,6 +649,29 @@ pub fn apply_op(conn: &mut Connection, op: &Op) -> rusqlite::Result<OpResult> {
         }
     }
 
+    // 4b'') Staff check-in / check-out commands, replayed as the author with the route
+    //       the op really used.
+    if op.table == "staff_attendance" && op.kind == "action" {
+        return apply_staff_attendance_action(conn, op, route);
+    }
+
+    // 4b') A request command (raise / apply for leave / cancel own) is replayed as the
+    //      author through the same transactional logic the device ran.
+    if request_cmd {
+        return apply_request_action(conn, op);
+    }
+
+    // 4c') Marks arrive the same way: one action op with the whole subject sheet.
+    if op.table == "marks_sheet" && op.kind == "action" {
+        return apply_marks_action(conn, op);
+    }
+
+    // 4c) Attendance arrives as ONE action op carrying the complete sheet; it is
+    //     applied atomically through the same domain write the device used.
+    if op.table == "attendance_sheet" && op.kind == "action" {
+        return apply_attendance_action(conn, op);
+    }
+
     // 5) Payments never rejected for amount (§8.6).
     if op.table == "payment" && op.kind == "insert" {
         return apply_payment(conn, op);
@@ -656,6 +691,156 @@ pub fn apply_op(conn: &mut Connection, op: &Op) -> rusqlite::Result<OpResult> {
     }
 
     apply_upsert(conn, op)
+}
+
+/// Replay a staff check-in / check-out as its author. The check-in route is the
+/// transport the op arrived by (`route`), not what the device claimed: a check-in that
+/// came through Drive is recorded as "away" for the Principal to accept (§9 default).
+fn apply_staff_attendance_action(conn: &mut Connection, op: &Op, route: &str) -> rusqlite::Result<OpResult> {
+    let staff: Option<(String, String)> = conn
+        .query_row("SELECT name, role FROM staff WHERE id=?1", params![op.staff_id], |r| Ok((r.get(0)?, r.get(1)?)))
+        .optional()?;
+    let Some((name, role)) = staff else {
+        return finalize(conn, op, rejected(&op.op_id, codes::DEVICE_REVOKED_OR_UNKNOWN));
+    };
+    let author = crate::state::SessionStaff { id: op.staff_id.clone(), name, role };
+    let mode = crate::write::DeviceMode::Server;
+    let res = match op.payload.get("cmd").and_then(|v| v.as_str()) {
+        Some("check_in") => {
+            let Some(mut input) = op.payload.get("input").and_then(|v| serde_json::from_value::<crate::commands::logic::CheckInInput>(v.clone()).ok()) else {
+                return finalize(conn, op, rejected(&op.op_id, codes::MALFORMED));
+            };
+            if route == "drive" {
+                input.route = "drive".into();
+            }
+            crate::commands::logic::staff_check_in_logic(conn, &author, Some(&op.device_id), mode, &input).map(|_| ())
+        }
+        Some("check_out") => {
+            let date = op.payload.get("date").and_then(|v| v.as_str()).unwrap_or_default().to_string();
+            let minute = op.payload.get("minute").and_then(|v| v.as_i64()).unwrap_or(-1);
+            crate::commands::logic::staff_check_out_logic(conn, &author, Some(&op.device_id), mode, &date, minute)
+        }
+        _ => return finalize(conn, op, rejected(&op.op_id, codes::MALFORMED)),
+    };
+    match res {
+        Ok(()) => {
+            let seq: i64 = conn.query_row("SELECT COALESCE(MAX(server_seq),0) FROM op_log", [], |r| r.get(0))?;
+            finalize(conn, op, confirmed(&op.op_id, seq, None))
+        }
+        Err(e) => finalize(conn, op, rejected(&op.op_id, &e.code)),
+    }
+}
+
+/// Replay a client's request command as its author (see commands::logic::RequestCmd).
+/// The request id travels in the command, so the canonical row is the device's row.
+fn apply_request_action(conn: &mut Connection, op: &Op) -> rusqlite::Result<OpResult> {
+    let Ok(cmd) = serde_json::from_value::<crate::commands::logic::RequestCmd>(op.payload.clone()) else {
+        return finalize(conn, op, rejected(&op.op_id, codes::MALFORMED));
+    };
+    let id_matches = match &cmd {
+        crate::commands::logic::RequestCmd::Create { id, .. }
+        | crate::commands::logic::RequestCmd::Leave { id, .. }
+        | crate::commands::logic::RequestCmd::Cancel { id } => *id == op.record_id,
+    };
+    if !id_matches {
+        return finalize(conn, op, rejected(&op.op_id, codes::MALFORMED));
+    }
+    let staff: Option<(String, String)> = conn
+        .query_row("SELECT name, role FROM staff WHERE id=?1", params![op.staff_id], |r| Ok((r.get(0)?, r.get(1)?)))
+        .optional()?;
+    let Some((name, role)) = staff else {
+        return finalize(conn, op, rejected(&op.op_id, codes::DEVICE_REVOKED_OR_UNKNOWN));
+    };
+    let author = crate::state::SessionStaff { id: op.staff_id.clone(), name, role };
+    match crate::commands::logic::request_command(conn, &author, Some(&op.device_id), crate::write::DeviceMode::Server, &cmd) {
+        Ok(_) => {
+            let seq: i64 = conn.query_row("SELECT COALESCE(MAX(server_seq),0) FROM op_log", [], |r| r.get(0))?;
+            finalize(conn, op, confirmed(&op.op_id, seq, None))
+        }
+        Err(e) => finalize(conn, op, rejected(&op.op_id, &e.code)),
+    }
+}
+
+/// Apply a client's marks sheet as its author through commands::logic::upsert_marks
+/// (enrolment, max-marks validation and the per-subject submitted lock).
+fn apply_marks_action(conn: &mut Connection, op: &Op) -> rusqlite::Result<OpResult> {
+    #[derive(serde::Deserialize)]
+    struct Sheet {
+        exam_subject_id: String,
+        submit: bool,
+        entries: Vec<crate::commands::logic::MarkEntryInput>,
+    }
+    let Ok(sheet) = serde_json::from_value::<Sheet>(op.payload.clone()) else {
+        return finalize(conn, op, rejected(&op.op_id, codes::MALFORMED));
+    };
+    let staff: Option<(String, String)> = conn
+        .query_row("SELECT name, role FROM staff WHERE id=?1", params![op.staff_id], |r| Ok((r.get(0)?, r.get(1)?)))
+        .optional()?;
+    let Some((name, role)) = staff else {
+        return finalize(conn, op, rejected(&op.op_id, codes::DEVICE_REVOKED_OR_UNKNOWN));
+    };
+    let author = crate::state::SessionStaff { id: op.staff_id.clone(), name, role };
+    match crate::commands::logic::upsert_marks(
+        conn,
+        &author,
+        Some(&op.device_id),
+        crate::write::DeviceMode::Server,
+        &sheet.exam_subject_id,
+        &sheet.entries,
+        sheet.submit,
+    ) {
+        Ok(()) => {
+            let seq: i64 = conn.query_row("SELECT COALESCE(MAX(server_seq),0) FROM op_log", [], |r| r.get(0))?;
+            finalize(conn, op, confirmed(&op.op_id, seq, None))
+        }
+        Err(e) => {
+            let code = if e.code == "LOCKED" { codes::NEEDS_REQUEST.to_string() } else { e.code.clone() };
+            finalize(conn, op, rejected(&op.op_id, &code))
+        }
+    }
+}
+
+/// Apply a client's attendance sheet (draft or submit) as its author, through
+/// `commands::logic::attendance_write` — the same validation (enrolment set, valid
+/// marks, submitted-sheet lock) and the same single transaction as on the device.
+fn apply_attendance_action(conn: &mut Connection, op: &Op) -> rusqlite::Result<OpResult> {
+    #[derive(serde::Deserialize)]
+    struct Sheet {
+        class_id: String,
+        date: String,
+        submit: bool,
+        marks: Vec<crate::commands::logic::MarkInput>,
+    }
+    let Ok(sheet) = serde_json::from_value::<Sheet>(op.payload.clone()) else {
+        return finalize(conn, op, rejected(&op.op_id, codes::MALFORMED));
+    };
+    let staff: Option<(String, String)> = conn
+        .query_row("SELECT name, role FROM staff WHERE id=?1", params![op.staff_id], |r| Ok((r.get(0)?, r.get(1)?)))
+        .optional()?;
+    let Some((name, role)) = staff else {
+        return finalize(conn, op, rejected(&op.op_id, codes::DEVICE_REVOKED_OR_UNKNOWN));
+    };
+    let author = crate::state::SessionStaff { id: op.staff_id.clone(), name, role };
+    match crate::commands::logic::attendance_write(
+        conn,
+        &author,
+        Some(&op.device_id),
+        crate::write::DeviceMode::Server,
+        &sheet.class_id,
+        &sheet.date,
+        &sheet.marks,
+        sheet.submit,
+    ) {
+        Ok(()) => {
+            let seq: i64 = conn.query_row("SELECT COALESCE(MAX(server_seq),0) FROM op_log", [], |r| r.get(0))?;
+            finalize(conn, op, confirmed(&op.op_id, seq, None))
+        }
+        Err(e) => {
+            // A submitted sheet → the teacher must raise a correction request.
+            let code = if e.code == "SHEET_LOCKED" { codes::NEEDS_REQUEST.to_string() } else { e.code.clone() };
+            finalize(conn, op, rejected(&op.op_id, &code))
+        }
+    }
 }
 
 /// True if any field carried in `payload` differs from the current DB value.
@@ -798,10 +983,30 @@ fn apply_upsert(conn: &mut Connection, op: &Op) -> rusqlite::Result<OpResult> {
 }
 
 /// Payment insert (§8.6): always accepted; excess → advance_credit + review_flag.
+/// The only columns a synced payment may set; everything else is server bookkeeping.
+const PAYMENT_COLS: &[&str] =
+    &["receipt_no", "student_id", "amount_paise", "mode", "reference", "collected_by", "collected_at", "device_id"];
+
 fn apply_payment(conn: &mut Connection, op: &Op) -> rusqlite::Result<OpResult> {
     let now = now_iso();
     let student_id = op.payload.get("student_id").and_then(|v| v.as_str()).unwrap_or_default().to_string();
     let amount = op.payload.get("amount_paise").and_then(|v| v.as_i64()).unwrap_or(0);
+    let mode_s = op.payload.get("mode").and_then(|v| v.as_str()).unwrap_or_default().to_string();
+    let receipt_no = op.payload.get("receipt_no").and_then(|v| v.as_str()).unwrap_or_default().to_string();
+    let mode = match mode_s.as_str() {
+        "cash" => vidya_core::types::PaymentMode::Cash,
+        "upi" => vidya_core::types::PaymentMode::Upi,
+        "cheque" => vidya_core::types::PaymentMode::Cheque,
+        _ => return finalize(conn, op, rejected(&op.op_id, codes::MALFORMED)),
+    };
+    // A real payment is always accepted (§8.6) — but it must BE one: a known student,
+    // a positive amount, a receipt number, only payment columns, and the sending device.
+    let student_known = conn.query_row("SELECT 1 FROM student WHERE id=?1", params![student_id], |_| Ok(())).optional()?.is_some();
+    let cols_ok = op.payload.as_object().is_some_and(|o| o.keys().all(|k| PAYMENT_COLS.contains(&k.as_str())));
+    let device_ok = op.payload.get("device_id").and_then(|v| v.as_str()).map_or(true, |d| d == op.device_id);
+    if !student_known || amount <= 0 || receipt_no.is_empty() || !cols_ok || !device_ok {
+        return finalize(conn, op, rejected(&op.op_id, codes::MALFORMED));
+    }
 
     // Dues (oldest first) for allocation.
     let dues: Vec<Due> = {
@@ -853,6 +1058,13 @@ fn apply_payment(conn: &mut Connection, op: &Op) -> rusqlite::Result<OpResult> {
     } else {
         OpStatus::Confirmed
     };
+
+    // The balanced receipt voucher, in the SAME transaction (idempotent per payment).
+    let school_id: Option<String> = tx.query_row("SELECT id FROM school LIMIT 1", [], |r| r.get(0)).optional()?;
+    crate::ledger::post_payment_voucher(
+        &tx, &op.record_id, &receipt_no, mode, amount, &now,
+        Some(op.staff_id.as_str()), Some(op.device_id.as_str()), school_id.as_deref(), &now, "confirmed",
+    )?;
 
     let server_seq = write_oplog_audit(&tx, op, &now)?;
     let record = read_row_json(&tx, "payment", &op.record_id)?;

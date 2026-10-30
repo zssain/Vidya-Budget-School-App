@@ -236,7 +236,7 @@ pub fn import_all(
         // Authorship was proven by the device key that opened the bundle; the staff
         // comes from the server's device row, never from the op.
         let p = &pending[*src];
-        let result = apply_client_op(conn, &OpAuth { device_id: &p.device, staff_id: &p.staff }, op)?;
+        let result = apply_client_op(conn, &OpAuth { device_id: &p.device, staff_id: &p.staff, route: "drive" }, op)?;
         match result.status {
             OpStatus::Confirmed => out.confirmed += 1,
             OpStatus::Flagged => out.flagged += 1,

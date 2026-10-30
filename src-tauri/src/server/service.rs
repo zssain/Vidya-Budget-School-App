@@ -370,7 +370,7 @@ fn audience_keys_for(conn: &Connection, staff_id: &str) -> rusqlite::Result<Vec<
 /// Apply pushed ops (≤200) via vidya-core; idempotent by op_id.
 pub fn push(conn: &mut Connection, auth: &DeviceAuth, ops: &[Op], now: time::OffsetDateTime) -> rusqlite::Result<PushResp> {
     let epoch = school_info(conn)?.map(|s| s.server_epoch).unwrap_or(1);
-    let who = crate::sync::apply::OpAuth { device_id: &auth.device_id, staff_id: &auth.staff_id };
+    let who = crate::sync::apply::OpAuth { device_id: &auth.device_id, staff_id: &auth.staff_id, route: "lan" };
     let mut results = Vec::with_capacity(ops.len());
     for op in ops.iter().take(200) {
         results.push(crate::sync::apply::apply_client_op(conn, &who, op)?);

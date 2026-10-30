@@ -3906,7 +3906,13 @@ pub fn save_homework_note_logic(conn: &mut Connection, actor_s: &SessionStaff, d
         let op = Op {
             op_id: new_id("op"), hlc: now.clone(), device_id: dev.clone().unwrap_or_default(), staff_id: actor_s.id.clone(),
             audience: format!("class:{class_id}"), table: "homework_note".into(), record_id: id2.clone(), kind: "insert".into(),
-            payload: serde_json::json!({ "class_id": class_id, "class_subject_id": cs }).to_string(),
+            // The complete row (the server inserts it; `kind`/`text` are NOT NULL there).
+            payload: serde_json::json!({
+                "class_id": class_id, "class_subject_id": cs, "kind": kind_s, "text": text,
+                "attachments_json": attachments_json, "shared_json": "[]", "created_by": actor_s.id,
+                "school_id": school_id, "created_at": now, "updated_at": now,
+            })
+            .to_string(),
             base_version: None, server_epoch: 1,
         };
         Ok(Effect { value: (), audit, op })
@@ -4529,45 +4535,138 @@ pub fn get_attendance_sheet_logic(conn: &mut Connection, class_id: &str, date: &
     Ok(AttendanceSheetDto { class_id: class_id.to_string(), class_display, date: date.to_string(), status, rows })
 }
 
-fn upsert_sheet_and_marks(
+/// The one attendance write (draft or submit), shared by the device command and the
+/// school PC applying a synced op (`sync::apply`), so both enforce identical rules.
+/// Validates everything BEFORE writing, then commits sheet + marks + submit status +
+/// audit + sync op(s) in ONE transaction:
+/// * a submitted sheet is never changed here (Principal / correction request only);
+/// * the students must be enrolled in the class on `date` (no duplicates, no other
+///   class's students, no unknown ids); a submit must cover exactly that set;
+/// * every mark must be a valid NEW mark (P/A — legacy L is never written).
+///
+/// On a client the change leaves as ONE `attendance_sheet`/`action` op carrying the
+/// complete sheet (applied atomically by the server); on the school PC each sheet/mark
+/// row gets an op_log entry so pull delivers the canonical result to other devices.
+#[allow(clippy::too_many_arguments)]
+pub fn attendance_write(
     conn: &mut Connection,
+    actor: &SessionStaff,
+    device_id: Option<&str>,
+    mode: DeviceMode,
     class_id: &str,
     date: &str,
     marks: &[MarkInput],
     submit: bool,
-    actor: &SessionStaff,
 ) -> CmdResult<()> {
-    let now = now_iso();
-    let sheet_id: String = match conn
-        .query_row("SELECT id FROM attendance_sheet WHERE class_id=?1 AND date=?2", params![class_id, date], |r| r.get(0))
-        .optional()?
-    {
-        Some(id) => id,
-        None => {
-            let id = new_id("sheet");
-            conn.execute(
-                "INSERT INTO attendance_sheet(id,class_id,date,status,created_at,updated_at,sync_state) VALUES (?1,?2,?3,'draft',?4,?4,'confirmed')",
-                params![id, class_id, date, now],
-            )?;
-            id
-        }
+    require_may_take_attendance(conn, actor, class_id, date)?;
+    let day = &date[..date.len().min(10)];
+
+    // Lock: a submitted sheet can't be edited through this path.
+    let existing: Option<(String, String)> = conn
+        .query_row("SELECT id, status FROM attendance_sheet WHERE class_id=?1 AND date=?2", params![class_id, date], |r| {
+            Ok((r.get(0)?, r.get(1)?))
+        })
+        .optional()?;
+    if matches!(&existing, Some((_, st)) if st == "submitted") {
+        return Err(CoreError::SheetLocked.into());
+    }
+
+    // Validate the whole sheet before any write.
+    let enrolled: std::collections::BTreeSet<String> = {
+        let mut st = conn.prepare(
+            "SELECT student_id FROM enrollment WHERE class_id=?1 AND from_date<=?2 AND (to_date IS NULL OR to_date>=?2)",
+        )?;
+        let rows = st.query_map(params![class_id, day], |r| r.get::<_, String>(0))?;
+        rows.collect::<rusqlite::Result<_>>()?
     };
+    let mut seen = std::collections::BTreeSet::new();
     for m in marks {
-        // v2: new marks are Present/Absent only (legacy L is read, never written).
+        if !seen.insert(m.student_id.clone()) {
+            return Err(CmdError::validation("marks", "duplicate_student"));
+        }
+        if !enrolled.contains(&m.student_id) {
+            return Err(CmdError::validation("marks", "student_not_in_class"));
+        }
         let mark = vidya_core::attendance::parse_mark(&m.mark)?;
         vidya_core::attendance::validate_new_mark(mark)?;
-        conn.execute(
-            "INSERT INTO attendance_mark(id,sheet_id,student_id,mark) VALUES (?1,?2,?3,?4) \
-             ON CONFLICT(sheet_id,student_id) DO UPDATE SET mark=excluded.mark",
-            params![new_id("mk"), sheet_id, m.student_id, m.mark],
-        )?;
     }
-    if submit {
-        conn.execute(
-            "UPDATE attendance_sheet SET status='submitted', submitted_by=?1, submitted_at=?2, updated_at=?2 WHERE id=?3",
-            params![actor.id, now, sheet_id],
-        )?;
+    if submit && seen.len() < enrolled.len() {
+        return Err(CoreError::IncompleteSheet { remaining: (enrolled.len() - seen.len()) as u32 }.into());
     }
+
+    let now = now_iso();
+    // A new sheet gets a deterministic id so every device and the school PC agree on it.
+    let sheet_id = existing.map(|(id, _)| id).unwrap_or_else(|| format!("sheet-{class_id}-{day}"));
+    let sync_state = if mode == DeviceMode::Server { "confirmed" } else { "on_device" };
+    let dev = device_id.unwrap_or_default().to_string();
+    let payload = serde_json::json!({
+        "class_id": class_id,
+        "date": date,
+        "submit": submit,
+        "marks": marks.iter().map(|m| serde_json::json!({ "student_id": m.student_id, "mark": m.mark })).collect::<Vec<_>>(),
+    });
+    let ctx = WriteCtx { mode };
+    with_write(conn, &ctx, |tx| {
+        tx.execute(
+            "INSERT INTO attendance_sheet(id,class_id,date,status,created_at,updated_at,sync_state) VALUES (?1,?2,?3,'draft',?4,?4,?5) \
+             ON CONFLICT(class_id,date) DO NOTHING",
+            params![sheet_id, class_id, date, now, sync_state],
+        )?;
+        let mut mark_ids = Vec::with_capacity(marks.len());
+        for m in marks {
+            tx.execute(
+                "INSERT INTO attendance_mark(id,sheet_id,student_id,mark) VALUES (?1,?2,?3,?4) \
+                 ON CONFLICT(sheet_id,student_id) DO UPDATE SET mark=excluded.mark",
+                params![format!("mk-{sheet_id}-{}", m.student_id), sheet_id, m.student_id, m.mark],
+            )?;
+            let id: String = tx.query_row(
+                "SELECT id FROM attendance_mark WHERE sheet_id=?1 AND student_id=?2",
+                params![sheet_id, m.student_id],
+                |r| r.get(0),
+            )?;
+            mark_ids.push(id);
+        }
+        if submit {
+            tx.execute(
+                "UPDATE attendance_sheet SET status='submitted', submitted_by=?1, submitted_at=?2, updated_at=?2 WHERE id=?3",
+                params![actor.id, now, sheet_id],
+            )?;
+        } else {
+            tx.execute("UPDATE attendance_sheet SET updated_at=?1 WHERE id=?2", params![now, sheet_id])?;
+        }
+        // School PC: one op_log row per changed mark so pull carries them (the sheet row
+        // itself is the Effect op below).
+        if mode == DeviceMode::Server {
+            for id in &mark_ids {
+                crate::write::append_op(
+                    tx,
+                    DeviceMode::Server,
+                    &Op {
+                        op_id: new_id("op"), hlc: now.clone(), device_id: dev.clone(), staff_id: actor.id.clone(),
+                        audience: format!("class:{class_id}"), table: "attendance_mark".into(), record_id: id.clone(),
+                        kind: "update".into(), payload: "{}".into(), base_version: None, server_epoch: 1,
+                    },
+                )?;
+            }
+        }
+        let audit = AuditEntry {
+            at: now.clone(),
+            staff_id: Some(actor.id.clone()),
+            device_id: device_id.map(str::to_string),
+            action: if submit { "attendance.submit".into() } else { "attendance.save_draft".into() },
+            table: Some("attendance_sheet".into()),
+            record_id: Some(sheet_id.clone()),
+            after_json: Some(payload.to_string()),
+            ..Default::default()
+        };
+        let op = Op {
+            op_id: new_id("op"), hlc: now.clone(), device_id: dev.clone(), staff_id: actor.id.clone(),
+            audience: format!("class:{class_id}"), table: "attendance_sheet".into(), record_id: sheet_id.clone(),
+            kind: if mode == DeviceMode::Server { "update".into() } else { "action".into() },
+            payload: payload.to_string(), base_version: None, server_epoch: 1,
+        };
+        Ok(Effect { value: (), audit, op })
+    })?;
     Ok(())
 }
 
@@ -4586,22 +4685,11 @@ fn require_may_take_attendance(conn: &Connection, actor_s: &SessionStaff, class_
 }
 
 pub fn save_attendance_draft_logic(conn: &mut Connection, actor_s: &SessionStaff, class_id: &str, date: &str, marks: &[MarkInput]) -> CmdResult<()> {
-    require_may_take_attendance(conn, actor_s, class_id, date)?;
-    upsert_sheet_and_marks(conn, class_id, date, marks, false, actor_s)
+    attendance_write(conn, actor_s, None, DeviceMode::Server, class_id, date, marks, false)
 }
 
 pub fn submit_attendance_logic(conn: &mut Connection, actor_s: &SessionStaff, class_id: &str, date: &str, marks: &[MarkInput]) -> CmdResult<()> {
-    require_may_take_attendance(conn, actor_s, class_id, date)?;
-    // Every enrolled student must be marked before submit (§ can_submit).
-    let enrolled: u32 = conn.query_row(
-        "SELECT COUNT(*) FROM enrollment WHERE class_id=?1 AND to_date IS NULL",
-        params![class_id],
-        |r| r.get::<_, i64>(0),
-    )? as u32;
-    if (marks.len() as u32) < enrolled {
-        return Err(CoreError::IncompleteSheet { remaining: enrolled - marks.len() as u32 }.into());
-    }
-    upsert_sheet_and_marks(conn, class_id, date, marks, true, actor_s)
+    attendance_write(conn, actor_s, None, DeviceMode::Server, class_id, date, marks, true)
 }
 
 // ---- Month view + Principal correction -------------------------------------
@@ -5237,7 +5325,14 @@ pub fn record_payment_logic(
                 table: "payment".into(),
                 record_id: pid.clone(),
                 kind: "insert".into(),
-                payload: "{}".into(),
+                // The complete payment: the school PC re-allocates it against ITS dues
+                // and always accepts it (§8.6), posting the voucher there.
+                payload: serde_json::json!({
+                    "receipt_no": receipt_no, "student_id": student_id, "amount_paise": input.amount_paise,
+                    "mode": mode_s, "reference": reference, "collected_by": actor_s.id, "collected_at": now,
+                    "device_id": dev,
+                })
+                .to_string(),
                 base_version: None,
                 server_epoch: 1,
             };
@@ -5260,6 +5355,21 @@ pub fn record_payment_logic(
 
 /// The device's receipt series + the highest sequence already used on it.
 fn receipt_series_and_last(conn: &Connection, device_id: Option<&str>) -> CmdResult<(String, u32)> {
+    // A joined client uses the series the school PC assigned it at join (§8.7). Its
+    // local DB never holds the device registry, so the lookup below would fall back
+    // to "A1" — the school PC's own series — and issue colliding receipt numbers.
+    if let Some(id) = crate::sync::client::load(conn) {
+        let series = id.receipt_series;
+        let last: u32 = conn
+            .query_row(
+                "SELECT COALESCE(MAX(CAST(substr(receipt_no, length(?1)+4) AS INTEGER)),0) FROM payment WHERE receipt_no LIKE ?2",
+                params![series, format!("R-{series}-%")],
+                |r| r.get::<_, i64>(0),
+            )
+            .optional()?
+            .unwrap_or(0) as u32;
+        return Ok((series, last));
+    }
     let series: String = match device_id {
         Some(d) => conn
             .query_row("SELECT COALESCE(receipt_series,'A1') FROM device WHERE id=?1", params![d], |r| r.get(0))
@@ -5308,7 +5418,7 @@ pub fn list_payments_logic(conn: &mut Connection, student_id: Option<&str>) -> C
 
 // ============================================================= requests =======
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RequestInput {
     pub kind: String,
     pub target_table: String,
@@ -5359,6 +5469,11 @@ const REQUEST_SELECT: &str = "SELECT r.id, r.type, r.target_table, r.target_id, 
      FROM request r JOIN staff s ON s.id = r.requested_by";
 
 pub fn create_request_logic(conn: &mut Connection, actor_s: &SessionStaff, input: &RequestInput) -> CmdResult<RequestDto> {
+    request_command(conn, actor_s, None, DeviceMode::Server, &RequestCmd::Create { id: new_id("req"), input: input.clone() })
+        .map(|d| d.expect("create returns the request"))
+}
+
+fn create_request_in(conn: &Connection, actor_s: &SessionStaff, input: &RequestInput, id: &str) -> CmdResult<RequestDto> {
     // Validate the request type against the approval registry (P13). For the new
     // v2 types (leave / attendance_duty / class_notice) also enforce who may raise
     // them; the existing types keep their current create behaviour unchanged.
@@ -5382,16 +5497,19 @@ pub fn create_request_logic(conn: &mut Connection, actor_s: &SessionStaff, input
         return Err(CoreError::RequestAlreadyPending.into());
     }
     let now = now_iso();
-    let id = new_id("req");
     conn.execute(
         "INSERT INTO request(id,type,target_table,target_id,base_version,before_json,after_json,reason,requested_by,revision,status,apply_state,created_at,updated_at,sync_state) \
          VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,1,'pending','not_applied',?10,?10,'confirmed')",
         params![id, input.kind, input.target_table, input.target_id, input.base_version, input.before_json, input.after_json, input.reason, actor_s.id, now],
     )?;
-    get_request_logic(conn, &id)
+    get_request_logic(conn, id)
 }
 
 pub fn cancel_request_logic(conn: &mut Connection, actor_s: &SessionStaff, id: &str) -> CmdResult<()> {
+    request_command(conn, actor_s, None, DeviceMode::Server, &RequestCmd::Cancel { id: id.to_string() }).map(|_| ())
+}
+
+fn cancel_request_in(conn: &Connection, actor_s: &SessionStaff, id: &str) -> CmdResult<()> {
     let (requested_by, status): (String, String) = conn
         .query_row("SELECT requested_by, status FROM request WHERE id=?1", params![id], |r| Ok((r.get(0)?, r.get(1)?)))
         .optional()?
@@ -5425,7 +5543,7 @@ pub fn list_requests_logic(conn: &mut Connection, status: Option<&str>, kind: Op
     Ok(rows)
 }
 
-pub fn get_request_logic(conn: &mut Connection, id: &str) -> CmdResult<RequestDto> {
+pub fn get_request_logic(conn: &Connection, id: &str) -> CmdResult<RequestDto> {
     let sql = format!("{REQUEST_SELECT} WHERE r.id = ?1");
     conn.query_row(&sql, params![id], map_request).optional()?.ok_or_else(CmdError::not_found)
 }
@@ -5981,7 +6099,7 @@ pub struct MarksSheetDto {
     pub rows: Vec<MarksRowDto>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MarkEntryInput {
     pub student_id: String,
     pub marks: Option<i64>,
@@ -6033,9 +6151,13 @@ pub fn get_marks_sheet_logic(conn: &mut Connection, actor_s: &SessionStaff, exam
     Ok(MarksSheetDto { exam_subject_id: exam_subject_id.to_string(), class_id, class_display, subject_name, max_marks, status, rows })
 }
 
-fn upsert_marks(
+/// The one marks write (draft or submit), shared by the device command and the school
+/// PC replaying a synced op. On a client the sheet leaves as ONE `marks_sheet`/`action`
+/// op with every entry; on the school PC each entry gets an op_log row for pull.
+pub fn upsert_marks(
     conn: &mut Connection,
     actor_s: &SessionStaff,
+    device_id: Option<&str>,
     device_mode: DeviceMode,
     exam_subject_id: &str,
     entries: &[MarkEntryInput],
@@ -6052,8 +6174,21 @@ fn upsert_marks(
     if current.as_deref() == Some("submitted") {
         return Err(CoreError::Locked.into());
     }
-    // Validate every entry against max_marks (0..=max, not absent+marks).
+    // Validate the whole sheet before any write: each student currently enrolled in the
+    // class, no duplicates, and every entry within max_marks (0..=max, not absent+marks).
+    let enrolled: std::collections::BTreeSet<String> = {
+        let mut st = conn.prepare("SELECT student_id FROM enrollment WHERE class_id=?1 AND to_date IS NULL")?;
+        let rows = st.query_map(params![class_id], |r| r.get::<_, String>(0))?;
+        rows.collect::<rusqlite::Result<_>>()?
+    };
+    let mut seen = std::collections::BTreeSet::new();
     for e in entries {
+        if !seen.insert(e.student_id.clone()) {
+            return Err(CmdError::validation("entries", "duplicate_student"));
+        }
+        if !enrolled.contains(&e.student_id) {
+            return Err(CmdError::validation("entries", "student_not_in_class"));
+        }
         let entry = MarkEntry { marks: e.marks.map(|m| m as u32), absent: e.absent };
         vidya_core::marks::validate_entry(&entry, max_marks as u32).map_err(CmdError::from)?;
     }
@@ -6067,13 +6202,15 @@ fn upsert_marks(
         .iter()
         .map(|e| MarkEntryInput { student_id: e.student_id.clone(), marks: e.marks, absent: e.absent })
         .collect();
+    let dev = device_id.unwrap_or_default().to_string();
+    let payload = serde_json::json!({ "exam_subject_id": exam_subject_id, "submit": submit, "entries": entries });
     with_write(conn, &ctx, move |tx| {
-        // Upsert the sheet.
+        // Upsert the sheet (a new one gets a deterministic id shared by every device).
         let sheet_id: String = tx
             .query_row("SELECT id FROM marks_sheet WHERE exam_subject_id=?1", params![esid], |r| r.get(0))
             .optional()?
             .unwrap_or_else(|| {
-                let id = new_id("msheet");
+                let id = format!("msheet-{esid}");
                 let _ = tx.execute(
                     "INSERT INTO marks_sheet(id,exam_subject_id,status,created_at,updated_at,sync_state) VALUES (?1,?2,?3,?4,?4,?5)",
                     params![id, esid, status, now, sync_state],
@@ -6085,8 +6222,24 @@ fn upsert_marks(
             tx.execute(
                 "INSERT INTO mark_entry(id,sheet_id,student_id,marks,absent) VALUES (?1,?2,?3,?4,?5) \
                  ON CONFLICT(sheet_id,student_id) DO UPDATE SET marks=excluded.marks, absent=excluded.absent",
-                params![new_id("me"), sheet_id, e.student_id, e.marks, e.absent as i64],
+                params![format!("me-{sheet_id}-{}", e.student_id), sheet_id, e.student_id, e.marks, e.absent as i64],
             )?;
+            if device_mode == DeviceMode::Server {
+                let me_id: String = tx.query_row(
+                    "SELECT id FROM mark_entry WHERE sheet_id=?1 AND student_id=?2",
+                    params![sheet_id, e.student_id],
+                    |r| r.get(0),
+                )?;
+                crate::write::append_op(
+                    tx,
+                    DeviceMode::Server,
+                    &Op {
+                        op_id: new_id("op"), hlc: now.clone(), device_id: dev.clone(), staff_id: actor_s.id.clone(),
+                        audience: format!("class:{cid}"), table: "mark_entry".into(), record_id: me_id,
+                        kind: "update".into(), payload: "{}".into(), base_version: None, server_epoch: 1,
+                    },
+                )?;
+            }
         }
         let audit = AuditEntry {
             at: now.clone(),
@@ -6099,13 +6252,13 @@ fn upsert_marks(
         let op = Op {
             op_id: new_id("op"),
             hlc: now.clone(),
-            device_id: String::new(),
+            device_id: dev.clone(),
             staff_id: actor_s.id.clone(),
             audience: format!("class:{cid}"),
             table: "marks_sheet".into(),
             record_id: sheet_id.clone(),
-            kind: if submit { "action".into() } else { "update".into() },
-            payload: "{}".into(),
+            kind: if device_mode == DeviceMode::Server { "update".into() } else { "action".into() },
+            payload: payload.to_string(),
             base_version: None,
             server_epoch: 1,
         };
@@ -6115,11 +6268,11 @@ fn upsert_marks(
 }
 
 pub fn save_marks_draft_logic(conn: &mut Connection, actor_s: &SessionStaff, device_mode: DeviceMode, exam_subject_id: &str, entries: &[MarkEntryInput]) -> CmdResult<()> {
-    upsert_marks(conn, actor_s, device_mode, exam_subject_id, entries, false)
+    upsert_marks(conn, actor_s, None, device_mode, exam_subject_id, entries, false)
 }
 
 pub fn submit_marks_logic(conn: &mut Connection, actor_s: &SessionStaff, device_mode: DeviceMode, exam_subject_id: &str, entries: &[MarkEntryInput]) -> CmdResult<()> {
-    upsert_marks(conn, actor_s, device_mode, exam_subject_id, entries, true)
+    upsert_marks(conn, actor_s, None, device_mode, exam_subject_id, entries, true)
 }
 
 // ---- Report card -----------------------------------------------------------
@@ -7193,7 +7346,7 @@ fn hr_working_day(conn: &Connection, date: &str) -> rusqlite::Result<bool> {
     Ok(vidya_core::calendar::is_working_day(d, &week, &events))
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CheckInInput {
     /// Route the check-in reached the school by: `lan` (school Wi-Fi) or `drive`.
     pub route: String,
@@ -7256,7 +7409,8 @@ pub fn staff_check_in_logic(
     let status = vidya_core::hr::check_in_status(input.minute as u16, &settings, route);
     let clock_warning = vidya_core::hr::clock_warning(input.device_ms, now_epoch_ms());
     let now = now_iso();
-    let id = new_id("sat");
+    // Deterministic id so the device's row and the school PC's row are one row.
+    let id = format!("sat-{}-{}", actor_s.id, input.date);
     let school_id = single_school_id(conn)?;
     let sync_state = if device_mode == DeviceMode::Server { "confirmed" } else { "on_device" };
     let dev = device_id.map(str::to_string);
@@ -7265,6 +7419,7 @@ pub fn staff_check_in_logic(
     let minute = input.minute;
     let route_key = route.as_key();
     let status_key = status.as_key();
+    let input_json = serde_json::to_value(input).map_err(|e| CmdError::internal(e.to_string()))?;
     with_write(conn, &WriteCtx { mode: device_mode }, move |tx| {
         tx.execute(
             "INSERT INTO staff_attendance(id,staff_id,date,check_in_at,check_in_min,route,status,clock_warning,school_id,created_at,updated_at,updated_by_staff,updated_by_device,sync_state) \
@@ -7289,8 +7444,11 @@ pub fn staff_check_in_logic(
             audience: "admin".into(),
             table: "staff_attendance".into(),
             record_id: id.clone(),
-            kind: "insert".into(),
-            payload: serde_json::json!({ "staff_id": staff_id, "date": date, "status": status_key }).to_string(),
+            // A client sends the COMMAND (complete input) and the school PC replays it as
+            // the author (sync::apply), deriving the route from how it actually arrived;
+            // the school PC's own op_log row just marks the changed row for pull.
+            kind: if device_mode == DeviceMode::Server { "insert".into() } else { "action".into() },
+            payload: serde_json::json!({ "cmd": "check_in", "staff_id": staff_id, "date": date, "input": input_json }).to_string(),
             base_version: None,
             server_epoch: 1,
         };
@@ -7350,8 +7508,8 @@ pub fn staff_check_out_logic(
             audience: "admin".into(),
             table: "staff_attendance".into(),
             record_id: rid.clone(),
-            kind: "update".into(),
-            payload: serde_json::json!({ "staff_id": staff_id, "date": date }).to_string(),
+            kind: if device_mode == DeviceMode::Server { "update".into() } else { "action".into() },
+            payload: serde_json::json!({ "cmd": "check_out", "staff_id": staff_id, "date": date, "minute": minute }).to_string(),
             base_version: None,
             server_epoch: 1,
         };
@@ -7816,7 +7974,7 @@ fn leave_balances_for(conn: &Connection, staff_id: &str) -> CmdResult<Vec<LeaveB
     Ok(out)
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LeaveRequestInput {
     pub leave_type_id: String,
     pub from: String,
@@ -7829,6 +7987,11 @@ pub struct LeaveRequestInput {
 /// unpaid spill-over, and stores the balance + classes-to-cover snapshot in the
 /// request payload for the Approvals detail. Any active staff; module `hr`.
 pub fn request_leave_logic(conn: &mut Connection, actor_s: &SessionStaff, input: &LeaveRequestInput) -> CmdResult<RequestDto> {
+    request_command(conn, actor_s, None, DeviceMode::Server, &RequestCmd::Leave { id: new_id("req"), input: input.clone() })
+        .map(|d| d.expect("leave returns the request"))
+}
+
+fn request_leave_in(conn: &Connection, actor_s: &SessionStaff, input: &LeaveRequestInput, id: &str) -> CmdResult<RequestDto> {
     require_module_enabled(conn, vidya_core::modules::Module::Hr)?;
     let role = role_from(&actor_s.role)?;
     if !vidya_core::requests::can_raise(vidya_core::types::RequestType::Leave, role) {
@@ -7887,14 +8050,65 @@ pub fn request_leave_logic(conn: &mut Connection, actor_s: &SessionStaff, input:
     })
     .to_string();
     let now = now_iso();
-    let id = new_id("req");
     let school_id = single_school_id(conn)?;
     conn.execute(
         "INSERT INTO request(id,type,target_table,target_id,base_version,before_json,after_json,reason,requested_by,revision,status,apply_state,school_id,created_at,updated_at,sync_state) \
          VALUES (?1,'leave','staff',?2,0,NULL,?3,?4,?2,1,'pending','not_applied',?5,?6,?6,'confirmed')",
         params![id, actor_s.id, after, reason, school_id, now],
     )?;
-    get_request_logic(conn, &id)
+    get_request_logic(conn, id)
+}
+
+/// A request-side command a staff device runs (and syncs): raise a request, apply for
+/// leave, or cancel one's own pending request. The id is chosen by the originating
+/// device so its local row and the school PC's canonical row are the same row.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "cmd", rename_all = "snake_case")]
+pub enum RequestCmd {
+    Create { id: String, input: RequestInput },
+    Leave { id: String, input: LeaveRequestInput },
+    Cancel { id: String },
+}
+
+/// Run a request command in ONE transaction with its sync record: on a client the
+/// command itself is queued (`request`/`action`, the complete input) and the school PC
+/// replays it as the author through this same function (so permissions, the one-
+/// pending rule, leave balance/overlap and the "own request only" cancel rule are
+/// enforced there too); on the school PC the changed request row gets an op_log
+/// entry so pull delivers it. Returns the request (None for cancel).
+pub fn request_command(
+    conn: &mut Connection,
+    actor: &SessionStaff,
+    device_id: Option<&str>,
+    mode: DeviceMode,
+    cmd: &RequestCmd,
+) -> CmdResult<Option<RequestDto>> {
+    let tx = conn.transaction()?;
+    let (id, dto) = match cmd {
+        RequestCmd::Create { id, input } => (id.clone(), Some(create_request_in(&tx, actor, input, id)?)),
+        RequestCmd::Leave { id, input } => (id.clone(), Some(request_leave_in(&tx, actor, input, id)?)),
+        RequestCmd::Cancel { id } => {
+            cancel_request_in(&tx, actor, id)?;
+            (id.clone(), None)
+        }
+    };
+    let now = now_iso();
+    let op = Op {
+        op_id: new_id("op"),
+        hlc: now.clone(),
+        device_id: device_id.unwrap_or_default().to_string(),
+        staff_id: actor.id.clone(),
+        audience: "admin".into(),
+        table: "request".into(),
+        record_id: id.clone(),
+        kind: if mode == DeviceMode::Server { "update".into() } else { "action".into() },
+        payload: serde_json::to_string(cmd).map_err(|e| CmdError::internal(e.to_string()))?,
+        base_version: None,
+        server_epoch: 1,
+    };
+    crate::write::append_op(&tx, mode, &op)?;
+    tx.commit()?;
+    Ok(dto)
 }
 
 // ============================================================= payments (UPI) =

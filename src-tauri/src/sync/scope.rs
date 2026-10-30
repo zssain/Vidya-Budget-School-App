@@ -242,6 +242,26 @@ pub fn visible_row(conn: &Connection, actor: &Actor, table: &str, id: &str) -> r
                         .optional()?;
                     Ok(if cid.map(|c| classes.contains(&c)).unwrap_or(false) { mk(row, None) } else { None })
                 }
+                // Exams are school reference data; exam subjects of the teacher's classes;
+                // marks only for subjects they may enter/see (own class-subject, or any
+                // subject of a class they are class teacher of — report cards).
+                "exam" => Ok(mk(row, None)),
+                "exam_subject" => {
+                    let cid: Option<String> = conn
+                        .query_row("SELECT cs.class_id FROM exam_subject es JOIN class_subject cs ON cs.id=es.class_subject_id WHERE es.id=?1", [id], |r| r.get(0))
+                        .optional()?;
+                    Ok(if cid.is_some_and(|c| classes.contains(&c)) { mk(row, None) } else { None })
+                }
+                "marks_sheet" | "mark_entry" => {
+                    let sql = if table == "marks_sheet" {
+                        "SELECT cs.id, cs.class_id FROM marks_sheet ms JOIN exam_subject es ON es.id=ms.exam_subject_id JOIN class_subject cs ON cs.id=es.class_subject_id WHERE ms.id=?1"
+                    } else {
+                        "SELECT cs.id, cs.class_id FROM mark_entry me JOIN marks_sheet ms ON ms.id=me.sheet_id JOIN exam_subject es ON es.id=ms.exam_subject_id JOIN class_subject cs ON cs.id=es.class_subject_id WHERE me.id=?1"
+                    };
+                    let cs: Option<(String, String)> = conn.query_row(sql, [id], |r| Ok((r.get(0)?, r.get(1)?))).optional()?;
+                    let ok = cs.is_some_and(|(csid, cid)| actor.class_subjects.contains(&csid) || actor.class_teacher_of.contains(&cid));
+                    Ok(if ok { mk(row, None) } else { None })
+                }
                 "request" => {
                     let by: Option<String> = conn.query_row("SELECT requested_by FROM request WHERE id=?1", [id], |r| r.get(0)).optional()?;
                     Ok(if by.as_deref() == Some(actor.staff_id.as_str()) { mk(row, None) } else { None })
@@ -462,6 +482,24 @@ pub fn snapshot(conn: &Connection, actor: &Actor) -> rusqlite::Result<Vec<Change
             for sh in &sheet_ids {
                 for id in ids_of(conn, "SELECT id FROM attendance_mark WHERE sheet_id=?1", &[sh])? {
                     push(conn, "attendance_mark", &id, None)?;
+                }
+            }
+            // Exams (reference) + the exam subjects of these classes + the marks this
+            // teacher may see (same rule as visible_row) — so marks entry works offline.
+            for id in ids_of(conn, "SELECT id FROM exam", &[])? { push(conn, "exam", &id, None)?; }
+            for id in ids_of(conn, &format!("SELECT es.id FROM exam_subject es JOIN class_subject cs ON cs.id=es.class_subject_id WHERE cs.class_id IN ({ph})"), cargs.as_slice())? {
+                push(conn, "exam_subject", &id, None)?;
+            }
+            let ct_list: Vec<String> = actor.class_teacher_of.to_vec();
+            let cs_list: Vec<String> = actor.class_subjects.to_vec();
+            let marks_sql = "SELECT ms.id FROM marks_sheet ms JOIN exam_subject es ON es.id=ms.exam_subject_id JOIN class_subject cs ON cs.id=es.class_subject_id \
+                             WHERE cs.id IN (SELECT value FROM json_each(?1)) OR cs.class_id IN (SELECT value FROM json_each(?2))";
+            let cs_json = serde_json::to_string(&cs_list).unwrap_or_default();
+            let ct_json = serde_json::to_string(&ct_list).unwrap_or_default();
+            for ms in ids_of(conn, marks_sql, &[&cs_json, &ct_json])? {
+                push(conn, "marks_sheet", &ms, None)?;
+                for me in ids_of(conn, "SELECT id FROM mark_entry WHERE sheet_id=?1", &[&ms])? {
+                    push(conn, "mark_entry", &me, None)?;
                 }
             }
             for id in ids_of(conn, "SELECT id FROM request WHERE requested_by=?1", &[&actor.staff_id])? { push(conn, "request", &id, None)?; }

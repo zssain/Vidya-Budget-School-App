@@ -44,7 +44,36 @@ pub struct Effect<T> {
 /// transaction. Use this when a single logical change emits **several** ops
 /// (e.g. the seven `school_week` rows of a weekly-offs edit) inside one
 /// transaction; for the common one-op change use [`with_write`].
+/// app_kv key: the last HLC this device issued (keeps HLCs monotonic across restarts).
+pub const KV_LAST_HLC: &str = "last_hlc";
+
+/// Stamp a CLIENT op with this device's real identity before it enters the outbox:
+/// the joined device id (the server binds every op to the authenticated device), a
+/// packed monotonic HLC (§8.1; command builders used a wall-clock ISO string), and the
+/// newest server epoch this device knows (builders hard-coded 1). A device that has not
+/// joined keeps the op as built (single-PC tests / setup).
+pub fn stamp_client_op(conn: &Connection, op: &mut Op) -> rusqlite::Result<()> {
+    let Some(id) = crate::sync::client::load(conn) else { return Ok(()) };
+    let prev: Option<vidya_core::hlc::Hlc> = crate::kv::get::<String>(conn, KV_LAST_HLC)?
+        .and_then(|s| vidya_core::hlc::Hlc::parse(&s).ok());
+    let wall = (time::OffsetDateTime::now_utc().unix_timestamp_nanos() / 1_000_000) as u64;
+    let hlc = vidya_core::hlc::now(prev.as_ref(), wall, &id.device_id).to_string_form();
+    crate::kv::set(conn, KV_LAST_HLC, &hlc)?;
+    op.hlc = hlc;
+    op.device_id = id.device_id.clone();
+    op.server_epoch = id.server_epoch.max(crate::sync::engine::known_epoch(conn)?);
+    Ok(())
+}
+
 pub fn append_op(tx: &Transaction, mode: DeviceMode, op: &Op) -> rusqlite::Result<()> {
+    let mut stamped;
+    let op = if mode == DeviceMode::Client {
+        stamped = op.clone();
+        stamp_client_op(tx, &mut stamped)?;
+        &stamped
+    } else {
+        op
+    };
     match mode {
         DeviceMode::Server => {
             tx.execute(

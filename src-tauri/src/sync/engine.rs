@@ -45,8 +45,8 @@ pub struct SyncOutcome {
     pub pulled: usize,
 }
 
-/// Read the outbox (HLC order, ≤200) as protocol Ops.
-fn outbox_ops(conn: &Connection) -> rusqlite::Result<Vec<Op>> {
+/// Read the outbox (HLC order, ≤200) as protocol Ops — what the next push sends.
+pub fn outbox_ops(conn: &Connection) -> rusqlite::Result<Vec<Op>> {
     let mut stmt = conn.prepare(
         "SELECT op_id, hlc, device_id, staff_id, audience, \"table\", record_id, kind, payload, base_version, server_epoch \
          FROM outbox ORDER BY hlc ASC LIMIT 200",
@@ -186,6 +186,10 @@ fn apply_snapshot_tx(conn: &mut Connection, changes: &[crate::sync::protocol::Ch
         return Err(format!("bootstrap snapshot references rows it does not contain: {}", dangling.join(", ")));
     }
     crate::kv::set(&tx, KV_BOOTSTRAP_COMPLETE, &true).map_err(|e| e.to_string())?;
+    // Now that the staff rows exist, give this device its own local device row.
+    if let Some(id) = crate::sync::client::load(&tx) {
+        crate::sync::client::ensure_self_device_row(&tx, &id).map_err(|e| e.to_string())?;
+    }
     tx.commit().map_err(|e| format!("bootstrap commit failed: {e}"))?;
     Ok(changes.len())
 }
