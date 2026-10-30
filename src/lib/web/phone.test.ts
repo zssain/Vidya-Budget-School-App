@@ -45,3 +45,43 @@ describe('attendance op (matches the school PC replay)', () => {
     expect(sheetIdFor({ id: 'existing', class_id: 'c1', date: '2026-10-15', status: 'draft' }, 'c1', '2026-10-15')).toBe('existing')
   })
 })
+
+import { buildAbsenceList, renderTemplate } from './phone'
+
+describe('absence alerts (iPhone)', () => {
+  const base = {
+    classId: 'c1', date: '2026-10-15', cls: { id: 'c1', display: 'V-A' },
+    students, enrollments,
+    links: [{ id: 'l1', student_id: 's1', guardian_id: 'g1', is_primary: 1 }],
+    guardians: [{ id: 'g1', name: 'Parent', mobile: '9820011111', language: 'hi' }],
+    consents: [{ id: 'k1', student_id: 's1', purpose: 'messages', withdrawn_at: null }],
+    templates: [
+      { id: 't1', key: 'absence_alert', language: 'en', body: '{student_name} was absent on {date}. — {school_name}' },
+      { id: 't2', key: 'absence_alert', language: 'hi', body: '{student_name} {date} को अनुपस्थित — {school_name}' },
+    ],
+    schoolName: 'Saraswati',
+  }
+  const marks = [
+    { id: 'm1', sheet_id: 'sh1', student_id: 's1', mark: 'A' },
+    { id: 'm2', sheet_id: 'sh1', student_id: 's2', mark: 'A' },
+    { id: 'm3', sheet_id: 'sh1', student_id: 's3', mark: 'P' },
+  ]
+  it('is empty until the sheet is submitted', () => {
+    const r = buildAbsenceList({ ...base, sheet: { id: 'sh1', class_id: 'c1', date: '2026-10-15', status: 'draft' }, marks })
+    expect(r.submitted).toBe(false)
+    expect(r.students).toEqual([])
+  })
+  it('lists absentees with guardian, consent and a preview in the guardian language', () => {
+    const r = buildAbsenceList({ ...base, sheet: { id: 'sh1', class_id: 'c1', date: '2026-10-15', status: 'submitted' }, marks })
+    expect(r.students.map((s) => s.student_id)).toEqual(['s2', 's1']) // roll order
+    const asha = r.students.find((s) => s.student_id === 's1')!
+    expect(asha.has_messages_consent).toBe(true)
+    expect(asha.preview).toBe('Asha 2026-10-15 को अनुपस्थित — Saraswati')
+    const bilal = r.students.find((s) => s.student_id === 's2')!
+    expect(bilal.has_messages_consent).toBe(false)
+    expect(bilal.guardian_id).toBeNull()
+  })
+  it('renders every {placeholder}', () => {
+    expect(renderTemplate('{a}-{a}-{b}', { a: '1', b: '2' })).toBe('1-1-2')
+  })
+})

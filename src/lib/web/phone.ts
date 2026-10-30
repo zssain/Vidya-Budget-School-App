@@ -8,7 +8,20 @@
 //   leave → `request`/action {cmd:'leave', id, input}
 // The pure builders are unit-tested; the shells only read/write the local store.
 
-import type { AttendanceSheetDto, CheckInInput, CheckInResult, LeaveRequestInput, MarkInput, RequestDto, SessionStaff } from '../api'
+import type {
+  AbsenceListDto,
+  AbsentStudentDto,
+  AttendanceSheetDto,
+  CheckInInput,
+  CheckInResult,
+  CircularDto,
+  LeaveRequestInput,
+  MarkInput,
+  MessageDto,
+  RecordMessageInput,
+  RequestDto,
+  SessionStaff,
+} from '../api'
 import { kvGet, listRecords } from './store'
 import { newId, writeOp } from './op'
 
@@ -162,4 +175,151 @@ export async function requestLeave(input: LeaveRequestInput): Promise<RequestDto
     action: 'request_leave',
   })
   return dto
+}
+
+// ---- absence alerts + messages ------------------------------------------------
+
+interface GuardianRec { id: string; name: string; mobile?: string | null; email?: string | null; language?: string | null }
+interface StudentGuardianRec { id: string; student_id: string; guardian_id: string; is_primary: number | boolean }
+interface ConsentRec { id: string; student_id: string; purpose: string; withdrawn_at?: string | null }
+interface TemplateRec { id: string; key: string; language: string; body: string }
+
+/** Render a message template: `{key}` → value (vidya_core::messages::render). */
+export function renderTemplate(body: string, vars: Record<string, string>): string {
+  let out = body
+  for (const [k, v] of Object.entries(vars)) out = out.split(`{${k}}`).join(v)
+  return out
+}
+
+/** Absent students of a SUBMITTED sheet with their primary guardian, consent and a
+ *  rendered preview (pure; mirrors commands::logic::list_absent_logic). */
+export function buildAbsenceList(p: {
+  classId: string
+  date: string
+  cls: ClassRec | undefined
+  sheet: SheetRec | undefined
+  marks: MarkRec[]
+  students: StudentRec[]
+  enrollments: EnrollmentRec[]
+  links: StudentGuardianRec[]
+  guardians: GuardianRec[]
+  consents: ConsentRec[]
+  templates: TemplateRec[]
+  schoolName: string
+}): AbsenceListDto {
+  const base = { class_id: p.classId, class_display: p.cls?.display ?? null, date: p.date }
+  if (!p.sheet || p.sheet.status !== 'submitted') return { ...base, submitted: false, students: [] }
+  const name = new Map(p.students.map((s) => [s.id, s.name]))
+  const roll = new Map(p.enrollments.filter((e) => !e.to_date).map((e) => [e.student_id, e.roll_no ?? null]))
+  const tmpl = (lang: string) =>
+    p.templates.find((t) => t.key === 'absence_alert' && t.language === lang)?.body ??
+    p.templates.find((t) => t.key === 'absence_alert' && t.language === 'en')?.body ??
+    ''
+  const students: AbsentStudentDto[] = p.marks
+    .filter((m) => m.sheet_id === p.sheet!.id && m.mark === 'A')
+    .map((m) => {
+      const link = p.links.find((l) => l.student_id === m.student_id && (l.is_primary === 1 || l.is_primary === true))
+      const g = link ? p.guardians.find((x) => x.id === link.guardian_id) : undefined
+      const lang = g?.language && ['en', 'hi', 'te'].includes(g.language) ? g.language : 'en'
+      const studentName = name.get(m.student_id) ?? ''
+      return {
+        student_id: m.student_id,
+        student_name: studentName,
+        roll_no: roll.get(m.student_id) ?? null,
+        guardian_id: g?.id ?? null,
+        guardian_name: g?.name ?? null,
+        guardian_mobile: g?.mobile ?? null,
+        guardian_email: g?.email ?? null,
+        guardian_language: g?.language ?? null,
+        has_messages_consent: p.consents.some((c) => c.student_id === m.student_id && c.purpose === 'messages' && !c.withdrawn_at),
+        preview: renderTemplate(tmpl(lang), { student_name: studentName, date: p.date, school_name: p.schoolName }),
+      }
+    })
+    .sort((a, b) => (a.roll_no ?? 1e9) - (b.roll_no ?? 1e9))
+  return { ...base, submitted: true, students }
+}
+
+export async function listAbsent(classId: string, date: string): Promise<AbsenceListDto> {
+  const [classes, sheets, students, enrollments, links, guardians, consents, templates, schools] = await Promise.all([
+    listRecords<ClassRec>('class', (c) => c.id === classId),
+    listRecords<SheetRec>('attendance_sheet', (s) => s.class_id === classId && s.date.slice(0, 10) === date.slice(0, 10)),
+    listRecords<StudentRec>('student'),
+    listRecords<EnrollmentRec>('enrollment', (e) => e.class_id === classId),
+    listRecords<StudentGuardianRec>('student_guardian'),
+    listRecords<GuardianRec>('guardian'),
+    listRecords<ConsentRec>('consent'),
+    listRecords<TemplateRec>('message_template'),
+    listRecords<{ id: string; name: string }>('school'),
+  ])
+  const sheet = sheets[0]
+  const marks = sheet ? await listRecords<MarkRec>('attendance_mark', (m) => m.sheet_id === sheet.id) : []
+  return buildAbsenceList({ classId, date, cls: classes[0], sheet, marks, students, enrollments, links, guardians, consents, templates, schoolName: schools[0]?.name ?? '' })
+}
+
+/** Record a message (absence alert / tap-to-WhatsApp). The school PC replays it and
+ *  alone sends email / automatic WhatsApp; a wa_tap is "tapped" (never "sent"). */
+export async function recordMessage(input: RecordMessageInput): Promise<MessageDto> {
+  if (input.related_table === 'student' && input.related_id) {
+    const consents = await listRecords<ConsentRec>('consent', (c) => c.student_id === input.related_id)
+    if (!consents.some((c) => c.purpose === 'messages' && !c.withdrawn_at)) {
+      throw { code: 'FORBIDDEN', message_key: 'error.FORBIDDEN', vars: { reason: 'messages_consent' } }
+    }
+  }
+  const id = newId('msg')
+  const now = new Date().toISOString()
+  const status = input.channel === 'wa_tap' ? 'tapped' : 'queued'
+  const dto: MessageDto = {
+    id, channel: input.channel, kind: input.kind, language: input.language,
+    to_guardian_id: input.to_guardian_id ?? null, to_address: input.to_address ?? null,
+    subject: input.subject ?? null, body: input.body ?? null, status, error: null,
+    related_table: input.related_table ?? null, related_id: input.related_id ?? null, created_at: now,
+  }
+  await writeOp({
+    table: 'message',
+    recordId: id,
+    kind: 'action',
+    audience: 'admin',
+    payload: { cmd: 'record_message', input: { ...input, id } },
+    localRow: { ...dto, sync_state: 'on_device' },
+    action: 'record_message',
+  })
+  return dto
+}
+
+// ---- circulars (inbox) --------------------------------------------------------
+
+interface CircularRec { id: string; number?: string | null; title: string; body: string; status: string; sent_at?: string | null; created_at: string; created_by?: string | null }
+interface CircularReadRec { id: string; circular_id: string; staff_id: string; read_at?: string | null }
+
+export async function listCirculars(): Promise<CircularDto[]> {
+  const staff = await me()
+  const [circs, reads] = await Promise.all([
+    listRecords<CircularRec>('circular', (c) => c.status === 'sent'),
+    listRecords<CircularReadRec>('circular_read'),
+  ])
+  return circs
+    .map((c) => ({
+      id: c.id, number: c.number ?? null, title: c.title, body: c.body, languages_json: null, audience_json: null,
+      channels_json: null, attachments_json: null, status: c.status, created_by: c.created_by ?? null,
+      sent_at: c.sent_at ?? null, created_at: c.created_at,
+      read_count: reads.filter((r) => r.circular_id === c.id && r.read_at).length,
+      staff_count: 0,
+      read_by_me: reads.some((r) => r.circular_id === c.id && r.staff_id === staff.id && r.read_at),
+    }))
+    .sort((a, b) => (b.sent_at ?? b.created_at).localeCompare(a.sent_at ?? a.created_at))
+}
+
+export async function markCircularRead(circularId: string): Promise<void> {
+  const staff = await me()
+  const id = `crd-${circularId}-${staff.id}`
+  const now = new Date().toISOString()
+  await writeOp({
+    table: 'circular_read',
+    recordId: id,
+    kind: 'action',
+    audience: 'admin',
+    payload: { cmd: 'mark_circular_read', circular_id: circularId },
+    localRow: { id, circular_id: circularId, staff_id: staff.id, read_at: now, sync_state: 'on_device' },
+    action: 'mark_circular_read',
+  })
 }

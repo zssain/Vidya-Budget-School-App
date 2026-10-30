@@ -9,6 +9,7 @@
 // dead code — `isWeb` is false there).
 
 import type {
+  RecordMessageInput,
   CheckInInput,
   LeaveRequestInput,
   MarkInput,
@@ -45,7 +46,7 @@ import {
 } from './timetable'
 import { buildHomeworkNotes, type HomeworkNoteRec } from './notes'
 import { audienceFor, newId, writeOp } from './op'
-import { getAttendanceSheet, requestLeave, staffCheckIn, staffCheckOut, writeAttendance } from './phone'
+import { getAttendanceSheet, listAbsent, listCirculars, markCircularRead, recordMessage, requestLeave, staffCheckIn, staffCheckOut, writeAttendance } from './phone'
 
 /** A Web command handler: `(args) => result`. */
 export type WebHandler = (args?: Record<string, unknown>) => Promise<unknown>
@@ -278,6 +279,10 @@ export const WEB_COMMANDS: Record<string, WebHandler> = {
   staff_check_in: async (args) => staffCheckIn(args?.input as CheckInInput),
   staff_check_out: async (args) => staffCheckOut(String(args?.date ?? ''), Number(args?.minute ?? -1)),
   request_leave: async (args) => requestLeave(args?.input as LeaveRequestInput),
+  list_absent: async (args) => listAbsent(String(args?.classId ?? ''), String(args?.date ?? '')),
+  record_message: async (args) => recordMessage(args?.input as RecordMessageInput),
+  list_circulars: async () => listCirculars(),
+  mark_circular_read: async (args) => markCircularRead(String(args?.circularId ?? '')),
 }
 
 /** Commands that may run while the PWA is locked: routing state, the PIN gate (and its

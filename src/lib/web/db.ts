@@ -8,7 +8,7 @@
 // through store.ts (encrypt/decrypt + one-transaction row+op+audit writes).
 
 export const DB_NAME = 'vidya'
-export const DB_VERSION = 1
+export const DB_VERSION = 2 // v2: + consent store (absence-alert consent check)
 
 /**
  * Synced record tables the staff phone client reads/writes (keyed by `id`). This is
@@ -18,7 +18,7 @@ export const DB_VERSION = 1
 export const RECORD_STORES = [
   // students / classes / staff / guardians
   'school', 'academic_session', 'term', 'class', 'subject', 'class_subject', 'staff',
-  'student', 'enrollment', 'guardian', 'student_guardian',
+  'student', 'enrollment', 'guardian', 'student_guardian', 'consent',
   // attendance + marks (teacher)
   'attendance_sheet', 'attendance_mark', 'exam', 'exam_subject', 'marks_sheet', 'mark_entry',
   'grade_scale', 'grade_band',
