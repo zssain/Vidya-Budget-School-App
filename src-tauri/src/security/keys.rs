@@ -1,6 +1,6 @@
 //! Database-key storage (docs/00-SYSTEM-CONTEXT.md §9, prompts/P02 Step 6).
 //! Desktop → OS keychain via `keyring`. Android → AndroidKeyStore-wrapped key
-//! (a TEMP private-file store here, replaced by plugins/vidya-android in Phase 4).
+//! (`security::android_key` + plugins/vidya-android, repair K1).
 
 use rand::RngCore;
 
@@ -102,9 +102,9 @@ impl KeyStore for KeyringStore {
     }
 }
 
-/// TEMP: private-file key store. On Android this is replaced by
-/// plugins/vidya-android (AndroidKeyStore wrapping) in Phase 4. Also used by tests.
-// TEMP: replaced by plugins/vidya-android in Phase 4
+/// Plain hex-file key store. No longer used by the app on Android (that is
+/// `security::android_key::KeystoreWrappedStore`, which reads the same legacy
+/// `db-key` file only to migrate it); kept for tests.
 pub struct FileKeyStore {
     path: std::path::PathBuf,
 }

@@ -4603,6 +4603,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "tauri-plugin-vidya-android"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "tauri",
+ "tauri-plugin",
+]
+
+[[package]]
 name = "tauri-runtime"
 version = "2.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5273,6 +5282,7 @@ dependencies = [
  "tauri-plugin-deep-link",
  "tauri-plugin-dialog",
  "tauri-plugin-opener",
+ "tauri-plugin-vidya-android",
  "thiserror 1.0.69",
  "time",
  "tokio",

@@ -1,0 +1,4 @@
+# Copied in by tauri-plugin's build script / produced by Gradle.
+/android/.tauri
+/android/build
+/android/.gradle

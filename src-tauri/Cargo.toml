@@ -115,3 +115,5 @@ keyring = { version = "3", default-features = false, features = [
 # --- Android-only: QR/barcode scanner for joining by QR (§13 allow-listed) ---
 [target.'cfg(target_os = "android")'.dependencies]
 tauri-plugin-barcode-scanner = "2"
+# In-repo plugin (§4/§13): AndroidKeyStore wrapping of the DB key (repair K1).
+tauri-plugin-vidya-android = { path = "plugins/vidya-android" }

@@ -42,7 +42,7 @@ use ctx::RtCtx;
 use write::DeviceMode;
 
 /// Build the runtime context: machine id, DB key, encrypted connection.
-fn build_ctx(data_dir: std::path::PathBuf) -> RtCtx {
+fn build_ctx(app: &tauri::AppHandle, data_dir: std::path::PathBuf) -> RtCtx {
     std::fs::create_dir_all(&data_dir).ok();
 
     // Machine id: keychain on desktop, file fallback elsewhere.
@@ -54,15 +54,19 @@ fn build_ctx(data_dir: std::path::PathBuf) -> RtCtx {
         Box::new(licence::machine::FileMachineStore::new(licence::machine_id_fallback_path(&data_dir)));
     let machine_id = licence::machine::get_or_create(machine_store.as_ref()).unwrap_or_default();
 
-    // DB key: keychain on desktop, file fallback elsewhere. If a DB file exists
-    // but the key is gone → key_missing (never overwrite the DB).
+    // DB key: OS keychain on desktop; on Android an AndroidKeyStore-wrapped blob
+    // (plugins/vidya-android), migrating a legacy plaintext `db-key` file on the way
+    // (security::android_key, repair K1). If a DB file exists but the key is gone →
+    // key_missing (never overwrite the DB).
     let db_path = data_dir.join("vidya.db");
-    let db_exists = db_path.exists();
     #[cfg(not(target_os = "android"))]
-    let key_store: Box<dyn security::keys::KeyStore> = Box::new(security::keys::KeyringStore::new());
+    let key_result = {
+        let _ = app;
+        security::keys::ensure_key(&security::keys::KeyringStore::new(), db_path.exists())
+    };
     #[cfg(target_os = "android")]
-    let key_store: Box<dyn security::keys::KeyStore> =
-        Box::new(security::keys::FileKeyStore::new(data_dir.join("db-key")));
+    let key_result =
+        security::android_key::boot(&security::android_key::plugin_store(app, &data_dir), &db_path);
 
     let mut db_key_hex: Option<String> = None;
     // Phase B: a device that has joined a school runs as a Client; otherwise it is the
@@ -70,7 +74,7 @@ fn build_ctx(data_dir: std::path::PathBuf) -> RtCtx {
     let mut device_mode = DeviceMode::Server;
     // A joined client's own device id (its ops are stamped with it; write::stamp_client_op).
     let mut client_device_id: Option<String> = None;
-    let (db, key_missing) = match security::keys::ensure_key(key_store.as_ref(), db_exists) {
+    let (db, key_missing) = match key_result {
         Ok(key) => {
             let hex = security::keys::to_hex(&key);
             db_key_hex = Some(hex.clone());
@@ -153,6 +157,10 @@ pub fn run() {
             // the desktop build never links the mobile-only plugin.
             #[cfg(target_os = "android")]
             app.handle().plugin(tauri_plugin_barcode_scanner::init())?;
+            // Android-only: AndroidKeyStore wrapping of the DB key. MUST be registered
+            // before build_ctx below asks for the key.
+            #[cfg(target_os = "android")]
+            app.handle().plugin(tauri_plugin_vidya_android::init())?;
 
             let data_dir = app
                 .path()
@@ -164,7 +172,7 @@ pub fn run() {
             // show the calm "Restart Vidya" screen.
             reliability::init(&data_dir);
 
-            app.manage(build_ctx(data_dir));
+            app.manage(build_ctx(app.handle(), data_dir));
 
             // Start the school server in the background (Server mode, desktop).
             // Guarded: it returns quietly if there is no school yet.

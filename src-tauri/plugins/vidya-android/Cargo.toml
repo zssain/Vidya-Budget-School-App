@@ -1,0 +1,19 @@
+[package]
+name = "tauri-plugin-vidya-android"
+version = "0.1.0"
+description = "Vidya's in-repo Android native bits (docs/00-SYSTEM-CONTEXT.md §4): AndroidKeyStore wrapping of the DB key"
+authors = ["Teclusion"]
+edition = "2021"
+rust-version = "1.77.2"
+publish = false
+# `links` makes the build script's `cargo:android_library_path` reach the app's
+# tauri-build as DEP_TAURI_PLUGIN_VIDYA_ANDROID_ANDROID_LIBRARY_PATH, which adds the
+# Kotlin library in `android/` to the generated Gradle project.
+links = "tauri-plugin-vidya-android"
+
+[dependencies]
+tauri = { version = "2", default-features = false }
+serde = { version = "1", features = ["derive"] }
+
+[build-dependencies]
+tauri-plugin = { version = "2", features = ["build"] }

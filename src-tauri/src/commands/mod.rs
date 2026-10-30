@@ -1803,13 +1803,14 @@ pub fn restore_install(app: tauri::AppHandle, state: State<RtCtx>, path: String,
 
     crate::backup::restore::install(&vbak, &backup_key_hex, &live_db, &new_hex, &now).map_err(restore_error)?;
 
-    // Persist the new DB key (keychain on desktop, file on Android), then restart.
+    // Persist the new DB key (keychain on desktop, AndroidKeyStore-wrapped on
+    // Android — repair K1), then restart.
     #[cfg(not(target_os = "android"))]
     let key_store: Box<dyn crate::security::keys::KeyStore> =
         Box::new(crate::security::keys::KeyringStore::new());
     #[cfg(target_os = "android")]
     let key_store: Box<dyn crate::security::keys::KeyStore> =
-        Box::new(crate::security::keys::FileKeyStore::new(state.data_dir.join("db-key")));
+        Box::new(crate::security::android_key::plugin_store(&app, &state.data_dir));
     key_store
         .set(&new_key)
         .map_err(|e| crate::error::CmdError::internal(format!("key store: {e:?}")))?;
