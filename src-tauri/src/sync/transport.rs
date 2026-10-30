@@ -125,12 +125,12 @@ impl HttpsTransport {
             return Err(e);
         }
         let body = resp.text().await.map_err(|e| TransportError::Other(e.to_string()))?;
-        let changes = body
-            .lines()
+        // Strict: one unparsable line fails the whole snapshot (never a silently
+        // partial bootstrap); the caller retries.
+        body.lines()
             .filter(|l| !l.trim().is_empty())
-            .filter_map(|l| serde_json::from_str::<Change>(l).ok())
-            .collect();
-        Ok(changes)
+            .map(|l| serde_json::from_str::<Change>(l).map_err(|e| TransportError::Other(format!("bad snapshot line: {e}"))))
+            .collect()
     }
 
     fn map_status(status: u16) -> Option<TransportError> {

@@ -100,6 +100,7 @@ const errors: Bundle = {
     'pin.confirm': 'Enter the PIN again',
     'pin.mismatch': 'The two PINs do not match. Try again.',
     'pin.create': 'Save PIN',
+    'pin.bootstrap_pending': 'Loading your school’s data from the school computer… Keep this device on the school Wi-Fi. This screen updates by itself.',
 
     // Approvals.
     'approvals.title': 'Approvals',
@@ -220,6 +221,7 @@ errors.hi = {
   'pin.confirm': 'PIN दोबारा डालें',
   'pin.mismatch': 'दोनों PIN मेल नहीं खाते। फिर से कोशिश करें।',
   'pin.create': 'PIN सहेजें',
+  'pin.bootstrap_pending': 'स्कूल कंप्यूटर से आपके स्कूल का डेटा लोड हो रहा है… इस डिवाइस को स्कूल Wi-Fi पर रखें। यह स्क्रीन अपने-आप अपडेट होगी।',
 
   // Approvals.
   'approvals.title': 'स्वीकृतियाँ',

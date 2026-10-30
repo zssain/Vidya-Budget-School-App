@@ -53,6 +53,9 @@ pub enum AppState {
     Unlocked { staff: SessionStaff },
     /// A joined client device has no local PIN yet: create one before any data shows.
     PinSetup { staff: SessionStaff },
+    /// A joined client is unlocked but its school data (bootstrap snapshot) has not
+    /// been completely applied yet; the sync loop keeps retrying.
+    BootstrapPending { staff: SessionStaff },
     /// DB file present but its key is missing (offer Recover; never overwrite).
     DbKeyMissing,
     /// A restore/transfer means this device must re-join the school.
@@ -104,7 +107,13 @@ pub fn compute(conn: &Connection, session: Option<SessionStaff>) -> rusqlite::Re
         } else {
             match session {
                 // Only the staff this device joined as can hold its session.
-                Some(s) if s.id == staff.id => AppState::Unlocked { staff: s },
+                Some(s) if s.id == staff.id => {
+                    if crate::sync::engine::bootstrap_complete(conn) {
+                        AppState::Unlocked { staff: s }
+                    } else {
+                        AppState::BootstrapPending { staff: s }
+                    }
+                }
                 _ => AppState::Locked,
             }
         };
@@ -284,6 +293,9 @@ mod tests {
         // Cold start: locked (never auto-signed-in).
         assert_eq!(compute(&c, None).unwrap().state, AppState::Locked);
         let me = SessionStaff { id: "stf-t".into(), name: "Meena".into(), role: "teacher".into() };
+        // Unlocked, but no complete bootstrap yet → the loading state, not an empty home.
+        assert_eq!(compute(&c, Some(me.clone())).unwrap().state, AppState::BootstrapPending { staff: me.clone() });
+        kv::set(&c, crate::sync::engine::KV_BOOTSTRAP_COMPLETE, &true).unwrap();
         assert_eq!(compute(&c, Some(me.clone())).unwrap().state, AppState::Unlocked { staff: me });
         // A session for any other staff id is not honoured on this device.
         let other = SessionStaff { id: "stf-p".into(), name: "P".into(), role: "principal".into() };

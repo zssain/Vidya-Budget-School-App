@@ -186,14 +186,15 @@ export default function App() {
             >
               {t((activateErr ?? joinErr)!.message_key, (activateErr ?? joinErr)!.vars as Record<string, string | number>)}
               {(() => {
-                // Show the raw technical detail (e.g. the exact connection/TLS error)
-                // so a failed join/activation is diagnosable from a screenshot alone —
-                // no cable or logcat needed. Only rendered when the error carries one.
+                // The plain message above is the user-facing error; the raw technical
+                // detail (connection/TLS chain) is folded away behind a toggle so a
+                // failed join is still diagnosable from a screenshot when opened.
                 const detail = ((activateErr ?? joinErr)!.vars as { detail?: unknown } | null)?.detail
                 return typeof detail === 'string' && detail.length > 0 ? (
-                  <div style={{ marginTop: 6, fontSize: 11, opacity: 0.85, wordBreak: 'break-word', fontFamily: 'monospace' }}>
-                    {detail}
-                  </div>
+                  <details style={{ marginTop: 6, fontSize: 11, opacity: 0.85 }}>
+                    <summary style={{ cursor: 'pointer' }}>{t('welcome.errorDetails')}</summary>
+                    <div style={{ marginTop: 4, wordBreak: 'break-word', fontFamily: 'monospace' }}>{detail}</div>
+                  </details>
                 ) : null
               })()}
             </div>
@@ -207,6 +208,8 @@ export default function App() {
       return <PinGate />
     case 'pin_setup':
       return <DevicePinSetupScreen staff={route.staff} />
+    case 'bootstrap_pending':
+      return <StatusScreen messageKey="pin.bootstrap_pending" />
     case 'db_key_missing':
       return <StatusScreen messageKey="error.DB_KEY_MISSING" />
     case 'needs_rejoin':

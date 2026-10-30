@@ -64,6 +64,7 @@ export type Route =
   | { screen: 'setup'; step: number }
   | { screen: 'pin' }
   | { screen: 'pin_setup'; staff: SessionStaff }
+  | { screen: 'bootstrap_pending' }
   | { screen: 'home'; role: string }
   | { screen: 'db_key_missing' }
   | { screen: 'needs_rejoin' }
@@ -84,6 +85,8 @@ export function routeForState(app: AppState): Route {
       return { screen: 'home', role: app.staff.role }
     case 'pin_setup':
       return { screen: 'pin_setup', staff: app.staff }
+    case 'bootstrap_pending':
+      return { screen: 'bootstrap_pending' }
     case 'db_key_missing':
       return { screen: 'db_key_missing' }
     case 'needs_rejoin':

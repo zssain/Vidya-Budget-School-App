@@ -125,18 +125,17 @@ pub async fn fetch_join(payload: &JoinPayload, device_name: &str, platform: &str
     let mut last_err = "no server address in the invitation".to_string();
     for addr in &payload.lan_addrs {
         let url = format!("https://{addr}:{}/v1/join", payload.port);
-        // eprintln → stderr → Android logcat (tag RustStdoutStderr), the one reliable
-        // channel for reading a join failure off a device (console.error does not reach
-        // a release WebView's logcat, and screencap can't capture the WebView surface).
-        eprintln!("[vidya-join] POST {url}");
+        // Diagnostics go to the app's rotated log file (reliability::init) on every
+        // platform, Android included. Never logs the invite code or any token.
+        tracing::debug!(%url, "join attempt");
         match http.post(&url).json(&req).send().await {
             Ok(r) if r.status().is_success() => {
-                eprintln!("[vidya-join] OK {url}");
+                tracing::info!(%url, "joined the school server");
                 return r.json::<JoinResp>().await.map_err(|e| e.to_string());
             }
             Ok(r) => {
                 last_err = format!("server rejected the join at {url} (HTTP {})", r.status());
-                eprintln!("[vidya-join] {last_err}");
+                tracing::warn!("{last_err}");
             }
             // Include the FULL error source chain so the log shows the ROOT cause
             // (connection refused / TLS handshake / timed out), not just reqwest's terse
@@ -150,11 +149,11 @@ pub async fn fetch_join(payload: &JoinPayload, device_name: &str, platform: &str
                     src = s.source();
                 }
                 last_err = msg;
-                eprintln!("[vidya-join] ERR {last_err}");
+                tracing::warn!("join attempt failed: {last_err}");
             }
         }
     }
-    eprintln!("[vidya-join] FAILED (all addresses): {last_err}");
+    tracing::warn!("join failed on every advertised address: {last_err}");
     Err(last_err)
 }
 
@@ -198,14 +197,10 @@ pub async fn fetch_bootstrap(
     Err(last_err)
 }
 
-/// Apply a fetched bootstrap snapshot into this client's DB.
-pub fn apply_bootstrap(conn: &Connection, changes: &[crate::sync::protocol::Change]) -> rusqlite::Result<usize> {
+/// Apply a fetched bootstrap snapshot into this client's DB (all or nothing — see
+/// [`crate::sync::engine::apply_snapshot`]).
+pub fn apply_bootstrap(conn: &mut Connection, changes: &[crate::sync::protocol::Change]) -> Result<usize, String> {
     crate::sync::engine::apply_snapshot(conn, changes)
-}
-
-/// True once the local DB holds the school row (i.e. the bootstrap snapshot landed).
-fn has_local_school(conn: &Connection) -> bool {
-    conn.query_row("SELECT 1 FROM school LIMIT 1", [], |_| Ok(())).is_ok()
 }
 
 /// Run one sync cycle as a client: build the LAN route(s) from the stored identity and
@@ -218,12 +213,17 @@ pub async fn client_sync_tick(conn: &mut Connection) -> Result<String, String> {
     use crate::sync::transport::HttpsTransport;
     let id = load(conn).ok_or("this device has not joined a school")?;
 
-    // Self-heal the bootstrap: if the join-time snapshot never landed (e.g. the device was
-    // briefly offline right after join), the local school row is missing and every screen
-    // would be empty. Fetch + apply the snapshot now before the normal op sync.
-    if !has_local_school(conn) {
-        if let Ok(changes) = fetch_bootstrap(&id.device_token, &id.server_addrs, id.server_port, &id.server_fingerprint).await {
-            let _ = apply_bootstrap(conn, &changes);
+    // Self-heal the bootstrap: until a COMPLETE snapshot has been committed (e.g. the
+    // device was offline right after join, or a row failed), fetch + apply it again
+    // before the normal op sync.
+    if !crate::sync::engine::bootstrap_complete(conn) {
+        match fetch_bootstrap(&id.device_token, &id.server_addrs, id.server_port, &id.server_fingerprint).await {
+            Ok(changes) => {
+                if let Err(e) = apply_bootstrap(conn, &changes) {
+                    tracing::warn!("bootstrap snapshot not applied (will retry): {e}");
+                }
+            }
+            Err(e) => tracing::warn!("bootstrap snapshot fetch failed (will retry): {e}"),
         }
     }
 

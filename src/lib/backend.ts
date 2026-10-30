@@ -15,17 +15,10 @@ export function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<
     throw err
   })
   return tauriInvoke<T>(cmd, args).catch((err: unknown) => {
-    // Surface the full failure (error code + detail) to the platform console. On
-    // Android this is the ONLY way to read a command's failure reason from a real
-    // device — `adb logcat` captures console output, but Rust `tracing` does not
-    // reach logcat. Harmless elsewhere; the rejection is re-thrown unchanged.
-    let printable: string
-    try {
-      printable = typeof err === 'string' ? err : JSON.stringify(err)
-    } catch {
-      printable = String(err)
-    }
-    console.error(`[vidya cmd failed] ${cmd}: ${printable}`)
+    // Log only the command + stable error code (never its vars/detail, which can carry
+    // addresses or other context). Full diagnostics are in the app's log file.
+    const code = typeof err === 'object' && err !== null ? (err as { code?: string }).code : undefined
+    console.warn(`[vidya] ${cmd} failed: ${code ?? 'error'}`)
     notifyIfLocked(err)
     throw err
   })

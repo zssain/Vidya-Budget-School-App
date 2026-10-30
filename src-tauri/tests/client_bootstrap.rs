@@ -65,8 +65,8 @@ fn joined_client_bootstraps_data_and_reaches_the_teacher_home() {
     // Before bootstrap + identity, a fresh device is `no_school` (welcome).
     assert!(matches!(compute(&client, None).unwrap().state, AppState::NoSchool));
 
-    let n = apply_snapshot(&client, &changes).unwrap();
-    assert!(n > 0, "snapshot rows applied");
+    let n = apply_snapshot(&mut client, &changes).unwrap();
+    assert_eq!(n, changes.len(), "EVERY snapshot row applied (all or nothing)");
 
     // The school's data is now local.
     let school_rows: i64 = client.query_row("SELECT COUNT(*) FROM school", [], |r| r.get(0)).unwrap();
@@ -80,7 +80,8 @@ fn joined_client_bootstraps_data_and_reaches_the_teacher_home() {
         AppState::PinSetup { staff } => assert_eq!(staff.id, "stf-meena"),
         other => panic!("joined client must ask for a device PIN, got {other:?}"),
     }
-    // With a PIN set, a cold start is Locked; the joined teacher's session unlocks it.
+    // With a PIN set, a cold start is Locked; the joined teacher's session unlocks it
+    // (the bootstrap above completed, so it goes straight home).
     vidya_lib::security::device_pin::create(&client, "4821").unwrap();
     assert!(matches!(compute(&client, None).unwrap().state, AppState::Locked));
     vidya_lib::security::device_pin::verify(&client, "4821", 1_000).unwrap();
@@ -110,4 +111,50 @@ fn server_without_client_identity_is_unchanged() {
     let mut server = db::open_in_memory(KEY).unwrap();
     db::run_migrations(&mut server).unwrap();
     assert!(matches!(compute(&server, None).unwrap().state, AppState::NoSchool));
+}
+
+/// Every role's real snapshot applies completely under the strict rule (a role whose
+/// filtered rows couldn't insert would block its devices from ever finishing join).
+#[test]
+fn every_role_snapshot_applies_completely() {
+    let mut server = db::open_in_memory(KEY).unwrap();
+    db::run_migrations(&mut server).unwrap();
+    seed::seed_demo_school(&mut server, OffsetDateTime::now_utc()).unwrap();
+    let staff: Vec<String> = {
+        let mut st = server.prepare("SELECT id FROM staff WHERE state='active'").unwrap();
+        st.query_map([], |r| r.get(0)).unwrap().collect::<Result<_, _>>().unwrap()
+    };
+    for id in staff {
+        let actor = load_actor(&server, &id).unwrap().unwrap();
+        let changes = scope::snapshot(&server, &actor).unwrap();
+        let mut client = db::open_in_memory(KEY).unwrap();
+        db::run_migrations(&mut client).unwrap();
+        let n = apply_snapshot(&mut client, &changes).unwrap_or_else(|e| panic!("{id}: {e}"));
+        assert_eq!(n, changes.len(), "{id}");
+        assert!(vidya_lib::sync::engine::bootstrap_complete(&client), "{id}");
+    }
+}
+
+/// A snapshot with one bad row leaves the device untouched (no partial school that
+/// looks ready) and not marked complete, so the sync loop retries.
+#[test]
+fn a_corrupt_snapshot_is_rolled_back_entirely() {
+    let mut server = db::open_in_memory(KEY).unwrap();
+    db::run_migrations(&mut server).unwrap();
+    seed::seed_demo_school(&mut server, OffsetDateTime::now_utc()).unwrap();
+    let actor = load_actor(&server, "stf-meena").unwrap().unwrap();
+    let mut changes = scope::snapshot(&server, &actor).unwrap();
+    let mut bad = changes[changes.len() / 2].clone();
+    bad.payload = serde_json::json!({ "id": "x", "no_such_column": 1 });
+    changes.push(bad);
+
+    let mut client = db::open_in_memory(KEY).unwrap();
+    db::run_migrations(&mut client).unwrap();
+    assert!(apply_snapshot(&mut client, &changes).is_err());
+    let schools: i64 = client.query_row("SELECT COUNT(*) FROM school", [], |r| r.get(0)).unwrap();
+    assert_eq!(schools, 0, "nothing from the failed snapshot remains");
+    assert!(!vidya_lib::sync::engine::bootstrap_complete(&client));
+    // A snapshot without the school row is refused too.
+    let no_school: Vec<_> = scope::snapshot(&server, &actor).unwrap().into_iter().filter(|c| c.table != "school").collect();
+    assert!(apply_snapshot(&mut client, &no_school).is_err());
 }

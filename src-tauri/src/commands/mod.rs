@@ -1813,7 +1813,12 @@ pub async fn join_school(app: tauri::AppHandle, state: State<'_, RtCtx>, invite:
     let conn = crate::db::open_encrypted(&db_path, &key_hex).map_err(|e| crate::error::CmdError::internal(e.to_string()))?;
     crate::sync::client::apply_join_response(&conn, &resp, &payload.cert_sha256, &payload.lan_addrs, payload.port)
         .map_err(|e| crate::error::CmdError::internal(e.to_string()))?;
-    crate::sync::client::apply_bootstrap(&conn, &bootstrap).map_err(|e| crate::error::CmdError::internal(e.to_string()))?;
+    // All-or-nothing; a failure here is non-fatal (the client sync loop retries until
+    // `bootstrap_complete`), so the join itself still succeeds.
+    let mut conn = conn;
+    if let Err(e) = crate::sync::client::apply_bootstrap(&mut conn, &bootstrap) {
+        tracing::warn!("join bootstrap not applied yet (will retry): {e}");
+    }
     drop(conn);
 
     // Desktop/Windows/macOS relaunch cleanly into Client mode. On Android,

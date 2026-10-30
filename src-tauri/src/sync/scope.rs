@@ -201,7 +201,10 @@ pub fn visible_row(conn: &Connection, actor: &Actor, table: &str, id: &str) -> r
                 }
                 "class" => Ok(if classes.contains(id) { mk(row, None) } else { None }),
                 "class_subject" => {
-                    let ok = actor.class_subjects.iter().any(|c| c == id);
+                    // Own subjects, plus every subject assignment in a class this
+                    // teacher teaches (the class timetable references them).
+                    let cid: Option<String> = conn.query_row("SELECT class_id FROM class_subject WHERE id=?1", [id], |r| r.get(0)).optional()?;
+                    let ok = actor.class_subjects.iter().any(|c| c == id) || cid.is_some_and(|c| classes.contains(&c));
                     Ok(if ok { mk(row, None) } else { None })
                 }
                 "student" => {
@@ -402,7 +405,15 @@ pub fn snapshot(conn: &Connection, actor: &Actor) -> rusqlite::Result<Vec<Change
             let cargs: Vec<&dyn rusqlite::ToSql> = list.iter().map(|s| s as &dyn rusqlite::ToSql).collect();
 
             for id in ids_of(conn, &format!("SELECT id FROM class WHERE id IN ({ph})"), cargs.as_slice())? { push(conn, "class", &id, None)?; }
-            for id in ids_of(conn, "SELECT id FROM class_subject WHERE teacher_id=?1", &[&actor.staff_id])? { push(conn, "class_subject", &id, None)?; }
+            // Own subject assignments + all assignments in the teacher's classes (the
+            // class timetable slots reference them; subject↔teacher is not sensitive).
+            for id in ids_of(
+                conn,
+                &format!("SELECT id FROM class_subject WHERE teacher_id=? OR class_id IN ({ph})"),
+                std::iter::once(&actor.staff_id as &dyn rusqlite::ToSql).chain(cargs.iter().copied()).collect::<Vec<_>>().as_slice(),
+            )? {
+                push(conn, "class_subject", &id, None)?;
+            }
 
             // Students enrolled in the teacher's classes; guardian address only for
             // classes where this teacher is the class teacher.

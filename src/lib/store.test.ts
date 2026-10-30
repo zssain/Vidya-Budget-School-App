@@ -9,6 +9,7 @@ describe('routeForState', () => {
     expect(routeForState({ kind: 'locked' })).toEqual({ screen: 'pin' })
     const meena = { id: 't', name: 'Meena', role: 'teacher' }
     expect(routeForState({ kind: 'pin_setup', staff: meena })).toEqual({ screen: 'pin_setup', staff: meena })
+    expect(routeForState({ kind: 'bootstrap_pending', staff: meena })).toEqual({ screen: 'bootstrap_pending' })
     expect(routeForState({ kind: 'unlocked', staff: { id: 'p', name: 'Priya', role: 'principal' } })).toEqual({
       screen: 'home',
       role: 'principal',

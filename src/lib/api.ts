@@ -40,6 +40,7 @@ export type AppState =
   | { kind: 'locked' }
   | { kind: 'unlocked'; staff: SessionStaff }
   | { kind: 'pin_setup'; staff: SessionStaff }
+  | { kind: 'bootstrap_pending'; staff: SessionStaff }
   | { kind: 'db_key_missing' }
   | { kind: 'needs_rejoin' }
   | { kind: 'moved' }

@@ -121,25 +121,86 @@ fn upsert_canonical(conn: &Connection, table: &str, payload: &serde_json::Value)
     Ok(())
 }
 
+/// app_kv flag: the join bootstrap snapshot was applied completely (set in the same
+/// transaction as the rows). A school row alone is not proof of completion.
+pub const KV_BOOTSTRAP_COMPLETE: &str = "bootstrap_complete";
+
+/// Tables that exist only on the school server (never sent to a client): client rows
+/// may reference them (e.g. `payment.device_id`), which is informational there.
+const SERVER_ONLY_PARENTS: &[&str] = &["device", "invite"];
+
+/// True once a full bootstrap snapshot has been committed on this device.
+pub fn bootstrap_complete(conn: &Connection) -> bool {
+    crate::kv::get::<bool>(conn, KV_BOOTSTRAP_COMPLETE).ok().flatten().unwrap_or(false)
+}
+
 /// Apply a join **bootstrap snapshot** (canonical rows from `/v1/sync/snapshot`) into the
-/// client DB, reusing the same upsert path as pull. Used once right after join so a joined
-/// device has the school's setup data (school/session/classes/staff/…) that was never
-/// op-logged. Returns the number of rows applied.
-pub fn apply_snapshot(conn: &Connection, changes: &[crate::sync::protocol::Change]) -> rusqlite::Result<usize> {
-    let mut n = 0;
-    for ch in changes {
-        // A snapshot row can be partial — privacy-filtered staff/guardian rows carry only
-        // their public columns, which can violate NOT NULL on a fresh INSERT. Apply each row
-        // independently and skip the ones that don't fit, so one row never aborts the whole
-        // bootstrap and the essential data (school/classes/students/timetable/…) always lands.
-        if upsert_canonical(conn, &ch.table, &ch.payload).is_ok() {
-            n += 1;
-        }
+/// client DB — **all or nothing**. Every row must be a safe identifier set and must
+/// insert; any failure rolls the whole snapshot back (the previous local state stays
+/// intact) and is reported, so a device never looks set up while missing data. Foreign
+/// keys are checked at commit, so row order within the snapshot doesn't matter. On
+/// success `bootstrap_complete` is set in the same transaction. Returns rows applied.
+pub fn apply_snapshot(conn: &mut Connection, changes: &[crate::sync::protocol::Change]) -> Result<usize, String> {
+    if changes.is_empty() {
+        return Err("empty bootstrap snapshot".into());
     }
-    Ok(n)
+    if !changes.iter().any(|c| c.table == "school") {
+        return Err("bootstrap snapshot has no school row".into());
+    }
+    // FK enforcement is relaxed for canonical server rows (the server already enforced
+    // integrity, and rows legitimately reference the server-only `device` registry,
+    // which is never sent to clients). Completeness is checked explicitly below.
+    // (`PRAGMA foreign_keys` can't change inside a transaction, so it wraps it.)
+    conn.execute_batch("PRAGMA foreign_keys = OFF").map_err(|e| e.to_string())?;
+    let result = apply_snapshot_tx(conn, changes);
+    conn.execute_batch("PRAGMA foreign_keys = ON").map_err(|e| e.to_string())?;
+    result
+}
+
+fn apply_snapshot_tx(conn: &mut Connection, changes: &[crate::sync::protocol::Change]) -> Result<usize, String> {
+    let tx = conn.transaction().map_err(|e| e.to_string())?;
+    for ch in changes {
+        let safe = crate::sync::protocol::is_safe_ident(&ch.table)
+            && ch.payload.as_object().is_some_and(|o| !o.is_empty() && o.keys().all(|k| crate::sync::protocol::is_safe_ident(k)));
+        if !safe {
+            return Err(format!("bootstrap row for {} is malformed", ch.table));
+        }
+        upsert_canonical(&tx, &ch.table, &ch.payload).map_err(|e| format!("bootstrap row for {} failed: {e}", ch.table))?;
+    }
+    // Name any dangling references (a snapshot must be referentially complete).
+    let dangling: Vec<String> = {
+        let mut st = tx.prepare("PRAGMA foreign_key_check").map_err(|e| e.to_string())?;
+        let rows = st
+            .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(2)?)))
+            .map_err(|e| e.to_string())?;
+        let mut v: Vec<String> = rows
+            .filter_map(Result::ok)
+            .filter(|(_, parent)| !SERVER_ONLY_PARENTS.contains(&parent.as_str()))
+            .map(|(child, parent)| format!("{child}→{parent}"))
+            .collect();
+        v.sort();
+        v.dedup();
+        v
+    };
+    if !dangling.is_empty() {
+        return Err(format!("bootstrap snapshot references rows it does not contain: {}", dangling.join(", ")));
+    }
+    crate::kv::set(&tx, KV_BOOTSTRAP_COMPLETE, &true).map_err(|e| e.to_string())?;
+    tx.commit().map_err(|e| format!("bootstrap commit failed: {e}"))?;
+    Ok(changes.len())
 }
 
 fn apply_pull(conn: &Connection, pull: &PullResp) -> rusqlite::Result<usize> {
+    // Canonical server rows may reference the server-only `device` registry (see
+    // apply_snapshot); enforcing FKs here made every pulled payment/expense from
+    // another device fail. The server is the integrity authority.
+    conn.execute_batch("PRAGMA foreign_keys = OFF")?;
+    let applied = apply_pull_rows(conn, pull);
+    conn.execute_batch("PRAGMA foreign_keys = ON")?;
+    applied
+}
+
+fn apply_pull_rows(conn: &Connection, pull: &PullResp) -> rusqlite::Result<usize> {
     for ch in &pull.changes {
         upsert_canonical(conn, &ch.table, &ch.payload)?;
     }
