@@ -26,6 +26,9 @@ const RUST_ALLOWED = new Set([
   'thiserror', 'time', 'mdns-sd', 'keyring', 'tracing', 'tracing-subscriber', 'qrcode',
   'tauri-plugin-dialog', 'tauri-plugin-opener', 'tauri-plugin-deep-link',
   'tauri-plugin-barcode-scanner',
+  // §4/§13 in-repo Android plugin (src-tauri/plugins/vidya-android, AndroidKeyStore key wrap;
+  // owner-approved 2026-10-31) and Tauri's plugin build helper it requires.
+  'tauri-plugin-vidya-android', 'tauri-plugin',
   'vidya-core', // in-repo pure-rules crate
   'vidya-wasm', // in-repo WASM wrapper of vidya-core (iPhone PWA, P19)
   // P19 (00-context §18): the wasm-bindgen wrapper mechanism named by the phase.
