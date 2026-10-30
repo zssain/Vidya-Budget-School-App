@@ -41,6 +41,8 @@ export function seal(key: Uint8Array, aad: Uint8Array, plaintext: Uint8Array): U
 }
 export const sealOpen = (key: Uint8Array, aad: Uint8Array, sealed: Uint8Array): Uint8Array =>
   w.seal_open(key, aad, sealed)
+/** AAD for the school PC's per-device down export (open with the s2c key). */
+export const deviceDownAad = (deviceId: string): Uint8Array => w.device_down_aad(deviceId)
 /** AAD for a device-sealed Drive bundle (format v2; sealed with the c2s key). */
 export const deviceBundleAad = (deviceId: string): Uint8Array => w.device_bundle_aad(deviceId)
 export function deriveDirectionKeys(sessionKeyB64: string): { c2s: Uint8Array; s2c: Uint8Array } {

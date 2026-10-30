@@ -326,6 +326,13 @@ pub fn client_drive_tick(conn: &mut Connection) -> Result<(), String> {
             crate::sync::engine::settle_op_result(conn, res);
         }
     }
+    // The school PC's canonical export for this device (school data without the LAN).
+    if let Ok(Some(down)) = exchange::read_down_export(&drive, &exchange_folder, &id.device_id, &id.session_key) {
+        let held: i64 = crate::kv::get(conn, "down_cursor").ok().flatten().unwrap_or(-1);
+        if down.cursor > held && crate::sync::engine::apply_snapshot(conn, &down.changes).is_ok() {
+            let _ = crate::kv::set(conn, "down_cursor", &down.cursor);
+        }
+    }
     Ok(())
 }
 

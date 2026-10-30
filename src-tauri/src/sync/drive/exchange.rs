@@ -304,3 +304,87 @@ pub fn read_ack(
     let ack: DeviceAck = serde_json::from_slice(&json).map_err(|e| ExchangeError::Bundle(e.to_string()))?;
     Ok(Some(ack))
 }
+
+// ============================================================ down export ======
+
+/// Drive folder holding each device's sealed canonical export.
+pub const DOWN: &str = "down";
+
+/// The body of a down export (sealed per device).
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct DownExport {
+    pub v: u32,
+    pub device_id: String,
+    /// The school PC's op_log position this export reflects.
+    pub cursor: i64,
+    pub server_epoch: i64,
+    /// The device's COMPLETE role-scoped data (it replaces the device's copy).
+    pub changes: Vec<crate::sync::protocol::Change>,
+}
+
+/// School PC: for every live device with a session key, write `down/<device>.vdown`
+/// — its complete role-scoped canonical data, sealed with that device's s2c key —
+/// whenever the school data moved since that device's last export. This is how a
+/// device that can't reach the LAN (the iPhone app, a phone off the school Wi-Fi)
+/// gets school data at all: the LAN snapshot/pull isn't reachable from a browser,
+/// and peers' uploads are sealed to the school PC only. A full replace per export
+/// also delivers deletions and removed access. Returns the number written.
+pub fn write_down_exports(conn: &Connection, drive: &impl DriveApi, exchange_folder: &str) -> Result<usize, ExchangeError> {
+    let cursor: i64 = conn.query_row("SELECT COALESCE(MAX(server_seq),0) FROM op_log", [], |r| r.get(0))?;
+    let epoch: i64 = conn.query_row("SELECT server_epoch FROM school LIMIT 1", [], |r| r.get(0)).optional()?.unwrap_or(1);
+    let devices: Vec<(String, String, String)> = {
+        let mut st = conn.prepare(
+            "SELECT id, staff_id, session_key FROM device WHERE revoked_at IS NULL AND session_key IS NOT NULL AND session_key <> ''",
+        )?;
+        let rows = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+        rows.collect::<rusqlite::Result<_>>()?
+    };
+    if devices.is_empty() {
+        return Ok(0);
+    }
+    let down = drive.ensure_folder(exchange_folder, DOWN)?;
+    let mut written = 0;
+    for (device, staff, sk) in devices {
+        let marker = format!("down_cursor:{device}");
+        let last: Option<i64> = crate::kv::get(conn, &marker)?;
+        if last == Some(cursor) {
+            continue; // nothing new since this device's last export
+        }
+        let auth = crate::server::service::DeviceAuth { device_id: device.clone(), staff_id: staff };
+        let changes = crate::server::service::snapshot(conn, &auth)?;
+        let body = DownExport { v: 1, device_id: device.clone(), cursor, server_epoch: epoch, changes };
+        let json = serde_json::to_vec(&body).map_err(|e| ExchangeError::Bundle(e.to_string()))?;
+        let Ok(keys) = seal::derive_keys(&sk) else { continue };
+        let sealed = seal::seal(&keys.s2c, &vidya_core::seal::device_down_aad(&device), &json);
+        let name = format!("{device}.vdown");
+        if let Some(prev) = drive.list(&down)?.into_iter().find(|f| f.name == name) {
+            drive.delete(&prev.id).ok();
+        }
+        drive.create(&down, &name, &sealed, &BTreeMap::new())?;
+        crate::kv::set(conn, &marker, &cursor)?;
+        written += 1;
+    }
+    Ok(written)
+}
+
+/// Device side: read + open this device's down export (None if not written yet).
+pub fn read_down_export(
+    drive: &impl DriveApi,
+    exchange_folder: &str,
+    device_id: &str,
+    session_key_b64: &str,
+) -> Result<Option<DownExport>, ExchangeError> {
+    let down = drive.ensure_folder(exchange_folder, DOWN)?;
+    let Some(file) = drive.list(&down)?.into_iter().find(|f| f.name == format!("{device_id}.vdown")) else {
+        return Ok(None);
+    };
+    let sealed = drive.download(&file.id)?;
+    let keys = seal::derive_keys(session_key_b64).map_err(|_| ExchangeError::Bundle("bad session key".into()))?;
+    let json = seal::open(&keys.s2c, &vidya_core::seal::device_down_aad(device_id), &sealed)
+        .map_err(|_| ExchangeError::Bundle("down export open failed".into()))?;
+    let body: DownExport = serde_json::from_slice(&json).map_err(|e| ExchangeError::Bundle(e.to_string()))?;
+    if body.device_id != device_id {
+        return Err(ExchangeError::Bundle("down export for another device".into()));
+    }
+    Ok(Some(body))
+}

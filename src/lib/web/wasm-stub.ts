@@ -16,6 +16,7 @@ export const bundle_aad = nope
 export const relay_aad = nope
 export const derive_direction_keys = nope
 export const device_bundle_aad = nope
+export const device_down_aad = nope
 export const join_v2_proof = nope
 export const join_v2_response_key = nope
 export const join_v2_aad = nope

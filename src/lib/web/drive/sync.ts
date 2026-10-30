@@ -8,8 +8,11 @@
 
 import type { DriveApi } from './api'
 import { ACKS, EXCHANGE, opsFolder } from './api'
-import { deriveDirectionKeys, deviceBundleAad, relayAad, seal, sealOpen } from '../wasm'
-import { type AckResult, kvGet, markUploaded, type Op, opsToPush, resolveOps } from '../store'
+
+/** The school PC's per-device export folder (exchange.rs DOWN). */
+export const DOWN = 'down'
+import { deriveDirectionKeys, deviceBundleAad, deviceDownAad, relayAad, seal, sealOpen } from '../wasm'
+import { type AckResult, type CanonicalRow, kvGet, kvPut, markUploaded, type Op, opsToPush, replaceAllRecords, resolveOps, secretGet } from '../store'
 
 const MAX_OPS_PER_BUNDLE = 500 // matches vidya-core/Rust (§11)
 const enc = new TextEncoder()
@@ -101,6 +104,44 @@ export async function pullPeers(_ctx: ExchangeCtx): Promise<number> {
   return 0
 }
 
+/** The school PC's sealed per-device export (exchange.rs DownExport). */
+export interface DownExport {
+  v: number
+  device_id: string
+  cursor: number
+  server_epoch: number
+  changes: CanonicalRow[]
+}
+
+/** Open + verify a down export exactly as the native read_down_export does. Throws
+ *  on a wrong key / another device's export / tampered bytes (fail closed). */
+export function openDown(sealed: Uint8Array, sessionKeyB64: string, deviceId: string): DownExport {
+  const { s2c } = deriveDirectionKeys(sessionKeyB64)
+  const body = JSON.parse(dec.decode(sealOpen(s2c, deviceDownAad(deviceId), sealed))) as DownExport
+  if (body.device_id !== deviceId || !Array.isArray(body.changes)) throw new Error('down export for another device')
+  return body
+}
+
+/** Apply the school PC's export if it is newer than what this device holds: the whole
+ *  local data set is replaced in one transaction. Returns rows written (0 = no news). */
+export async function readDown(ctx: ExchangeCtx): Promise<number> {
+  const folder = await ctx.drive.ensureFolder(ctx.exchangeId, DOWN)
+  const file = await ctx.drive.findChild(folder, `${ctx.deviceId}.vdown`)
+  if (!file) return 0
+  let body: DownExport
+  try {
+    body = openDown(await ctx.drive.download(file.id), ctx.sessionKey, ctx.deviceId)
+  } catch {
+    return 0
+  }
+  const held = (await kvGet<number>('down_cursor')) ?? -1
+  if (body.cursor <= held) return 0
+  const n = await replaceAllRecords(body.changes)
+  await kvPut('down_cursor', body.cursor)
+  await kvPut('server_epoch', body.server_epoch)
+  return n
+}
+
 export interface SyncResult {
   pushed: number
   acked: number
@@ -111,7 +152,7 @@ export async function syncOnce(ctx: ExchangeCtx): Promise<SyncResult> {
   return {
     pushed: await pushOutbox(ctx),
     acked: await readAcks(ctx),
-    pulled: await pullPeers(ctx),
+    pulled: (await pullPeers(ctx)) + (await readDown(ctx)),
   }
 }
 
@@ -121,9 +162,9 @@ export async function buildCtx(drive: DriveApi): Promise<ExchangeCtx | null> {
   const deviceId = await kvGet<string>('device_id')
   const schoolName = await kvGet<string>('school_name')
   const schoolId = await kvGet<string>('school_id')
-  const keys = await kvGet<AudienceKeys>('audience_keys')
+  const keys = await secretGet<AudienceKeys>('audience_keys')
   if (!deviceId || !schoolName || !schoolId || !keys) return null
-  const sessionKey = await kvGet<string>('session_key')
+  const sessionKey = await secretGet<string>('session_key')
   if (!sessionKey) return null
   const keyVersion = (await kvGet<number>('audience_keyver')) ?? 1
   const exchangeId = await resolveExchange(drive, schoolName, schoolId)

@@ -24,3 +24,19 @@ describe('rowsToPush (PWA outbox)', () => {
     expect(rowsToPush([row('a', '1', { status: 'rejected', reason: 'FORBIDDEN' })], now)).toEqual([])
   })
 })
+
+import { planReplace } from './store'
+
+describe('planReplace (down export → local data)', () => {
+  const rows = [
+    { table: 'class', record_id: 'c1', payload: { name: 'V' } },
+    { table: 'homework_note', record_id: 'n1', payload: { text: 'server copy' } },
+    { table: 'device', record_id: 'd1', payload: {} },
+  ]
+  it('keeps only stores this app holds', () => {
+    expect(planReplace(rows, new Set(), ['class', 'homework_note']).map((r) => r.record_id)).toEqual(['c1', 'n1'])
+  })
+  it('does not overwrite a row that still has a pending local change', () => {
+    expect(planReplace(rows, new Set(['homework_note/n1']), ['class', 'homework_note']).map((r) => r.record_id)).toEqual(['c1'])
+  })
+})

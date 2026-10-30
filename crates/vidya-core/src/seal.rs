@@ -97,6 +97,13 @@ pub fn device_bundle_aad(device_id: &str) -> Vec<u8> {
     format!("vidya/vop/v2\n{device_id}").into_bytes()
 }
 
+/// Associated data for the school PC's per-device **down export** on Drive (the
+/// device's role-scoped canonical data, sealed with its s2c key). Binds the device id
+/// so one device's export can't be passed off as another's.
+pub fn device_down_aad(device_id: &str) -> Vec<u8> {
+    format!("vidya/down/v1\n{device_id}").into_bytes()
+}
+
 // ---------------------------------------------------------------------------
 // Drive JOIN, protocol v2 (join-without-LAN for the iPhone PWA, §18).
 //

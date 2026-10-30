@@ -16,7 +16,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use rusqlite::Connection;
 use time::OffsetDateTime;
 
-use super::exchange::{import_all, write_ack, ExchangeError, ImportOutcome};
+use super::exchange::{import_all, write_ack, write_down_exports, ExchangeError, ImportOutcome};
 use super::join::{answer_join_request, response_name, DriveJoinRequest};
 use super::DriveApi;
 
@@ -28,6 +28,8 @@ const ACKS: &str = "acks";
 pub struct ServerDriveOutcome {
     pub joins_answered: usize,
     pub imported: ImportOutcome,
+    /// Per-device down exports written this pass.
+    pub down_exports: usize,
 }
 
 /// One pass of the school-PC Drive loop. `exchange_folder` is the id of
@@ -77,6 +79,9 @@ pub fn server_drive_tick(
             let _ = write_ack(drive, &acks_folder, device, ack, &session_key);
         }
     }
+
+    // 4) Each device's canonical data, for devices that can't use the LAN.
+    out.down_exports = write_down_exports(conn, drive, exchange_folder)?;
 
     Ok(out)
 }

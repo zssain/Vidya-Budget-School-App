@@ -11,7 +11,7 @@ import type { DriveApi } from './drive/api'
 import { JOINS } from './drive/api'
 import { resolveExchange } from './drive/sync'
 import { initWasm, joinV2Aad, joinV2Proof, joinV2ResponseKey, sealOpen } from './wasm'
-import { kvGet, kvPut } from './store'
+import { kvGet, kvPut, secretGet, secretPut } from './store'
 
 /** The web invitation payload (join v2). `secret` is base64url(32 bytes). */
 export interface InvitePayload {
@@ -57,12 +57,12 @@ export function parseJoinFragment(hash: string): InvitePayload | null {
 /** Stash the payload before the "Add to Home Screen" step so the join resumes after
  *  the app is opened from the Home Screen (which starts with no fragment). */
 export async function stashJoinFragment(payload: InvitePayload): Promise<void> {
-  await kvPut(FRAGMENT_KV, payload)
+  await secretPut(FRAGMENT_KV, payload) // carries the invite secret → encrypted
 }
 
 /** The stashed invitation, if a join is in progress. */
 export async function takeStashedJoin(): Promise<InvitePayload | null> {
-  return (await kvGet<InvitePayload>(FRAGMENT_KV)) ?? null
+  return (await secretGet<InvitePayload>(FRAGMENT_KV)) ?? null
 }
 
 function randomId(): string {
@@ -139,13 +139,13 @@ export async function pollJoinResponse(
 
   // Persist the joined identity + the audience keys the Drive sync engine reads.
   await kvPut('device_id', resp.device_id)
-  await kvPut('device_token', resp.device_token)
+  await secretPut('device_token', resp.device_token)
   await kvPut('staff', resp.staff)
   await kvPut('school_id', resp.school.id)
   await kvPut('school_name', resp.school.name)
   await kvPut('receipt_series', resp.receipt_series)
   await kvPut('admission_series', resp.admission_series)
-  await kvPut('session_key', resp.session_key)
+  await secretPut('session_key', resp.session_key)
   await kvPut('lease_expires_at', resp.lease_expires_at)
   await kvPut('server_epoch', resp.server_epoch)
   const keys: Record<string, string> = {}
@@ -154,9 +154,9 @@ export async function pollJoinResponse(
     keys[k.audience] = k.key_b64
     keyver = k.version
   }
-  await kvPut('audience_keys', keys)
+  await secretPut('audience_keys', keys)
   await kvPut('audience_keyver', keyver)
-  await kvPut(FRAGMENT_KV, null) // join complete — clear the stash
+  await secretPut(FRAGMENT_KV, null) // join complete — clear the stash
   return true
 }
 

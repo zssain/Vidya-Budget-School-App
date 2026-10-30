@@ -178,6 +178,52 @@ export async function refusedOps(): Promise<OutboxRow[]> {
   return (await allOutbox()).filter((r) => r.status != null)
 }
 
+/** One canonical row from the school PC's down export. */
+export interface CanonicalRow {
+  table: string
+  record_id: string
+  payload: Record<string, unknown>
+}
+
+/** Which rows a full replace writes (pure → unit-tested): canonical rows for the
+ *  stores this app keeps, plus the local copies of rows that still have an
+ *  unconfirmed outbox op (so a pending edit doesn't vanish until the school PC
+ *  confirms it). */
+export function planReplace(
+  canonical: CanonicalRow[],
+  pendingKeys: Set<string>,
+  stores: readonly string[],
+): CanonicalRow[] {
+  const keep = canonical.filter((c) => stores.includes(c.table) && !pendingKeys.has(`${c.table}/${c.record_id}`))
+  return keep
+}
+
+/** Replace ALL local school data with the school PC's export in ONE transaction
+ *  (all or nothing): removed rows and lost access disappear; rows with a pending
+ *  local change keep their local copy. */
+export async function replaceAllRecords(canonical: CanonicalRow[]): Promise<number> {
+  const db = await openDb()
+  const pending = (await allOutbox()).filter((r) => !r.status)
+  const pendingOps = await Promise.all(pending.map((r) => decryptJson<Op>(r.enc)))
+  const pendingKeys = new Set(pendingOps.map((o) => `${o.table}/${o.record_id}`))
+  // Keep the encrypted local rows behind pending ops.
+  const kept: { store: string; row: unknown }[] = []
+  for (const o of pendingOps) {
+    if (!(RECORD_STORES as readonly string[]).includes(o.table)) continue
+    const row = await reqDone(db.transaction(o.table, 'readonly').objectStore(o.table).get(o.record_id))
+    if (row) kept.push({ store: o.table, row })
+  }
+  const rows = planReplace(canonical, pendingKeys, RECORD_STORES)
+  // Encrypt BEFORE the transaction (an IDB tx must not span an await).
+  const enc = await Promise.all(rows.map(async (r) => ({ store: r.table, id: r.record_id, enc: await encryptJson({ id: r.record_id, ...r.payload }) })))
+  await tx(db, [...RECORD_STORES], 'readwrite', (t) => {
+    for (const name of RECORD_STORES) t.objectStore(name).clear()
+    for (const e of enc) t.objectStore(e.store).put({ id: e.id, enc: e.enc })
+    for (const k of kept) t.objectStore(k.store).put(k.row)
+  })
+  return enc.length
+}
+
 /** Record that a peer op was applied (idempotency by op_id, §8.4). */
 export async function markApplied(opId: string, result: string): Promise<void> {
   const db = await openDb()
@@ -251,4 +297,32 @@ export async function kvPut(key: string, value: unknown): Promise<void> {
   await tx(db, [KV], 'readwrite', (t) => {
     t.objectStore(KV).put({ key, value })
   })
+}
+
+// ---- secrets (device token, session key, audience keys, pending invite) -------
+
+/** KV entries holding secrets are stored encrypted under the non-extractable data
+ *  key (crypto.ts), never as plain values. */
+interface SealedKv {
+  sealed: Uint8Array
+}
+
+function isSealed(v: unknown): v is SealedKv {
+  return typeof v === 'object' && v !== null && (v as SealedKv).sealed instanceof Uint8Array
+}
+
+/** Store a secret encrypted (null deletes it). */
+export async function secretPut(key: string, value: unknown): Promise<void> {
+  if (value == null) return kvPut(key, null)
+  await kvPut(key, { sealed: await encryptJson(value) } satisfies SealedKv)
+}
+
+/** Read a secret; a legacy plain value (from an older build) is returned once and
+ *  immediately re-stored encrypted. */
+export async function secretGet<T>(key: string): Promise<T | undefined> {
+  const v = await kvGet<unknown>(key)
+  if (v == null) return undefined
+  if (isSealed(v)) return decryptJson<T>(v.sealed)
+  await secretPut(key, v)
+  return v as T
 }

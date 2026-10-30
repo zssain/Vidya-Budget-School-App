@@ -138,6 +138,12 @@ pub fn device_bundle_aad(device_id: &str) -> Vec<u8> {
     seal::device_bundle_aad(device_id)
 }
 
+/// Associated data for the school PC's per-device down export (open with the s2c key).
+#[wasm_bindgen]
+pub fn device_down_aad(device_id: &str) -> Vec<u8> {
+    seal::device_down_aad(device_id)
+}
+
 /// Drive join v2: the HMAC proof that this device holds the invite `secret`, over
 /// the exact request transcript (same bytes as the school PC verifies).
 #[wasm_bindgen]

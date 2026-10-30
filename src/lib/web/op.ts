@@ -104,9 +104,14 @@ export async function writeOp(params: {
   baseVersion?: number | null
   action: string
 }): Promise<void> {
-  const deviceId = (await kvGet<string>('device_id')) ?? ''
-  const staffId = (await kvGet<{ id: string }>('staff'))?.id ?? ''
-  const epoch = (await kvGet<number>('server_epoch')) ?? 1
+  const deviceId = await kvGet<string>('device_id')
+  const staffId = (await kvGet<{ id: string }>('staff'))?.id
+  const epoch = await kvGet<number>('server_epoch')
+  // Never queue an op without the joined identity (it would be refused by the school
+  // PC, or worse, look saved while it can never sync).
+  if (!deviceId || !staffId || epoch == null) {
+    throw { code: 'NOT_JOINED', message_key: 'error.NOT_AVAILABLE_ON_WEB', vars: {} }
+  }
   const hlc = await nextHlc(deviceId)
   const op = buildOp({
     deviceId,

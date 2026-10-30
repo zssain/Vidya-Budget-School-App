@@ -224,3 +224,44 @@ fn actor_writes_are_confined_to_their_own_ops_folder() {
 fn _access_is_ordered() {
     assert!(Access::Owner > Access::Writer && Access::Writer > Access::Reader);
 }
+
+/// The school PC's per-device down export: the device's complete role-scoped data,
+/// sealed to that device only; rewritten only when the school data moved.
+#[test]
+fn down_export_reaches_only_its_device_and_tracks_changes() {
+    let s = server();
+    let sk = register(&s, "dev-ipad", "stf-meena", 0x71);
+    let sk_other = register(&s, "dev-other", "stf-suresh", 0x72);
+    let drive = FakeDrive::new();
+    let l = drive.provision_school(&[]);
+    let acct = drive.as_actor(PRINCIPAL);
+
+    let n = exchange::write_down_exports(&s, &acct, &l.exchange).unwrap();
+    assert_eq!(n, 2, "one export per live device");
+    let mine = exchange::read_down_export(&acct, &l.exchange, "dev-ipad", &sk).unwrap().expect("export");
+    assert!(mine.changes.iter().any(|c| c.table == "school"));
+    assert!(mine.changes.iter().any(|c| c.table == "class"), "the teacher's classes");
+    assert!(mine.changes.iter().all(|c| c.table != "payment"), "a teacher's export carries no fee data");
+    // Another device's key can't open it (wrong key or relabelled as the other device).
+    assert!(exchange::read_down_export(&acct, &l.exchange, "dev-ipad", &sk_other).is_err());
+
+    // Unchanged data → nothing rewritten.
+    assert_eq!(exchange::write_down_exports(&s, &acct, &l.exchange).unwrap(), 0);
+    // A server-side change → fresh exports with a newer cursor.
+    s.execute(
+        "INSERT INTO op_log(op_id,hlc,device_id,staff_id,\"table\",record_id,kind,payload,applied_at) VALUES ('op-x','h','d','stf-priya','class','cls-5a','update','{}','t')",
+        [],
+    )
+    .unwrap();
+    assert_eq!(exchange::write_down_exports(&s, &acct, &l.exchange).unwrap(), 2);
+    let again = exchange::read_down_export(&acct, &l.exchange, "dev-ipad", &sk).unwrap().unwrap();
+    assert!(again.cursor > mine.cursor);
+    // Revoked → no more exports for that device.
+    s.execute("UPDATE device SET revoked_at='t' WHERE id='dev-other'", []).unwrap();
+    s.execute(
+        "INSERT INTO op_log(op_id,hlc,device_id,staff_id,\"table\",record_id,kind,payload,applied_at) VALUES ('op-y','h','d','stf-priya','class','cls-5a','update','{}','t')",
+        [],
+    )
+    .unwrap();
+    assert_eq!(exchange::write_down_exports(&s, &acct, &l.exchange).unwrap(), 1);
+}

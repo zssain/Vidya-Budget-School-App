@@ -9,6 +9,9 @@
 // dead code — `isWeb` is false there).
 
 import type {
+  CheckInInput,
+  LeaveRequestInput,
+  MarkInput,
   AppState,
   AppStateResponse,
   ClassDto,
@@ -42,6 +45,7 @@ import {
 } from './timetable'
 import { buildHomeworkNotes, type HomeworkNoteRec } from './notes'
 import { audienceFor, newId, writeOp } from './op'
+import { getAttendanceSheet, requestLeave, staffCheckIn, staffCheckOut, writeAttendance } from './phone'
 
 /** A Web command handler: `(args) => result`. */
 export type WebHandler = (args?: Record<string, unknown>) => Promise<unknown>
@@ -265,6 +269,15 @@ export const WEB_COMMANDS: Record<string, WebHandler> = {
   session_activity: async () => {
     touch()
   },
+  // Phone writes/reads (P21): same command ops as the native app; see phone.ts.
+  get_attendance_sheet: async (args) => getAttendanceSheet(String(args?.classId ?? ''), String(args?.date ?? '')),
+  save_attendance_draft: async (args) =>
+    writeAttendance(String(args?.classId ?? ''), String(args?.date ?? ''), (args?.marks ?? []) as MarkInput[], false),
+  submit_attendance: async (args) =>
+    writeAttendance(String(args?.classId ?? ''), String(args?.date ?? ''), (args?.marks ?? []) as MarkInput[], true),
+  staff_check_in: async (args) => staffCheckIn(args?.input as CheckInInput),
+  staff_check_out: async (args) => staffCheckOut(String(args?.date ?? ''), Number(args?.minute ?? -1)),
+  request_leave: async (args) => requestLeave(args?.input as LeaveRequestInput),
 }
 
 /** Commands that may run while the PWA is locked: routing state, the PIN gate (and its
