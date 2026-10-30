@@ -49,8 +49,45 @@ fn op(op_id: &str, staff: &str, device: &str, table: &str, record: &str, kind: &
     }
 }
 
+/// The authenticated device an op is pushed as. A real device gets its row at join;
+/// here the device row is registered for the op's own staff (idempotent), so the
+/// server's identity binding sees the same device the op names.
+fn auth_of(conn: &Connection, o: &Op) -> service::DeviceAuth {
+    conn.execute(
+        "INSERT OR IGNORE INTO device(id,staff_id,platform,name,token_hash) VALUES (?1,?2,'android','Test','h')",
+        params![o.device_id, o.staff_id],
+    )
+    .unwrap();
+    service::DeviceAuth { device_id: o.device_id.clone(), staff_id: o.staff_id.clone() }
+}
+
+/// Re-open (to draft) the attendance sheet a mark belongs to. The seeded sheets are
+/// submitted = locked; a teacher's direct edit of a locked sheet needs a correction
+/// request (asserted separately), so the "confirmed" paths work on an open sheet.
+fn open_sheet_of(conn: &Connection, mark_id: &str) {
+    conn.execute(
+        "UPDATE attendance_sheet SET status='draft' WHERE id=(SELECT sheet_id FROM attendance_mark WHERE id=?1)",
+        params![mark_id],
+    )
+    .unwrap();
+}
+
+/// Register a device on the server as a join would (Drive tests).
+fn register_device(conn: &Connection, device: &str, staff: &str) {
+    conn.execute(
+        "INSERT OR IGNORE INTO device(id,staff_id,platform,name,token_hash) VALUES (?1,?2,'android','Test','h')",
+        params![device, staff],
+    )
+    .unwrap();
+}
+
+fn push_as(conn: &mut Connection, ops: &[Op]) -> vidya_lib::sync::protocol::PushResp {
+    let auth = auth_of(conn, &ops[0]);
+    service::push(conn, &auth, ops, now()).unwrap()
+}
+
 fn push1(conn: &mut Connection, o: &Op) -> OpStatus {
-    service::push(conn, std::slice::from_ref(o), now()).unwrap().results[0].status
+    push_as(conn, std::slice::from_ref(o)).results[0].status
 }
 
 // DONE-MEANS #1 — a queued attendance op is confirmed when it reaches the server.
@@ -64,6 +101,7 @@ fn attendance_op_confirmed_when_it_reaches_server() {
             [], |r| r.get(0),
         )
         .unwrap();
+    open_sheet_of(&s, &mark_id);
     let o = op("op-att-1", "stf-meena", "dev-phone", "attendance_mark", &mark_id, "update", serde_json::json!({ "mark": "P" }), None);
     assert_eq!(push1(&mut s, &o), OpStatus::Confirmed);
     let mark: String = s.query_row("SELECT mark FROM attendance_mark WHERE id=?1", [&mark_id], |r| r.get(0)).unwrap();
@@ -77,8 +115,8 @@ fn duplicate_op_applies_once() {
     let mut s = server();
     let sid = "stu-new-1";
     let o = op("op-dup", "stf-priya", "dev-a1", "student", sid, "insert", serde_json::json!({ "name": "Dup Test", "status": "active" }), None);
-    let r1 = service::push(&mut s, std::slice::from_ref(&o), now()).unwrap().results[0].clone();
-    let r2 = service::push(&mut s, std::slice::from_ref(&o), now()).unwrap().results[0].clone();
+    let r1 = push_as(&mut s, std::slice::from_ref(&o)).results[0].clone();
+    let r2 = push_as(&mut s, std::slice::from_ref(&o)).results[0].clone();
     assert_eq!(r1.status, OpStatus::Confirmed);
     assert_eq!(r1.server_seq, r2.server_seq, "same op_id → same recorded result");
     let n: i64 = s.query_row("SELECT COUNT(*) FROM student WHERE id=?1", [sid], |r| r.get(0)).unwrap();
@@ -178,7 +216,7 @@ fn join_then_snapshot_then_incremental_pull() {
     // A new op after the join cursor shows up in pull.
     let o = op("op-after-join", "stf-suresh", &join.device_id, "payment", "op-after-join", "insert",
         serde_json::json!({ "receipt_no": "R-A9-0001", "student_id": "stu-kavya-singh", "amount_paise": 10_000, "mode": "cash", "collected_by": "stf-suresh", "collected_at": "2026-09-23T12:00:00Z" }), None);
-    service::push(&mut s, std::slice::from_ref(&o), now()).unwrap();
+    push_as(&mut s, std::slice::from_ref(&o));
     let pull = service::pull(&s, &auth, join.bootstrap_cursor, 500, now()).unwrap();
     assert!(pull.changes.iter().any(|c| c.record_id == "op-after-join"), "incremental pull returns the new payment");
     assert!(pull.next_cursor > join.bootstrap_cursor);
@@ -198,7 +236,7 @@ fn five_thousand_queued_ops_apply() {
     }
     // Pushed in ≤200 batches (protocol cap), as the client would after an outage.
     for chunk in batch.chunks(200) {
-        let resp = service::push(&mut s, chunk, now()).unwrap();
+        let resp = push_as(&mut s, chunk);
         assert!(resp.results.iter().all(|r| r.status == OpStatus::Confirmed));
     }
     let after: i64 = s.query_row("SELECT COUNT(*) FROM student", [], |r| r.get(0)).unwrap();
@@ -257,6 +295,8 @@ fn drive_server_off_phone_pushes_then_server_imports_confirmed() {
 
     // Phone (server unreachable) queues the mark A→P and holds the class key.
     let mut ph = phone();
+    open_sheet_of(&s, &mark_id);
+    register_device(&s, "dev-phone", "stf-meena");
     let o = attendance_op("op-att-drive", &mark_id);
     queue(&ph, &o);
     let held = deliver(&s, "class:cls-5a");
@@ -319,6 +359,8 @@ fn drive_revoked_author_bundle_is_flagged_not_applied() {
     s.execute("UPDATE staff SET state='suspended' WHERE id='stf-meena'", []).unwrap();
 
     let mut ph = phone();
+    open_sheet_of(&s, &mark_id);
+    register_device(&s, "dev-phone", "stf-meena");
     let o = attendance_op("op-revoked", &mark_id);
     queue(&ph, &o);
     let held = deliver(&s, "class:cls-5a");
@@ -349,6 +391,7 @@ fn drive_same_op_via_lan_and_drive_applies_once() {
     // (2) the same op also went out over Drive; the server imports it → no double apply.
     let drive = FakeDrive::new();
     let l = drive.provision_school(&[("stf-suresh", "dev-a2")]);
+    register_device(&s, "dev-a2", "stf-suresh");
     let held = deliver(&s, "finance");
     let mut ph = phone();
     queue(&ph, &o);
@@ -374,6 +417,8 @@ fn drive_ack_round_trips_to_the_device() {
         .query_row("SELECT m.id FROM attendance_mark m JOIN attendance_sheet sh ON sh.id=m.sheet_id WHERE sh.class_id='cls-5a' AND m.mark='A' LIMIT 1", [], |r| r.get(0))
         .unwrap();
     let mut ph = phone();
+    open_sheet_of(&s, &mark_id);
+    register_device(&s, "dev-phone", "stf-meena");
     let o = attendance_op("op-ack", &mark_id);
     queue(&ph, &o);
     let held = deliver(&s, "class:cls-5a");
@@ -388,4 +433,122 @@ fn drive_ack_round_trips_to_the_device() {
     let ack = exchange::read_ack(&drive.as_actor("stf-meena"), &l.acks, "dev-phone", &session).unwrap().unwrap();
     assert_eq!(ack.results[0].status, OpStatus::Confirmed);
     assert_eq!(ack.last_hlc, o.hlc);
+}
+
+// ---------------------------------------------------------------------------
+// P21 server-authorization regressions (the push path must bind identity and
+// deny by default).
+
+/// A teacher's device token cannot push an op claiming to be the Principal.
+#[test]
+fn op_claiming_another_staff_is_rejected() {
+    let mut s = server();
+    register_device(&s, "dev-meena", "stf-meena");
+    let auth = service::DeviceAuth { device_id: "dev-meena".into(), staff_id: "stf-meena".into() };
+    let forged = op("op-forged", "stf-priya", "dev-meena", "student", "stu-forged", "insert", serde_json::json!({ "name": "X", "status": "active" }), None);
+    let r = service::push(&mut s, &auth, std::slice::from_ref(&forged), now()).unwrap().results[0].clone();
+    assert_eq!(r.status, OpStatus::Rejected);
+    assert_eq!(r.reason_code.as_deref(), Some("FORBIDDEN"));
+    let n: i64 = s.query_row("SELECT COUNT(*) FROM student WHERE id='stu-forged'", [], |r| r.get(0)).unwrap();
+    assert_eq!(n, 0);
+    // …and the forged op_id is not remembered (it can't poison a real op).
+    let remembered: i64 = s.query_row("SELECT COUNT(*) FROM applied_ops WHERE op_id='op-forged'", [], |r| r.get(0)).unwrap();
+    assert_eq!(remembered, 0);
+}
+
+/// Tables without a server rule (staff, device, request, class, app_kv …) are never
+/// upserted from a device — e.g. a teacher can't make themselves Principal.
+#[test]
+fn unmapped_tables_are_denied_by_default() {
+    let mut s = server();
+    for (i, (table, record, payload)) in [
+        ("staff", "stf-meena", serde_json::json!({ "role": "principal" })),
+        ("request", "req-x", serde_json::json!({ "type": "attendance_duty", "status": "approved" })),
+        ("class", "cls-5a", serde_json::json!({ "class_teacher_id": "stf-meena" })),
+        ("app_kv", "k", serde_json::json!({ "value": "x" })),
+        ("device", "dev-a1", serde_json::json!({ "revoked_at": null })),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let o = op(&format!("op-deny-{i}"), "stf-meena", "dev-meena", table, record, "update", payload, None);
+        let r = push_as(&mut s, std::slice::from_ref(&o)).results[0].clone();
+        assert_eq!(r.status, OpStatus::Rejected, "{table}");
+        assert_eq!(r.reason_code.as_deref(), Some("UNSUPPORTED_OP"), "{table}");
+    }
+    let role: String = s.query_row("SELECT role FROM staff WHERE id='stf-meena'", [], |r| r.get(0)).unwrap();
+    assert_eq!(role, "teacher");
+}
+
+/// A teacher's direct edit of a SUBMITTED (locked) sheet needs a correction request.
+#[test]
+fn teacher_edit_of_submitted_attendance_needs_request() {
+    let mut s = server();
+    let mark_id: String = s
+        .query_row(
+            "SELECT m.id FROM attendance_mark m JOIN attendance_sheet sh ON sh.id=m.sheet_id WHERE sh.class_id='cls-5a' AND sh.status='submitted' AND m.mark='A' LIMIT 1",
+            [], |r| r.get(0),
+        )
+        .unwrap();
+    let o = op("op-locked", "stf-meena", "dev-meena", "attendance_mark", &mark_id, "update", serde_json::json!({ "mark": "P" }), None);
+    let r = push_as(&mut s, std::slice::from_ref(&o)).results[0].clone();
+    assert_eq!(r.reason_code.as_deref(), Some("NEEDS_REQUEST"));
+    let mark: String = s.query_row("SELECT mark FROM attendance_mark WHERE id=?1", [&mark_id], |r| r.get(0)).unwrap();
+    assert_eq!(mark, "A");
+}
+
+/// An update can't move another class's row into the teacher's class.
+#[test]
+fn update_cannot_relabel_a_row_into_own_class() {
+    let mut s = server();
+    let (sheet, other_class): (String, String) = s
+        .query_row("SELECT id, class_id FROM attendance_sheet WHERE class_id<>'cls-5a' LIMIT 1", [], |r| Ok((r.get(0)?, r.get(1)?)))
+        .unwrap();
+    s.execute("UPDATE attendance_sheet SET status='draft' WHERE id=?1", [&sheet]).unwrap();
+    let o = op("op-relabel", "stf-meena", "dev-meena", "attendance_sheet", &sheet, "update", serde_json::json!({ "class_id": "cls-5a" }), None);
+    let r = push_as(&mut s, std::slice::from_ref(&o)).results[0].clone();
+    assert_eq!(r.status, OpStatus::Rejected);
+    let cls: String = s.query_row("SELECT class_id FROM attendance_sheet WHERE id=?1", [&sheet], |r| r.get(0)).unwrap();
+    assert_eq!(cls, other_class);
+}
+
+/// A replayed op_id with different content (or from another device) is refused and
+/// the original result stands.
+#[test]
+fn reused_op_id_with_other_content_is_refused() {
+    let mut s = server();
+    let o = op("op-once", "stf-priya", "dev-a1", "student", "stu-once", "insert", serde_json::json!({ "name": "Real", "status": "active" }), None);
+    assert_eq!(push1(&mut s, &o), OpStatus::Confirmed);
+    let mut evil = o.clone();
+    evil.payload = serde_json::json!({ "name": "Evil", "status": "active" });
+    let r = push_as(&mut s, std::slice::from_ref(&evil)).results[0].clone();
+    assert_eq!(r.reason_code.as_deref(), Some("DUPLICATE_OP"));
+    let name: String = s.query_row("SELECT name FROM student WHERE id='stu-once'", [], |r| r.get(0)).unwrap();
+    assert_eq!(name, "Real");
+    // An identical retry still gets the original result.
+    assert_eq!(push1(&mut s, &o), OpStatus::Confirmed);
+}
+
+/// Ops stamped with an older server epoch (a fenced/old server) are refused, and a
+/// delete (no tombstone path yet) is never upserted.
+#[test]
+fn stale_epoch_and_delete_are_refused() {
+    let mut s = server();
+    s.execute("UPDATE school SET server_epoch=2", []).unwrap();
+    let o = op("op-old-epoch", "stf-priya", "dev-a1", "student", "stu-old", "insert", serde_json::json!({ "name": "Old", "status": "active" }), None);
+    assert_eq!(push_as(&mut s, std::slice::from_ref(&o)).results[0].reason_code.as_deref(), Some("EPOCH_OLD"));
+    let mut d = op("op-del", "stf-priya", "dev-a1", "student", "stu-x", "delete", serde_json::json!({}), None);
+    d.server_epoch = 2;
+    assert_eq!(push_as(&mut s, std::slice::from_ref(&d)).results[0].reason_code.as_deref(), Some("UNSUPPORTED_OP"));
+}
+
+/// One bad op (unknown column) does not abort the batch or block later ops.
+#[test]
+fn a_failing_op_does_not_abort_the_batch() {
+    let mut s = server();
+    let bad = op("op-bad", "stf-priya", "dev-a1", "student", "stu-bad", "insert", serde_json::json!({ "no_such_column": "x" }), None);
+    let good = op("op-good", "stf-priya", "dev-a1", "student", "stu-good", "insert", serde_json::json!({ "name": "Good", "status": "active" }), None);
+    let resp = push_as(&mut s, &[bad, good]);
+    assert_eq!(resp.results[0].reason_code.as_deref(), Some("MALFORMED"));
+    assert_eq!(resp.results[1].status, OpStatus::Confirmed);
 }

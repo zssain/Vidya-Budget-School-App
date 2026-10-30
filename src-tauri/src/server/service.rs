@@ -7,7 +7,7 @@
 use rusqlite::{params, Connection, OptionalExtension};
 use sha2::{Digest, Sha256};
 
-use crate::sync::apply::{apply_op, load_actor, read_row_json};
+use crate::sync::apply::{load_actor, read_row_json};
 use crate::sync::protocol::*;
 use crate::sync::scope;
 
@@ -284,11 +284,12 @@ fn audience_keys_for(conn: &Connection, staff_id: &str) -> rusqlite::Result<Vec<
 // ----------------------------------------------------------- /sync/push ------
 
 /// Apply pushed ops (≤200) via vidya-core; idempotent by op_id.
-pub fn push(conn: &mut Connection, ops: &[Op], now: time::OffsetDateTime) -> rusqlite::Result<PushResp> {
+pub fn push(conn: &mut Connection, auth: &DeviceAuth, ops: &[Op], now: time::OffsetDateTime) -> rusqlite::Result<PushResp> {
     let epoch = school_info(conn)?.map(|s| s.server_epoch).unwrap_or(1);
+    let who = crate::sync::apply::OpAuth { device_id: &auth.device_id, staff_id: &auth.staff_id };
     let mut results = Vec::with_capacity(ops.len());
     for op in ops.iter().take(200) {
-        results.push(apply_op(conn, op)?);
+        results.push(crate::sync::apply::apply_client_op(conn, &who, op)?);
     }
     Ok(PushResp {
         results,

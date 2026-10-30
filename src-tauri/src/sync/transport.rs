@@ -65,7 +65,7 @@ impl Transport for LoopbackTransport {
             return Err(TransportError::Unreachable);
         }
         let mut c = self.server.lock().map_err(|_| TransportError::Other("lock".into()))?;
-        service::push(&mut c, ops, self.now).map_err(|e| TransportError::Other(e.to_string()))
+        service::push(&mut c, &self.auth, ops, self.now).map_err(|e| TransportError::Other(e.to_string()))
     }
     async fn pull(&self, since: i64, limit: i64) -> Result<PullResp, TransportError> {
         if self.offline {

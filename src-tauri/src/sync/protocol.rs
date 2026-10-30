@@ -40,6 +40,17 @@ pub mod codes {
     /// An op whose action belongs to a module the school has switched off
     /// (00-SYSTEM-CONTEXT §14). The server never applies it while the module is off.
     pub const MODULE_OFF: &str = "MODULE_OFF";
+    /// A table/kind the server has no rule for (deny by default), or a `delete`
+    /// (no tombstone path yet). Never applied.
+    pub const UNSUPPORTED_OP: &str = "UNSUPPORTED_OP";
+    /// An op_id already used by another device or with different content. The first
+    /// result stands; this one is refused and not remembered.
+    pub const DUPLICATE_OP: &str = "DUPLICATE_OP";
+    /// The change targets locked (submitted) data: raise a correction request.
+    pub const NEEDS_REQUEST: &str = "NEEDS_REQUEST";
+    /// The Principal may change this locked data only with an audited reason, which
+    /// is done on the school PC (not through a synced op).
+    pub const REASON_REQUIRED: &str = "REASON_REQUIRED";
 }
 
 /// True iff `s` is a plain SQL identifier: 1–64 chars, ASCII letter/underscore

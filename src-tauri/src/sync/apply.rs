@@ -130,10 +130,24 @@ fn target_for(table: &str, payload: &serde_json::Value) -> Target {
 
 /// Resolve the class a target belongs to (attendance ops don't carry class_id).
 fn resolve_class_id(conn: &Connection, table: &str, record_id: &str, payload: &serde_json::Value) -> rusqlite::Result<Option<String>> {
-    if let Some(c) = payload.get("class_id").and_then(|v| v.as_str()) {
-        return Ok(Some(c.to_string()));
+    // The server's stored row wins; the payload's class_id is used only when the row
+    // is new (an attacker can't re-label someone else's row as their class).
+    if let Some(c) = stored_class_id(conn, table, record_id, payload)? {
+        return Ok(Some(c));
     }
+    if row_exists(conn, table, record_id)? {
+        return Ok(None);
+    }
+    Ok(payload.get("class_id").and_then(|v| v.as_str()).map(str::to_string))
+}
+
+/// The class of a row from the server's own data (None if unknown / new).
+fn stored_class_id(conn: &Connection, table: &str, record_id: &str, payload: &serde_json::Value) -> rusqlite::Result<Option<String>> {
     match table {
+        "homework_note" => conn
+            .query_row("SELECT class_id FROM homework_note WHERE id=?1", params![record_id], |r| r.get::<_, Option<String>>(0))
+            .optional()
+            .map(Option::flatten),
         "attendance_sheet" => conn
             .query_row("SELECT class_id FROM attendance_sheet WHERE id=?1", params![record_id], |r| r.get::<_, String>(0))
             .optional(),
@@ -157,6 +171,144 @@ fn resolve_class_id(conn: &Connection, table: &str, record_id: &str, payload: &s
         }
         _ => Ok(None),
     }
+}
+
+/// True if `table` already holds a row with this id (identifier-checked by caller).
+fn row_exists(conn: &Connection, table: &str, id: &str) -> rusqlite::Result<bool> {
+    let sql = format!("SELECT 1 FROM {table} WHERE id=?1");
+    Ok(conn.query_row(&sql, params![id], |_| Ok(())).optional()?.is_some())
+}
+
+/// The class_subject a marks op belongs to, from the server's rows (the sheet's
+/// exam_subject). For a brand-new sheet/entry the payload names the exam_subject /
+/// sheet, which must itself exist server-side. Other tables: the stored row, or the
+/// payload only for a new row.
+fn resolve_class_subject_id(conn: &Connection, table: &str, record_id: &str, payload: &serde_json::Value) -> rusqlite::Result<Option<String>> {
+    let via_exam_subject = |es: &str| -> rusqlite::Result<Option<String>> {
+        conn.query_row("SELECT class_subject_id FROM exam_subject WHERE id=?1", params![es], |r| r.get(0)).optional()
+    };
+    let via_sheet = |sheet: &str| -> rusqlite::Result<Option<String>> {
+        let es: Option<String> =
+            conn.query_row("SELECT exam_subject_id FROM marks_sheet WHERE id=?1", params![sheet], |r| r.get(0)).optional()?;
+        match es {
+            Some(es) => via_exam_subject(&es),
+            None => Ok(None),
+        }
+    };
+    match table {
+        "marks_sheet" => {
+            if let Some(cs) = via_sheet(record_id)? {
+                return Ok(Some(cs));
+            }
+            match payload.get("exam_subject_id").and_then(|v| v.as_str()) {
+                Some(es) => via_exam_subject(es),
+                None => Ok(None),
+            }
+        }
+        "mark_entry" => {
+            let sheet: Option<String> =
+                conn.query_row("SELECT sheet_id FROM mark_entry WHERE id=?1", params![record_id], |r| r.get(0)).optional()?;
+            match sheet.or_else(|| payload.get("sheet_id").and_then(|v| v.as_str()).map(str::to_string)) {
+                Some(sh) => via_sheet(&sh),
+                None => Ok(None),
+            }
+        }
+        "homework_note" => {
+            let stored: Option<Option<String>> = conn
+                .query_row("SELECT class_subject_id FROM homework_note WHERE id=?1", params![record_id], |r| r.get(0))
+                .optional()?;
+            Ok(match stored {
+                Some(cs) => cs,
+                None => payload.get("class_subject_id").and_then(|v| v.as_str()).map(str::to_string),
+            })
+        }
+        _ => Ok(None),
+    }
+}
+
+/// True when the attendance/marks sheet an op touches is already submitted (locked).
+fn sheet_is_submitted(conn: &Connection, table: &str, record_id: &str, payload: &serde_json::Value) -> rusqlite::Result<bool> {
+    let status: Option<String> = match table {
+        "attendance_sheet" => conn
+            .query_row("SELECT status FROM attendance_sheet WHERE id=?1", params![record_id], |r| r.get(0))
+            .optional()?,
+        "attendance_mark" => {
+            let sheet: Option<String> = conn
+                .query_row("SELECT sheet_id FROM attendance_mark WHERE id=?1", params![record_id], |r| r.get(0))
+                .optional()?
+                .or_else(|| payload.get("sheet_id").and_then(|v| v.as_str()).map(str::to_string));
+            match sheet {
+                Some(sh) => conn
+                    .query_row("SELECT status FROM attendance_sheet WHERE id=?1", params![sh], |r| r.get(0))
+                    .optional()?,
+                None => None,
+            }
+        }
+        "marks_sheet" => conn
+            .query_row("SELECT status FROM marks_sheet WHERE id=?1", params![record_id], |r| r.get(0))
+            .optional()?,
+        "mark_entry" => {
+            let sheet: Option<String> = conn
+                .query_row("SELECT sheet_id FROM mark_entry WHERE id=?1", params![record_id], |r| r.get(0))
+                .optional()?
+                .or_else(|| payload.get("sheet_id").and_then(|v| v.as_str()).map(str::to_string));
+            match sheet {
+                Some(sh) => conn.query_row("SELECT status FROM marks_sheet WHERE id=?1", params![sh], |r| r.get(0)).optional()?,
+                None => None,
+            }
+        }
+        _ => None,
+    };
+    Ok(status.as_deref() == Some("submitted"))
+}
+
+/// Columns that tie a row to its class / student / sheet / owner. An update op may
+/// not change them on an existing row.
+const OWNERSHIP_COLS: &[&str] = &[
+    "class_id", "class_subject_id", "sheet_id", "student_id", "exam_subject_id", "exam_id", "staff_id", "date",
+    "teacher_id", "created_by", "requested_by", "collected_by",
+];
+/// Author columns: when an op carries one, it must name the op's own author.
+const AUTHOR_COLS: &[&str] = &["created_by", "requested_by", "collected_by", "submitted_by", "updated_by_staff"];
+
+/// False if the op re-points an existing row (an ownership column changes) or names
+/// someone else in an author column / another device in `updated_by_device`.
+fn ownership_ok(conn: &Connection, op: &Op) -> rusqlite::Result<bool> {
+    let Some(obj) = op.payload.as_object() else { return Ok(true) };
+    for col in AUTHOR_COLS {
+        if let Some(v) = obj.get(*col) {
+            if !v.is_null() && v.as_str() != Some(op.staff_id.as_str()) {
+                return Ok(false);
+            }
+        }
+    }
+    if let Some(v) = obj.get("updated_by_device") {
+        if !v.is_null() && v.as_str() != Some(op.device_id.as_str()) {
+            return Ok(false);
+        }
+    }
+    if !row_exists(conn, &op.table, &op.record_id)? {
+        return Ok(true);
+    }
+    let cols = table_columns(conn, &op.table)?;
+    for col in OWNERSHIP_COLS {
+        let Some(incoming) = obj.get(*col) else { continue };
+        if !cols.iter().any(|c| c == col) {
+            continue;
+        }
+        let sql = format!("SELECT {col} FROM {} WHERE id=?1", op.table);
+        let cur: Option<String> = conn.query_row(&sql, params![op.record_id], |r| r.get::<_, Option<String>>(0))?;
+        if cur.as_deref() != incoming.as_str() {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+fn table_columns(conn: &Connection, table: &str) -> rusqlite::Result<Vec<String>> {
+    let mut st = conn.prepare(&format!("PRAGMA table_info({table})"))?;
+    let cols = st.query_map([], |r| r.get::<_, String>(1))?.collect();
+    cols
 }
 
 /// The v2 attendance Present/Absent cutover, in Unix ms (00-SYSTEM-CONTEXT §7a),
@@ -262,6 +414,97 @@ fn attendance_op_grant_allows(conn: &Connection, actor: &Actor, target: &Target,
     Ok(permissions::may_take_attendance(actor, &class_id, &date, &grants))
 }
 
+/// Who an inbound op provably came from: the device row behind the bearer token
+/// (LAN), the session key that opened the sealed envelope (relay), or the device
+/// whose Drive folder held the bundle.
+pub struct OpAuth<'a> {
+    pub device_id: &'a str,
+    pub staff_id: &'a str,
+}
+
+/// SHA-256 over everything an op asserts, so a replayed op_id with different
+/// content is detected.
+fn op_content_hash(op: &Op) -> String {
+    use sha2::{Digest, Sha256};
+    let canon = serde_json::json!({
+        "device_id": op.device_id, "staff_id": op.staff_id, "table": op.table, "record_id": op.record_id,
+        "kind": op.kind, "payload": op.payload, "base_version": op.base_version, "hlc": op.hlc,
+    });
+    let digest = Sha256::digest(canon.to_string().as_bytes());
+    digest.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// Apply an op that arrived from ANOTHER device (LAN push, sealed relay, Drive
+/// import). On top of `apply_op`'s rules this:
+/// * binds the op to the authenticated device — its `device_id` / `staff_id` must
+///   be that device and its staff (an op can't claim the Principal);
+/// * refuses a revoked/unknown device and an op stamped with an older epoch;
+/// * serves a cached result only for an identical retry from the same device —
+///   a reused op_id with other content or from another device is refused and NOT
+///   remembered (so it can't poison the real op);
+/// * never fails the batch: an op that errors (its own write transaction rolls back)
+///   is remembered as MALFORMED and the next op proceeds.
+pub fn apply_client_op(conn: &mut Connection, auth: &OpAuth, op: &Op) -> rusqlite::Result<OpResult> {
+    let hash = op_content_hash(op);
+
+    // Identity binding first: nothing an impostor sends is cached under its op_id.
+    if op.device_id != auth.device_id || op.staff_id != auth.staff_id {
+        return Ok(rejected(&op.op_id, codes::FORBIDDEN));
+    }
+
+    // Owned, content-checked idempotency.
+    let cached: Option<(Option<String>, Option<String>, Option<String>)> = conn
+        .query_row(
+            "SELECT result, device_id, payload_hash FROM applied_ops WHERE op_id=?1",
+            params![op.op_id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .optional()?;
+    if let Some((result, dev, ph)) = cached {
+        let same = dev.as_deref() == Some(auth.device_id) && ph.as_deref() == Some(hash.as_str());
+        if !same {
+            return Ok(rejected(&op.op_id, codes::DUPLICATE_OP));
+        }
+        if let Some(v) = result.and_then(|r| serde_json::from_str::<OpResult>(&r).ok()) {
+            return Ok(v);
+        }
+    }
+
+    // The device must still be live and belong to the staff it claims.
+    let dev: Option<(String, Option<String>)> = conn
+        .query_row("SELECT staff_id, revoked_at FROM device WHERE id=?1", params![auth.device_id], |r| Ok((r.get(0)?, r.get(1)?)))
+        .optional()?;
+    match dev {
+        Some((staff, None)) if staff == auth.staff_id => {}
+        _ => return Ok(rejected(&op.op_id, codes::DEVICE_REVOKED_OR_UNKNOWN)),
+    }
+
+    let remember = |conn: &mut Connection, res: OpResult| -> rusqlite::Result<OpResult> {
+        conn.execute(
+            "INSERT OR REPLACE INTO applied_ops(op_id, applied_at, result, device_id, payload_hash) VALUES (?1,?2,?3,?4,?5)",
+            params![op.op_id, now_iso(), serde_json::to_string(&res).unwrap_or_default(), auth.device_id, hash],
+        )?;
+        Ok(res)
+    };
+
+    // Fencing (§8.9): an op written against an older server epoch is refused.
+    let epoch: i64 = conn.query_row("SELECT server_epoch FROM school LIMIT 1", [], |r| r.get(0)).optional()?.unwrap_or(1);
+    if op.server_epoch < epoch {
+        return remember(conn, rejected(&op.op_id, codes::EPOCH_OLD));
+    }
+
+    // apply_op's domain writes run in their own transaction, so an error leaves no
+    // partial row behind; it is turned into a remembered rejection instead of
+    // aborting the whole push / Drive import.
+    match apply_op(conn, op) {
+        Ok(res) => remember(conn, res),
+        Err(e) => {
+            tracing::warn!(table = %op.table, kind = %op.kind, "client op failed to apply: {e}");
+            remember(conn, rejected(&op.op_id, codes::MALFORMED))
+        }
+    }
+}
+
 /// Apply one op. Idempotent by `op_id`. Returns the per-op result.
 pub fn apply_op(conn: &mut Connection, op: &Op) -> rusqlite::Result<OpResult> {
     // 1) Idempotency — same op via LAN and Drive applies once (§8.4).
@@ -287,6 +530,21 @@ pub fn apply_op(conn: &mut Connection, op: &Op) -> rusqlite::Result<OpResult> {
     //     Vidya). Ops from before the cutover apply as legacy.
     if leave_after_cutover(conn, op)? {
         return finalize(conn, op, rejected(&op.op_id, codes::LEAVE_MARK_REMOVED));
+    }
+
+    // 1d) Deny by default: an op is applied only if the server has a rule for its
+    //     (table, kind). Unknown tables (staff, device, invite, app_kv, request,
+    //     class, …) and `delete` (no tombstone path yet) are refused, never upserted.
+    if !matches!(op.kind.as_str(), "insert" | "update" | "action")
+        || (op.table != "staff_attendance" && action_for(&op.table, &op.kind).is_none())
+    {
+        return finalize(conn, op, rejected(&op.op_id, codes::UNSUPPORTED_OP));
+    }
+
+    // 1e) An op may not re-point an existing row at another class/student/sheet/…,
+    //     and may not claim another author in a `*_by` column.
+    if !ownership_ok(conn, op)? {
+        return finalize(conn, op, rejected(&op.op_id, codes::FORBIDDEN));
     }
 
     // 2) Author's CURRENT actor.
@@ -332,21 +590,49 @@ pub fn apply_op(conn: &mut Connection, op: &Op) -> rusqlite::Result<OpResult> {
     //     tables `action_for` does not map still miss the server permission
     //     re-check — a known gap tracked in docs/phase-notes/phase-18.md (security
     //     review §7). 4a above now enforces the module half for all module tables.
-    if let Some(action) = hr_action.or_else(|| action_for(&op.table, &op.kind)) {
+    if let Some(mut action) = hr_action.or_else(|| action_for(&op.table, &op.kind)) {
+        // The target is resolved from the SERVER's rows wherever they exist; the
+        // payload only describes a brand-new row (and ownership_ok above stops an
+        // update from moving one). A payload can't claim a class it doesn't own.
         let mut target = target_for(&op.table, &op.payload);
-        if target.class_id.is_none() {
-            target.class_id = resolve_class_id(conn, &op.table, &op.record_id, &op.payload)?;
+        target.class_id = resolve_class_id(conn, &op.table, &op.record_id, &op.payload)?;
+        if let Some(cs) = resolve_class_subject_id(conn, &op.table, &op.record_id, &op.payload)? {
+            target.class_subject_id = Some(cs);
+            if target.class_id.is_none() {
+                target.class_id = conn
+                    .query_row("SELECT class_id FROM class_subject WHERE id=?1", params![target.class_subject_id], |r| r.get(0))
+                    .optional()?;
+            }
+        } else if matches!(op.table.as_str(), "marks_sheet" | "mark_entry") {
+            target.class_subject_id = None;
         }
-        let decision = permissions::can(&actor, action, &target);
-        if !decision.is_allow() {
-            // Substitutes / attendance duty (§10.4): a teacher who is not the class
-            // teacher may still take attendance for a class on a date via an active
-            // substitution or an approved attendance-duty request. Re-check the
-            // attendance actions with the grant-aware rule before rejecting.
-            let by_grant = matches!(action, Action::TakeAttendance)
-                && attendance_op_grant_allows(conn, &actor, &target, op)?;
-            if !by_grant {
-                return finalize(conn, op, rejected(&op.op_id, codes::FORBIDDEN));
+        // Submitted sheets are locked (§3 rule 6): editing one is a different action.
+        target.is_locked = sheet_is_submitted(conn, &op.table, &op.record_id, &op.payload)?;
+        if target.is_locked {
+            action = match action {
+                Action::TakeAttendance => Action::EditSubmittedAttendance,
+                Action::EnterMarks => Action::EditSubmittedMarks,
+                other => other,
+            };
+        }
+        match permissions::can(&actor, action, &target) {
+            permissions::Decision::Allow { audit_reason_required: false } => {}
+            // Locked-data edits by the Principal need an audited reason → school PC.
+            permissions::Decision::Allow { audit_reason_required: true } => {
+                return finalize(conn, op, rejected(&op.op_id, codes::REASON_REQUIRED));
+            }
+            permissions::Decision::NeedsRequest(_) => {
+                return finalize(conn, op, rejected(&op.op_id, codes::NEEDS_REQUEST));
+            }
+            permissions::Decision::Deny { .. } => {
+                // Substitutes / attendance duty (§10.4): a teacher who is not the
+                // class teacher may still take attendance for a class on a date via an
+                // active substitution or an approved attendance-duty request.
+                let by_grant = matches!(action, Action::TakeAttendance)
+                    && attendance_op_grant_allows(conn, &actor, &target, op)?;
+                if !by_grant {
+                    return finalize(conn, op, rejected(&op.op_id, codes::FORBIDDEN));
+                }
             }
         }
     }

@@ -50,13 +50,25 @@ pub struct PullOutcome {
     pub quarantined: usize,
     /// ops that would have overwritten the device's own unsent change → flagged.
     pub kept_local: usize,
+    /// ops refused outright: a table peers may not provisionally write, or a
+    /// table/column name that is not a plain identifier.
+    pub refused: usize,
 }
 
 enum Prov {
     Applied,
     KeptLocal,
     AlreadySeen,
+    Refused,
 }
+
+/// The only tables a peer's (unconfirmed) change may be shown from: class-scoped
+/// classroom data, plus a provisional admission (a new student row, shown as
+/// "Adm. no. pending"). Everything else waits for the school PC's canonical copy.
+/// Any peer holding the same audience key can write these bundles, so nothing that
+/// grants access (staff, device, request, class assignment) or moves money is here.
+const PROVISIONAL_TABLES: &[&str] =
+    &["homework_note", "attendance_sheet", "attendance_mark", "marks_sheet", "mark_entry", "student"];
 
 /// Pull provisional changes from every OTHER device's folder under `exchange`.
 pub fn pull_provisional(
@@ -99,6 +111,7 @@ pub fn pull_provisional(
                             Prov::Applied => out.applied += 1,
                             Prov::KeptLocal => out.kept_local += 1,
                             Prov::AlreadySeen => {}
+                            Prov::Refused => out.refused += 1,
                         }
                     }
                     seen.insert(f.name.clone());
@@ -122,6 +135,15 @@ fn provisional_apply(conn: &mut Connection, op: &Op) -> rusqlite::Result<Prov> {
     // idempotent: this device already saw this op (provisionally or confirmed)
     if seen_op(conn, &op.op_id)? {
         return Ok(Prov::AlreadySeen);
+    }
+    // Table and column names become SQL identifiers below, and a peer bundle is
+    // untrusted input: refuse anything outside the allowlist or not a plain ident.
+    if !PROVISIONAL_TABLES.contains(&op.table.as_str())
+        || !crate::sync::protocol::op_identifiers_safe(&op.table, &op.payload)
+        || !matches!(op.kind.as_str(), "insert" | "update")
+    {
+        remember_op(conn, &op.op_id)?;
+        return Ok(Prov::Refused);
     }
     // never overwrite own unsent: an outbox op for the same record = a local edit
     let own_unsent: bool = conn

@@ -19,7 +19,7 @@ use rusqlite::{params, Connection};
 use super::bundle::{self, PROP_AUDIENCE, PROP_KEYVER};
 use super::keys;
 use super::{DriveApi, DriveError};
-use crate::sync::apply::apply_op;
+use crate::sync::apply::{apply_client_op, OpAuth};
 use crate::sync::protocol::{Op, OpResult, OpStatus};
 use crate::sync::seal;
 
@@ -195,6 +195,7 @@ pub fn import_all(
         device: String,
         folder: String,
         file_id: String,
+        audience: String,
         ops: Vec<Op>,
     }
     let mut pending: Vec<Pending> = Vec::new();
@@ -212,7 +213,7 @@ pub fn import_all(
             };
             let body = drive.download(&f.id)?;
             match bundle::open_bundle(&key, &audience, version, &body) {
-                Ok(ops) => pending.push(Pending { device: device.clone(), folder: folder_id.clone(), file_id: f.id, ops }),
+                Ok(ops) => pending.push(Pending { device: device.clone(), folder: folder_id.clone(), file_id: f.id, audience: audience.clone(), ops }),
                 Err(_) => out.quarantined += 1, // tampered / wrong key → not applied
             }
         }
@@ -227,7 +228,34 @@ pub fn import_all(
     }
     all.sort_by(|a, b| a.1.hlc.cmp(&b.1.hlc));
     for (src, op) in &all {
-        let result = apply_op(conn, op)?;
+        // The bundle's author is the device whose ops-<device> folder held it; its
+        // staff comes from the server's device row, never from the op. An op must
+        // also be sealed for the audience it claims. (Folder placement is not yet
+        // cryptographic proof of authorship — per-device bundle authentication is
+        // the sync-protocol-v2 follow-up.)
+        let p = &pending[*src];
+        let staff: Option<String> = conn
+            .query_row("SELECT staff_id FROM device WHERE id=?1 AND revoked_at IS NULL", params![p.device], |r| r.get(0))
+            .ok();
+        let result = match staff {
+            Some(staff_id) if op.audience == p.audience => {
+                apply_client_op(conn, &OpAuth { device_id: &p.device, staff_id: &staff_id }, op)?
+            }
+            Some(_) => OpResult {
+                op_id: op.op_id.clone(),
+                status: OpStatus::Rejected,
+                server_seq: None,
+                record: None,
+                reason_code: Some(crate::sync::protocol::codes::FORBIDDEN.into()),
+            },
+            None => OpResult {
+                op_id: op.op_id.clone(),
+                status: OpStatus::Rejected,
+                server_seq: None,
+                record: None,
+                reason_code: Some(crate::sync::protocol::codes::DEVICE_REVOKED_OR_UNKNOWN.into()),
+            },
+        };
         match result.status {
             OpStatus::Confirmed => out.confirmed += 1,
             OpStatus::Flagged => out.flagged += 1,

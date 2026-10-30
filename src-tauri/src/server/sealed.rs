@@ -123,7 +123,7 @@ fn route(
                 Ok(r) => r,
                 Err(_) => return Ok((400, serde_json::json!({ "error": "BAD_REQUEST" }))),
             };
-            let resp = service::push(conn, &req.ops, now)?;
+            let resp = service::push(conn, auth, &req.ops, now)?;
             Ok((200, serde_json::to_value(resp).unwrap_or_default()))
         }
         "/v1/sync/pull" => {
@@ -214,7 +214,7 @@ mod tests {
         let sr: SealedResponse = serde_json::from_slice(&plain).unwrap();
         assert_eq!(sr.status, 200);
         let push: PushResp = serde_json::from_value(sr.body).unwrap();
-        assert_eq!(push.results[0].status, OpStatus::Confirmed);
+        assert_eq!(push.results[0].status, OpStatus::Confirmed, "{:?}", push.results[0].reason_code);
         let on_server: i64 = conn.query_row("SELECT COUNT(*) FROM student WHERE id='stu-seal'", [], |r| r.get(0)).unwrap();
         assert_eq!(on_server, 1);
     }

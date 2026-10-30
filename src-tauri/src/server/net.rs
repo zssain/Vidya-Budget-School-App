@@ -120,12 +120,13 @@ async fn join(State(st): State<Arc<ServerState>>, Json(req): Json<JoinReq>) -> R
 }
 
 async fn push(State(st): State<Arc<ServerState>>, headers: HeaderMap, Json(req): Json<PushReq>) -> Response {
-    if let Err(e) = auth_and_limit(&st, &headers) {
-        return e;
-    }
+    let auth = match auth_and_limit(&st, &headers) {
+        Ok(a) => a,
+        Err(e) => return e,
+    };
     let result = {
         let mut conn = st.db.lock().unwrap();
-        crate::server::service::push(&mut conn, &req.ops, now())
+        crate::server::service::push(&mut conn, &auth, &req.ops, now())
     };
     match result {
         Ok(resp) => {
