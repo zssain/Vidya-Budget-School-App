@@ -7,7 +7,9 @@ members = ["src-tauri", "crates/vidya-core", "crates/vidya-wasm"]
 # cloud/_archive/licence is the RETIRED v2 licence server (prompts/P12 Step 8).
 # tools/licence-maker is the owner's laptop-only licence tool — never shipped or
 # built by the app workspace (prompts/P12 Step 7); it has its own [workspace].
-exclude = ["cloud/_archive", "cloud/relay", "tools/licence-maker"]
+# services/licence-signer is the owner portal's isolated signer worker (spec Phase 13);
+# it has its own [workspace] + Cargo.lock and is never part of the app build.
+exclude = ["cloud/_archive", "cloud/relay", "tools/licence-maker", "services/licence-signer"]
 
 # Release profile tuned for size (see docs/00-SYSTEM-CONTEXT.md §2 limits).
 [profile.release]
