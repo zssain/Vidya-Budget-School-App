@@ -25,6 +25,7 @@ const en: Record<string, string> = {
   'welcome.field.codeLabel': 'Activation code',
   'welcome.field.codePlaceholder': 'VIDYA-XXXX-XXXX-XXXX',
   'welcome.field.codeHint': 'It is in your purchase email and on your account page.',
+  'welcome.field.machineCode': 'Machine code for this computer (needed to buy):',
   // Join field
   'welcome.field.invLabel': 'Invitation link',
   'welcome.field.invPlaceholder': 'Paste the link your Principal sent',
@@ -78,6 +79,7 @@ const hi: Record<string, string> = {
   'welcome.field.codeLabel': 'एक्टिवेशन कोड',
   'welcome.field.codePlaceholder': 'VIDYA-XXXX-XXXX-XXXX',
   'welcome.field.codeHint': 'यह आपकी खरीद ईमेल में और आपके खाता पृष्ठ पर है।',
+  'welcome.field.machineCode': 'इस कंप्यूटर का मशीन कोड (खरीदने के लिए ज़रूरी):',
   'welcome.field.invLabel': 'आमंत्रण लिंक',
   'welcome.field.invPlaceholder': 'प्रधानाचार्य द्वारा भेजा गया लिंक पेस्ट करें',
   'welcome.field.invHint': 'प्रधानाचार्य से मिला पूरा लिंक पेस्ट करें — यह vidya://join से शुरू होता है।',

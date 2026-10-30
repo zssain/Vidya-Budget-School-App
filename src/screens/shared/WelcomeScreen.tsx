@@ -8,7 +8,8 @@
 //   - logos: the two /_blob assets are imported from src/assets (Vite bundles them).
 //   - help / shield / arrow SVGs -> <Icon> with the same width/height/strokeWidth.
 //   - no hard-coded visible text: every string comes from t('welcome.*').
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
+import * as api from '@/lib/api'
 import { Icon } from '@/components/Icon'
 import { t, getLang } from '@/lib/i18n'
 import { navigate } from '@/lib/router'
@@ -45,6 +46,13 @@ export default function WelcomeScreen({
   const [invite, setInvite] = useState('') // the join invitation link/code (separate from the setup activation code)
 
   const isSetup = mode === 'setup'
+  // The school PC's machine code — the buyer gives it at checkout so the licence is
+  // bound to this computer. Desktop only (phones / the browser are never licensed).
+  const [machineCode, setMachineCode] = useState<string | null>(null)
+  useEffect(() => {
+    if (isPhone || platform === 'web') return
+    api.machine_code().then(setMachineCode).catch(() => setMachineCode(null))
+  }, [])
   const isJoin = mode === 'join'
   const isRecover = mode === 'recover'
 
@@ -240,6 +248,14 @@ export default function WelcomeScreen({
               }}
             />
             <span style={{ fontSize: '12px', color: '#56657A' }}>{t('welcome.field.codeHint')}</span>
+            {machineCode ? (
+              <span style={{ fontSize: '12px', color: '#56657A' }}>
+                {t('welcome.field.machineCode')}{' '}
+                <span style={{ fontFamily: "'Geist', monospace", fontWeight: 600, color: '#13233F', userSelect: 'all', letterSpacing: '0.06em' }}>
+                  {machineCode}
+                </span>
+              </span>
+            ) : null}
           </div>
         ) : null}
         {isJoin ? (
