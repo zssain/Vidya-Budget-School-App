@@ -1,0 +1,34 @@
+{
+  "name": "@vidya/billing-worker",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Durable billing job worker: Razorpay webhook processing, reconciliation, licence delivery (Resend), webhook purge.",
+  "type": "module",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "start": "tsx src/main.ts",
+    "migrate": "tsx src/migrate.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.test.json",
+    "lint": "eslint .",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@vidya/billing-core": "file:../../packages/billing-core",
+    "pg": "8.23.1",
+    "razorpay": "2.9.8",
+    "resend": "6.36.0",
+    "tsx": "4.23.15",
+    "zod": "4.6.7"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "@types/node": "24.19.2",
+    "@types/pg": "8.23.1",
+    "eslint": "10.14.0",
+    "typescript": "5.9.3",
+    "typescript-eslint": "8.72.1",
+    "vitest": "4.1.12"
+  }
+}
