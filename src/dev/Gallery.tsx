@@ -36,7 +36,7 @@ function renderScreen(screen: string, state: string | null) {
       return <CollectFeeScreen data={collectFeeFixture} initial={initial} />
     }
     case 'teacherHome':
-      return <TeacherHomeScreen data={teacherHomeFixture} />
+      return <TeacherHomeScreen view={teacherHomeFixture} />
     case 'attendance': {
       const m: AttMode = state === 'markall' || state === 'submitted' ? state : 'default'
       return <AttendanceScreen data={attendanceFixture} initial={m} />

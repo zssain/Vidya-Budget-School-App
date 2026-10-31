@@ -62,11 +62,19 @@ import PrincipalHomeContainer from '@/screens/containers/PrincipalHomeContainer'
 import CollectFeeContainer from '@/screens/containers/CollectFeeContainer'
 import AttendanceContainer from '@/screens/containers/AttendanceContainer'
 import AbsenceContainer from '@/screens/containers/AbsenceContainer'
-import TeacherHomeScreen from '@/screens/phone/TeacherHomeScreen'
+import TeacherHomeContainer, { commandAvailable } from '@/screens/containers/TeacherHomeContainer'
+import TodayAttendanceScreen from '@/screens/phone/TodayAttendanceScreen'
+import { PhoneMarksListScreen, PhoneMarksSheetScreen } from '@/screens/phone/PhoneMarksScreen'
+import PhoneRemarksScreen from '@/screens/phone/PhoneRemarksScreen'
+import PhoneStudentsScreen from '@/screens/phone/PhoneStudentsScreen'
+import PhoneRequestsScreen from '@/screens/phone/PhoneRequestsScreen'
+import PhoneInboxScreen from '@/screens/phone/PhoneInboxScreen'
+import PhoneSyncScreen from '@/screens/phone/PhoneSyncScreen'
+import PhoneProfileScreen from '@/screens/phone/PhoneProfileScreen'
+import { TEACHER_TILES, type TeacherTileId } from '@/lib/teacherHome'
 import Gallery from '@/dev/Gallery'
 import Mocks from '@/dev/Mocks'
 import { welcomeFixture } from '@/dev/fixtures/welcome'
-import { teacherHomeFixture } from '@/dev/fixtures/teacherHome'
 
 // A simple full-screen status message (db_key_missing / needs_rejoin / moved).
 function StatusScreen({ messageKey }: { messageKey: string }) {
@@ -268,7 +276,20 @@ function AppRoutes() {
         if (base === '/teacher/checkin') return <MyAttendanceScreen />
         if (base === '/teacher/leave') return <ApplyLeaveScreen />
         if (base === '/teacher/about') return <AboutScreen />
-        return <TeacherHomeScreen data={teacherHomeFixture} />
+        // Tile screens (repair T1) — only when this platform serves the tile's
+        // commands (the tile is hidden otherwise; a stale link falls to home).
+        const tileOk = (id: TeacherTileId) => TEACHER_TILES.find((x) => x.id === id)!.commands.every(commandAvailable)
+        if (base === '/teacher/attendance' && tileOk('attendance')) return <TodayAttendanceScreen />
+        if (base === '/teacher/marks' && tileOk('marks')) return <PhoneMarksListScreen />
+        const mk = matchRoute('/teacher/marks/:examSubjectId', base)
+        if (mk && tileOk('marks')) return <PhoneMarksSheetScreen examSubjectId={mk.examSubjectId} />
+        if (base === '/teacher/remarks' && tileOk('reportCard')) return <PhoneRemarksScreen />
+        if (base === '/teacher/students' && tileOk('students')) return <PhoneStudentsScreen />
+        if (base === '/teacher/requests' && tileOk('requests')) return <PhoneRequestsScreen />
+        if (base === '/teacher/inbox' && tileOk('inbox')) return <PhoneInboxScreen />
+        if (base === '/teacher/sync' && tileOk('cloudSync')) return <PhoneSyncScreen />
+        if (base === '/teacher/profile' && tileOk('profile')) return <PhoneProfileScreen />
+        return <TeacherHomeContainer />
       }
       // Principal / Accountant: every desktop screen renders inside AppShell
       // (the mock sidebar + header, with real navigation + active state).

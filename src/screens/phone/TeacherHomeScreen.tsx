@@ -1,7 +1,10 @@
-// Teacher Home (Android phone) — a pixel-exact React translation of
-// design/screens/TeacherHome.dc.html. The mock is STATIC (renderVals() returns
-// {}). Every element, order and inline style is copied verbatim; the ONLY
-// substitutions are (docs/01-MOCK-SPEC.md §5/§6):
+// Teacher Home (phone: Android app + iPhone PWA) — a React translation of
+// design/screens/TeacherHome.dc.html. The mock is STATIC; since repair T1 the
+// layout and inline styles stay the mock's but every line is real data from a
+// TeacherHomeView (lib/teacherHome.ts, built by TeacherHomeContainer): the
+// greeting + date, one task row per class still to submit today (+ returned /
+// decided requests), real tile targets and badges, the bell's unread circulars and
+// the sync footer. The other substitutions are (docs/01-MOCK-SPEC.md §5/§6):
 //   - keyframes: the mock's local vRise (14px) -> app name vRise14; vPulse ->
 //     vPulse. (App keyframes live in src/styles/keyframes.css.)
 //   - logo: the /_blob asset is imported from src/assets (Vite bundles it).
@@ -21,9 +24,9 @@ import { Icon } from '@/components/Icon'
 import { t, getLang } from '@/lib/i18n'
 import { navigate } from '@/lib/router'
 import { isWeb } from '@/lib/platform'
+import type { TeacherHomeView, TeacherTileIcon } from '@/lib/teacherHome'
 import logo from '@/assets/vidya-horizontal-on-dark.svg'
 import logoHi from '@/assets/vidya-horizontal-hindi-on-dark.svg'
-import type { TeacherHomeData, TeacherTileIcon } from '@/dev/fixtures/teacherHome'
 import { SyncProblemsBanner } from './SyncProblems'
 
 // The four two-tone tile SVGs whose icons.ts entry is the mono sidebar geometry.
@@ -168,9 +171,7 @@ function CheckInBanner() {
   )
 }
 
-export default function TeacherHomeScreen({ data }: { data: TeacherHomeData }) {
-  const [attendanceTask, replyTask] = data.tasks
-
+export default function TeacherHomeScreen({ view }: { view: TeacherHomeView }) {
   return (
     <div
       style={{
@@ -180,7 +181,7 @@ export default function TeacherHomeScreen({ data }: { data: TeacherHomeData }) {
         flexDirection: 'column',
         background: 'radial-gradient(110% 45% at 85% 0%, #1A3560 0%, #0C1B38 60%)',
         color: '#FFFFFF',
-        fontFamily: "'Geist', 'Noto Sans Devanagari', system-ui, sans-serif",
+        fontFamily: "'Geist', 'Noto Sans Devanagari', 'Noto Sans Telugu', system-ui, sans-serif",
         fontSize: '14px',
         overflow: 'hidden',
       }}
@@ -195,7 +196,7 @@ export default function TeacherHomeScreen({ data }: { data: TeacherHomeData }) {
           gap: '20px',
         }}
       >
-        {/* Header: logo + bell (gold dot) + "MI" account button. */}
+        {/* Header: logo + bell (gold dot = unread circulars) + initials account button. */}
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <img
             src={getLang() === 'hi' ? logoHi : logo}
@@ -205,41 +206,44 @@ export default function TeacherHomeScreen({ data }: { data: TeacherHomeData }) {
             style={{ width: '132px', height: '43px', display: 'block' }}
           />
           <div style={{ display: 'flex', gap: '8px' }}>
-            <button
-              type="button"
-              aria-label={t('teacher.aria.notifications')}
-              style={{
-                position: 'relative',
-                width: '44px',
-                height: '44px',
-                borderRadius: '22px',
-                border: '1px solid rgba(255,255,255,0.14)',
-                background: 'rgba(255,255,255,0.04)',
-                color: '#FFFFFF',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-              }}
-            >
-              <Icon name="bell" size={19} strokeWidth={1.6} />
-              <span
+            {view.tiles.some((tile) => tile.id === 'inbox') && (
+              <button
+                type="button"
+                aria-label={view.unread > 0 ? t('teacher.aria.notificationsUnread', { n: view.unread }) : t('teacher.aria.notifications')}
+                onClick={() => navigate('/teacher/inbox')}
                 style={{
-                  position: 'absolute',
-                  top: '10px',
-                  right: '11px',
-                  width: '7px',
-                  height: '7px',
-                  borderRadius: '4px',
-                  background: '#C5AB7A',
+                  position: 'relative',
+                  width: '44px',
+                  height: '44px',
+                  borderRadius: '22px',
+                  border: '1px solid rgba(255,255,255,0.14)',
+                  background: 'rgba(255,255,255,0.04)',
+                  color: '#FFFFFF',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
                 }}
-              ></span>
-            </button>
+              >
+                <Icon name="bell" size={19} strokeWidth={1.6} />
+                {view.unread > 0 ? (
+                  <span
+                    style={{
+                      position: 'absolute',
+                      top: '10px',
+                      right: '11px',
+                      width: '7px',
+                      height: '7px',
+                      borderRadius: '4px',
+                      background: '#C5AB7A',
+                    }}
+                  ></span>
+                ) : null}
+              </button>
+            )}
             <button
               type="button"
               aria-label={t('teacher.aria.account')}
-              // On the iPhone PWA the account button opens the About screen (§18
-              // honest limits). On Android it stays inert, exactly as in the mock.
-              onClick={isWeb ? () => navigate('/teacher/about') : undefined}
+              onClick={() => navigate('/teacher/profile')}
               style={{
                 width: '44px',
                 height: '44px',
@@ -251,7 +255,7 @@ export default function TeacherHomeScreen({ data }: { data: TeacherHomeData }) {
                 fontSize: '14px',
               }}
             >
-              MI
+              {view.initials}
             </button>
           </div>
         </div>
@@ -280,7 +284,7 @@ export default function TeacherHomeScreen({ data }: { data: TeacherHomeData }) {
             <span
               style={{ width: '5px', height: '5px', borderRadius: '3px', background: '#C5AB7A' }}
             ></span>
-            {t('teacher.eyebrow')}
+            {view.eyebrow}
           </span>
           <div style={{ display: 'flex', flexDirection: 'column' }}>
             <h1
@@ -294,7 +298,7 @@ export default function TeacherHomeScreen({ data }: { data: TeacherHomeData }) {
                 letterSpacing: '-0.02em',
               }}
             >
-              {t('teacher.h1')}
+              {view.greeting}
             </h1>
             <span
               className="v-serif"
@@ -307,7 +311,7 @@ export default function TeacherHomeScreen({ data }: { data: TeacherHomeData }) {
                 color: '#C5AB7A',
               }}
             >
-              {t('teacher.h1sub')}
+              {view.dueLine}
             </span>
           </div>
         </div>
@@ -315,11 +319,11 @@ export default function TeacherHomeScreen({ data }: { data: TeacherHomeData }) {
         {/* Staff-HR check-in card (P17). Hidden when the HR module is off. */}
         <CheckInBanner />
 
-        {/* iPhone PWA only (B1): changes the school PC refused. Hidden when none, and
-            never rendered in the Android/fidelity build. */}
+        {/* Changes the school computer refused (B1). Hidden when none. */}
         {isWeb && <SyncProblemsBanner />}
 
-        {/* Task card. */}
+        {/* Task card: one row per real task (attendance due today, returned/decided
+            requests), or a single "All caught up" row. */}
         <section
           style={{
             border: '1px solid rgba(255,255,255,0.12)',
@@ -329,95 +333,76 @@ export default function TeacherHomeScreen({ data }: { data: TeacherHomeData }) {
             animation: 'vRise14 520ms 80ms cubic-bezier(.2,.8,.2,1) both',
           }}
         >
-          {/* V-A attendance -> Attendance. */}
-          <a
-            href="Attendance.dc.html"
-            onClick={(e) => {
-              e.preventDefault()
-              navigate('/teacher/attendance/v-a')
-            }}
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: '14px',
-              padding: '16px',
-              textDecoration: 'none',
-              color: '#FFFFFF',
-            }}
-          >
-            <span
-              style={{
-                width: '10px',
-                height: '10px',
-                borderRadius: '5px',
-                background: attendanceTask.dot,
-                flexShrink: 0,
-                animation: attendanceTask.pulse ? 'vPulse 2.2s ease-in-out infinite' : undefined,
-              }}
-            ></span>
-            <span
-              style={{ flexGrow: 1, display: 'flex', flexDirection: 'column', gap: '3px' }}
-            >
-              <span style={{ fontSize: '15px', fontWeight: 500 }}>
-                {t(attendanceTask.titleKey)}
+          {view.tasks.length === 0 ? (
+            <div style={{ display: 'flex', alignItems: 'center', gap: '14px', padding: '16px', color: '#FFFFFF' }}>
+              <span style={{ width: '10px', height: '10px', borderRadius: '5px', background: '#5FD0A0', flexShrink: 0 }}></span>
+              <span style={{ flexGrow: 1, display: 'flex', flexDirection: 'column', gap: '3px' }}>
+                <span style={{ fontSize: '15px', fontWeight: 500 }}>{t('teacher.task.none')}</span>
+                <span style={{ fontSize: '12px', color: '#9FACBF' }}>{t('teacher.task.noneSub')}</span>
               </span>
-              <span style={{ fontSize: '12px', color: '#9FACBF' }}>
-                {t(attendanceTask.subKey)}
-              </span>
-            </span>
-            <span
-              className="v-active-96"
-              style={{
-                height: '38px',
-                padding: '0 14px',
-                borderRadius: '19px',
-                background: '#C5AB7A',
-                color: '#0C1B38',
-                fontSize: '13px',
-                fontWeight: 600,
-                display: 'flex',
-                alignItems: 'center',
-                gap: '6px',
-              }}
-            >
-              {t('teacher.start')}
-              <Icon name="arrowUpRight" size={14} strokeWidth={2} />
-            </span>
-          </a>
-          {/* Reply to the Principal. */}
-          <a
-            href="#"
-            onClick={(e) => e.preventDefault()}
-            style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: '14px',
-              padding: '16px',
-              textDecoration: 'none',
-              color: '#FFFFFF',
-              borderTop: '1px solid rgba(255,255,255,0.10)',
-            }}
-          >
-            <span
-              style={{
-                width: '10px',
-                height: '10px',
-                borderRadius: '5px',
-                background: replyTask.dot,
-                flexShrink: 0,
-              }}
-            ></span>
-            <span
-              style={{ flexGrow: 1, display: 'flex', flexDirection: 'column', gap: '3px' }}
-            >
-              <span style={{ fontSize: '15px', fontWeight: 500 }}>{t(replyTask.titleKey)}</span>
-              <span style={{ fontSize: '12px', color: '#9FACBF' }}>{t(replyTask.subKey)}</span>
-            </span>
-            <Icon name="chevronRight" size={18} strokeWidth={1.75} color="#9FACBF" />
-          </a>
+            </div>
+          ) : (
+            view.tasks.map((task, i) => (
+              <a
+                key={task.key}
+                href={`#${task.to}`}
+                onClick={(e) => {
+                  e.preventDefault()
+                  navigate(task.to)
+                }}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '14px',
+                  padding: '16px',
+                  textDecoration: 'none',
+                  color: '#FFFFFF',
+                  borderTop: i > 0 ? '1px solid rgba(255,255,255,0.10)' : undefined,
+                }}
+              >
+                <span
+                  style={{
+                    width: '10px',
+                    height: '10px',
+                    borderRadius: '5px',
+                    background: task.dot,
+                    flexShrink: 0,
+                    animation: task.pulse ? 'vPulse 2.2s ease-in-out infinite' : undefined,
+                  }}
+                ></span>
+                <span style={{ flexGrow: 1, display: 'flex', flexDirection: 'column', gap: '3px', minWidth: 0 }}>
+                  <span style={{ fontSize: '15px', fontWeight: 500 }}>{task.title}</span>
+                  <span style={{ fontSize: '12px', color: '#9FACBF' }}>{task.sub}</span>
+                </span>
+                {task.action ? (
+                  <span
+                    className="v-active-96"
+                    style={{
+                      height: '38px',
+                      padding: '0 14px',
+                      borderRadius: '19px',
+                      background: '#C5AB7A',
+                      color: '#0C1B38',
+                      fontSize: '13px',
+                      fontWeight: 600,
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '6px',
+                      flexShrink: 0,
+                    }}
+                  >
+                    {task.action.label}
+                    <Icon name="arrowUpRight" size={14} strokeWidth={2} />
+                  </span>
+                ) : (
+                  <Icon name="chevronRight" size={18} strokeWidth={1.75} color="#9FACBF" />
+                )}
+              </a>
+            ))
+          )}
         </section>
 
-        {/* 3-column grid of 9 tiles. */}
+        {/* 3-column grid of tiles (a tile whose commands this platform lacks is hidden). */}
         <div
           style={{
             display: 'grid',
@@ -425,11 +410,12 @@ export default function TeacherHomeScreen({ data }: { data: TeacherHomeData }) {
             gap: '10px',
           }}
         >
-          {data.tiles.map((tile) => (
+          {view.tiles.map((tile) => (
             <a
-              key={tile.labelKey}
-              href={tile.to === '/teacher/attendance/v-a' ? 'Attendance.dc.html' : '#'}
+              key={tile.id}
+              href={`#${tile.to}`}
               className="tile v-active-96"
+              data-tile={tile.id}
               onClick={(e) => {
                 e.preventDefault()
                 navigate(tile.to)
@@ -448,6 +434,7 @@ export default function TeacherHomeScreen({ data }: { data: TeacherHomeData }) {
                 textDecoration: 'none',
                 color: '#E8EDF4',
                 fontSize: '13px',
+                textAlign: 'center',
                 animation: `vRise14 480ms ${tile.delay} cubic-bezier(.2,.8,.2,1) both`,
               }}
             >
@@ -478,22 +465,25 @@ export default function TeacherHomeScreen({ data }: { data: TeacherHomeData }) {
           ))}
         </div>
 
-        {/* Footer. */}
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            gap: '8px',
-            fontSize: '12px',
-            color: '#9FACBF',
-          }}
-        >
-          <span
-            style={{ width: '6px', height: '6px', borderRadius: '3px', background: '#5FD0A0' }}
-          ></span>
-          {t('teacher.footer')}
-        </div>
+        {/* Footer: the real sync state (hidden when there is nothing true to say). */}
+        {view.footer ? (
+          <div
+            role="status"
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: '8px',
+              fontSize: '12px',
+              color: '#9FACBF',
+            }}
+          >
+            <span
+              style={{ width: '6px', height: '6px', borderRadius: '3px', background: view.footer.tone === 'ok' ? '#5FD0A0' : '#C5AB7A' }}
+            ></span>
+            {view.footer.text}
+          </div>
+        ) : null}
       </div>
     </div>
   )
