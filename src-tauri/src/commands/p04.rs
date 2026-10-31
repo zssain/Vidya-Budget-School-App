@@ -365,6 +365,13 @@ pub fn resolve_conflict_logic(conn: &mut Connection, actor: &SessionStaff, id: &
         _ => return Err(CmdError::validation("choice", "invalid")),
     };
     let epoch: i64 = conn.query_row("SELECT server_epoch FROM school LIMIT 1", [], |r| r.get(0)).unwrap_or(1);
+    // The resolution is authoritative: it is based on the row as it is NOW, so it
+    // carries the current version (A11: a versioned update must name its base).
+    let base_version: Option<i64> = if crate::sync::protocol::is_safe_ident(&table) {
+        conn.query_row(&format!("SELECT version FROM {table} WHERE id=?1"), params![record_id], |r| r.get(0)).ok()
+    } else {
+        None
+    };
     let op = crate::sync::protocol::Op {
         op_id: new_id("op"),
         hlc: now_iso(),
@@ -375,11 +382,16 @@ pub fn resolve_conflict_logic(conn: &mut Connection, actor: &SessionStaff, id: &
         record_id: record_id.clone(),
         kind: "update".into(),
         payload: serde_json::json!({ field: chosen }),
-        base_version: None, // resolution is authoritative — force-apply
+        base_version,
         server_epoch: epoch,
     };
     let op_id = op.op_id.clone();
-    crate::sync::apply::apply_op(conn, &op)?;
+    let res = crate::sync::apply::apply_op(conn, &op)?;
+    if res.status != crate::sync::protocol::OpStatus::Confirmed {
+        // Never mark a conflict resolved when the chosen value did not land.
+        let code = res.reason_code.unwrap_or_else(|| "CONFLICT".into());
+        return Err(CmdError::new(code.clone(), format!("error.{code}"), serde_json::Value::Null));
+    }
     conn.execute(
         "UPDATE conflict SET status='resolved', resolved_by=?1, resolution_op_id=?2 WHERE id=?3",
         params![actor.id, op_id, id],

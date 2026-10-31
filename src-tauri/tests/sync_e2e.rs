@@ -140,6 +140,41 @@ fn concurrent_address_edits_make_one_conflict() {
     assert_eq!(conflicts, 1);
 }
 
+// A11 — a generic update to a versioned row with NO base_version can't be checked
+// for a conflict, so it is refused MALFORMED (not silently applied over a concurrent
+// edit); the row and the conflict table are untouched. A child row without a
+// `version` column still applies (nothing to compare), even if a base is sent.
+#[test]
+fn update_without_base_version_is_refused_on_versioned_rows() {
+    let mut s = server();
+    let sid = "stu-kavya-singh";
+    let before: (Option<String>, i64) =
+        s.query_row("SELECT address, version FROM student WHERE id=?1", [sid], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
+    let o = op("op-nobase", "stf-priya", "dev-A", "student", sid, "update", serde_json::json!({ "address": "1 Blind Write St" }), None);
+    let r = push_as(&mut s, std::slice::from_ref(&o)).results[0].clone();
+    assert_eq!(r.status, OpStatus::Rejected);
+    assert_eq!(r.reason_code.as_deref(), Some("MALFORMED"));
+    let after: (Option<String>, i64) =
+        s.query_row("SELECT address, version FROM student WHERE id=?1", [sid], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
+    assert_eq!(after, before, "row untouched");
+    let conflicts: i64 = s.query_row("SELECT COUNT(*) FROM conflict WHERE record_id=?1", [sid], |r| r.get(0)).unwrap();
+    assert_eq!(conflicts, 0);
+    // The same edit WITH its base applies.
+    let ok = op("op-withbase", "stf-priya", "dev-A", "student", sid, "update", serde_json::json!({ "address": "1 Blind Write St" }), Some(before.1));
+    assert_eq!(push1(&mut s, &ok), OpStatus::Confirmed);
+
+    // Child row (attendance_mark has no `version`): a base is meaningless, never an error.
+    let mark_id: String = s
+        .query_row(
+            "SELECT m.id FROM attendance_mark m JOIN attendance_sheet sh ON sh.id=m.sheet_id WHERE sh.class_id='cls-5a' AND m.mark='A' LIMIT 1",
+            [], |r| r.get(0),
+        )
+        .unwrap();
+    open_sheet_of(&s, &mark_id);
+    let m = op("op-mark-base", "stf-meena", "dev-phone", "attendance_mark", &mark_id, "update", serde_json::json!({ "mark": "P" }), Some(1));
+    assert_eq!(push1(&mut s, &m), OpStatus::Confirmed);
+}
+
 // §8.6 — two payments together exceeding dues: BOTH confirmed, the excess flagged.
 #[test]
 fn two_payments_exceeding_dues_both_land_excess_flagged() {

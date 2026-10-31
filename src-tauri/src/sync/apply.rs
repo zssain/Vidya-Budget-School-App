@@ -686,13 +686,21 @@ fn apply_op_routed(conn: &mut Connection, op: &Op, route: &str) -> rusqlite::Res
 
     // 6) Conflict detection for updates (§8.5): base_version older than current
     //    AND a carried field differs from the current value → conflict.
-    if op.kind == "update" {
-        if let Some(base) = op.base_version {
-            if let Some(cur) = current_version(conn, &op.table, &op.record_id)? {
-                if base < cur && row_field_differs(conn, &op.table, &op.record_id, &op.payload)? {
-                    record_conflict(conn, op)?;
-                    return finalize(conn, op, conflicted(&op.op_id));
-                }
+    //    A generic update to a VERSIONED row (one with a `version` column) must say
+    //    which version it was based on: without it the server cannot tell a stale
+    //    edit from a fresh one, so it would silently overwrite a concurrent change.
+    //    Such an op is refused MALFORMED (A11) — no native or PWA path sends one
+    //    (devices replay commands; every generic update the app builds runs only on
+    //    the school PC). Rows without a `version` column (child rows) have nothing to
+    //    compare and apply as before.
+    if op.kind == "update" && table_columns(conn, &op.table)?.iter().any(|c| c == "version") {
+        let Some(base) = op.base_version else {
+            return finalize(conn, op, rejected(&op.op_id, codes::MALFORMED));
+        };
+        if let Some(cur) = current_version(conn, &op.table, &op.record_id)? {
+            if base < cur && row_field_differs(conn, &op.table, &op.record_id, &op.payload)? {
+                record_conflict(conn, op)?;
+                return finalize(conn, op, conflicted(&op.op_id));
             }
         }
     }

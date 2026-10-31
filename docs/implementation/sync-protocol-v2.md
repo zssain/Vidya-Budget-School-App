@@ -37,7 +37,10 @@ Inbound routes all go through `sync::apply::apply_client_op(conn, OpAuth{device_
    rule; `delete` refused); ownership columns of existing rows immutable, `*_by` must
    be the author; module gate; then either a **command replay** (below) or the
    permission check (target resolved from stored rows; submitted sheets locked →
-   `NEEDS_REQUEST` / `REASON_REQUIRED`) and the generic upsert / payment path.
+   `NEEDS_REQUEST` / `REASON_REQUIRED`) and the generic upsert / payment path. A
+   generic `update` to a row with a `version` column must carry `base_version`
+   (missing → `MALFORMED`); `base_version < current` with a differing field →
+   `CONFLICT` + a `conflict` row for `list_conflicts`/`resolve_conflict`.
 6. A failing op is remembered as `MALFORMED`; the batch continues.
 
 ### Command replay (`kind = "action"`)
