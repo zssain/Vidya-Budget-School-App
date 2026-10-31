@@ -178,6 +178,35 @@ export async function refusedOps(): Promise<OutboxRow[]> {
   return (await allOutbox()).filter((r) => r.status != null)
 }
 
+/** One refused change for the UI (the desktop's SyncProblemDto + the op's table). */
+export interface SyncProblem {
+  id: string
+  reason: string | null
+  table?: string
+}
+
+/** Map refused outbox rows to SyncProblems, oldest first (pure given `openOp`). An op
+ *  that can't be decrypted is still listed — just without its table. */
+export async function toSyncProblems(rows: OutboxRow[], openOp: (r: OutboxRow) => Promise<Pick<Op, 'table'>>): Promise<SyncProblem[]> {
+  const sorted = [...rows].filter((r) => r.status != null).sort((a, b) => (a.hlc < b.hlc ? -1 : a.hlc > b.hlc ? 1 : 0))
+  return Promise.all(
+    sorted.map(async (r) => {
+      let table: string | undefined
+      try {
+        table = (await openOp(r)).table
+      } catch {
+        table = undefined
+      }
+      return { id: r.op_id, reason: r.reason ?? null, ...(table ? { table } : {}) }
+    }),
+  )
+}
+
+/** The refused changes for `list_sync_problems`. */
+export async function syncProblems(): Promise<SyncProblem[]> {
+  return toSyncProblems(await refusedOps(), (r) => decryptJson<Op>(r.enc))
+}
+
 /** One canonical row from the school PC's down export. */
 export interface CanonicalRow {
   table: string

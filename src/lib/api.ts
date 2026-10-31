@@ -1773,6 +1773,8 @@ export const sync_now = () => invoke<SyncStatusDto>('sync_now')
 export interface SyncProblemDto {
   id: string
   reason: string | null
+  /** iPhone PWA only: the table the refused op wrote (what kind of change it was). */
+  table?: string
 }
 export const list_sync_problems = () => invoke<SyncProblemDto[]>('list_sync_problems')
 export const list_conflicts = () => invoke<ConflictDto[]>('list_conflicts')

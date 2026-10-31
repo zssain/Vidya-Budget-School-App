@@ -28,7 +28,7 @@ import type {
 } from '../api'
 import { hasJoined } from './join'
 import { createPin, hasPin, isUnlocked, lock, touch, type UnlockResult, unlock as pinUnlock } from './lock'
-import { kvGet, listRecords, refusedOps } from './store'
+import { kvGet, listRecords, syncProblems } from './store'
 import {
   buildStaffDay,
   type LeaveRecordRec,
@@ -297,7 +297,7 @@ export const WEB_COMMANDS: Record<string, WebHandler> = {
   // Accountant collect-fee (record_payment) is intentionally NOT here: payments stay
   // on the school PCs; the UI hides that entry point on web (nav.ts `command`).
   // Changes the school PC refused (kept in the outbox with their reason).
-  list_sync_problems: async () => (await refusedOps()).map((r) => ({ id: r.op_id, reason: r.reason ?? null })),
+  list_sync_problems: async () => syncProblems(),
 }
 
 /** Commands that may run while the PWA is locked: routing state, the PIN gate (and its

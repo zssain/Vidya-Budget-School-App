@@ -31,3 +31,6 @@ local permission checks. Data arrives through the per-device Drive down export.
 Not ported (by design): accountant collect-fee (`record_payment` returns
 `NOT_AVAILABLE_ON_WEB`; payments stay on the school PCs and the web UI hides the
 Collect-fee entry points).
+Refused ops (rejected / conflict / flagged in the school PC's ack) stay in the PWA
+outbox with their reason and are listed by `list_sync_problems` — shown on the
+phone's About screen and as a Teacher-home notice (never dropped silently).

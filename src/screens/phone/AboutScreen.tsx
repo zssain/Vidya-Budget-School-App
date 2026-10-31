@@ -11,6 +11,7 @@ import { t } from '@/lib/i18n'
 import { navigate } from '@/lib/router'
 import { isWeb } from '@/lib/platform'
 import { connectDriveMobile } from '@/lib/mobileDrive'
+import { SyncProblemsCard } from './SyncProblems'
 
 // Injected by Vite's `define` (both the Tauri and web-pwa configs); same guard as
 // SettingsScreen so a non-string value falls back to a dash.
@@ -118,6 +119,9 @@ export default function AboutScreen() {
             {driveMsg && <p style={{ margin: '10px 0 0', fontSize: 13, color: 'var(--muted)' }}>{driveMsg}</p>}
           </div>
         )}
+
+        {/* Changes the school PC refused (B1) — the PWA keeps them with the reason. */}
+        {isWeb && <SyncProblemsCard />}
 
         {/* iPhone honest-limits — only on the PWA. */}
         {isWeb && (

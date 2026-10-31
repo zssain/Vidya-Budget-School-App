@@ -24,6 +24,7 @@ import { isWeb } from '@/lib/platform'
 import logo from '@/assets/vidya-horizontal-on-dark.svg'
 import logoHi from '@/assets/vidya-horizontal-hindi-on-dark.svg'
 import type { TeacherHomeData, TeacherTileIcon } from '@/dev/fixtures/teacherHome'
+import { SyncProblemsBanner } from './SyncProblems'
 
 // The four two-tone tile SVGs whose icons.ts entry is the mono sidebar geometry.
 // Copied verbatim (paths + per-part teal #7DB1B5 / gold #C5AB7A stroke) from the
@@ -313,6 +314,10 @@ export default function TeacherHomeScreen({ data }: { data: TeacherHomeData }) {
 
         {/* Staff-HR check-in card (P17). Hidden when the HR module is off. */}
         <CheckInBanner />
+
+        {/* iPhone PWA only (B1): changes the school PC refused. Hidden when none, and
+            never rendered in the Android/fidelity build. */}
+        {isWeb && <SyncProblemsBanner />}
 
         {/* Task card. */}
         <section
