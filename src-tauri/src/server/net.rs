@@ -172,12 +172,10 @@ async fn snapshot(State(st): State<Arc<ServerState>>, headers: HeaderMap) -> Res
         Err(e) => return e,
     };
     let conn = st.db.lock().unwrap();
-    match crate::server::service::snapshot(&conn, &auth) {
-        // Newline-delimited JSON (§3, streamed in a fuller build).
-        Ok(changes) => {
-            let body: String = changes.iter().filter_map(|c| serde_json::to_string(c).ok()).collect::<Vec<_>>().join("\n");
-            (StatusCode::OK, body).into_response()
-        }
+    match crate::server::service::snapshot_with_manifest(&conn, &auth) {
+        // `{manifest, changes}` (G1): the device verifies counts + digest before it
+        // commits anything.
+        Ok(snap) => (StatusCode::OK, Json(snap)).into_response(),
         Err(_) => err(StatusCode::INTERNAL_SERVER_ERROR, "INTERNAL"),
     }
 }

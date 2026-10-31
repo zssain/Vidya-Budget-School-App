@@ -113,7 +113,7 @@ impl HttpsTransport {
     /// direct writes and is NOT in the op log, so a joined client cannot get it from a
     /// normal pull. Returns the role-scoped canonical rows (NDJSON on the wire). Called
     /// once right after join (and as a self-heal when the local school row is missing).
-    pub async fn snapshot(&self) -> Result<Vec<Change>, TransportError> {
+    pub async fn snapshot(&self) -> Result<crate::sync::protocol::Snapshot, TransportError> {
         let resp = self
             .client
             .post(self.url("/v1/sync/snapshot"))
@@ -125,12 +125,9 @@ impl HttpsTransport {
             return Err(e);
         }
         let body = resp.text().await.map_err(|e| TransportError::Other(e.to_string()))?;
-        // Strict: one unparsable line fails the whole snapshot (never a silently
-        // partial bootstrap); the caller retries.
-        body.lines()
-            .filter(|l| !l.trim().is_empty())
-            .map(|l| serde_json::from_str::<Change>(l).map_err(|e| TransportError::Other(format!("bad snapshot line: {e}"))))
-            .collect()
+        // Strict: an unparsable body fails the whole snapshot (never a silently partial
+        // bootstrap); the manifest is checked against the rows at apply time.
+        serde_json::from_str(&body).map_err(|e| TransportError::Other(format!("bad snapshot body: {e}")))
     }
 
     fn map_status(status: u16) -> Option<TransportError> {

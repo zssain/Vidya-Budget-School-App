@@ -242,6 +242,10 @@ fn down_export_reaches_only_its_device_and_tracks_changes() {
     assert!(mine.changes.iter().any(|c| c.table == "school"));
     assert!(mine.changes.iter().any(|c| c.table == "class"), "the teacher's classes");
     assert!(mine.changes.iter().all(|c| c.table != "payment"), "a teacher's export carries no fee data");
+    // It carries the same manifest as a LAN snapshot, bound to the export's cursor.
+    let m = mine.manifest.as_ref().expect("down export manifest");
+    m.verify(&mine.changes).unwrap();
+    assert_eq!((m.cursor, m.server_epoch), (mine.cursor, mine.server_epoch));
     // Another device's key can't open it (wrong key or relabelled as the other device).
     assert!(exchange::read_down_export(&acct, &l.exchange, "dev-ipad", &sk_other).is_err());
 

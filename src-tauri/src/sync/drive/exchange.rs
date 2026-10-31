@@ -315,6 +315,10 @@ pub struct DownExport {
     pub server_epoch: i64,
     /// The device's COMPLETE role-scoped data (it replaces the device's copy).
     pub changes: Vec<crate::sync::protocol::Change>,
+    /// Counts + digest of `changes` (G1), checked by the native client before it
+    /// applies anything. (The PWA ignores it; the AEAD already binds the body.)
+    #[serde(default)]
+    pub manifest: Option<crate::sync::protocol::SnapshotManifest>,
 }
 
 /// School PC: for every live device with a session key, write `down/<device>.vdown`
@@ -353,7 +357,13 @@ pub fn write_down_exports(conn: &Connection, drive: &impl DriveApi, exchange_fol
         }
         let auth = crate::server::service::DeviceAuth { device_id: device.clone(), staff_id: staff };
         let changes = crate::server::service::snapshot(conn, &auth)?;
-        let body = DownExport { v: 1, device_id: device.clone(), cursor, server_epoch: epoch, changes };
+        let manifest = crate::sync::protocol::SnapshotManifest::build(
+            uuid::Uuid::now_v7().to_string(),
+            epoch,
+            cursor,
+            &changes,
+        );
+        let body = DownExport { v: 1, device_id: device.clone(), cursor, server_epoch: epoch, changes, manifest: Some(manifest) };
         let json = serde_json::to_vec(&body).map_err(|e| ExchangeError::Bundle(e.to_string()))?;
         let Ok(keys) = seal::derive_keys(&sk) else { continue };
         let sealed = seal::seal(&keys.s2c, &vidya_core::seal::device_down_aad(&device), &json);

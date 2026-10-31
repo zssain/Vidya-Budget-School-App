@@ -50,7 +50,8 @@ fn joined_phone(server: &Connection, device: &str, staff: &str) -> Connection {
     let mut c = db::open_in_memory(KEY).unwrap();
     db::run_migrations(&mut c).unwrap();
     let actor = load_actor(server, staff).unwrap().unwrap();
-    apply_snapshot(&mut c, &scope::snapshot(server, &actor).unwrap()).unwrap();
+    let snap = service::snapshot_of(server, scope::snapshot(server, &actor).unwrap()).unwrap();
+    apply_snapshot(&mut c, &snap.manifest, &snap.changes).unwrap();
     client::store(
         &c,
         &ClientIdentity {

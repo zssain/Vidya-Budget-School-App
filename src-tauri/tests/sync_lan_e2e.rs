@@ -86,10 +86,16 @@ async fn client_joins_over_pinned_tls_then_authenticates_a_pull() {
         let pulled = transport.pull(0, 10).await;
         assert!(pulled.is_ok(), "authenticated pull over pinned TLS: {pulled:?}");
 
+        // The bootstrap snapshot over the real wire carries a manifest that matches.
+        let snap = transport.snapshot().await.expect("snapshot over pinned TLS");
+        snap.manifest.verify(&snap.changes).expect("wire snapshot matches its manifest");
+        assert_eq!(snap.manifest.tables.get("school"), Some(&1));
+
         // The background sync tick builds its LAN route from the STORED identity (no
         // transport handed in) and completes a real cycle over the pinned TLS.
         let label = client::client_sync_tick(&mut c).await.expect("client sync tick over LAN");
         assert_eq!(label, "On school Wi-Fi");
+        assert!(vidya_lib::sync::engine::bootstrap_complete(&c), "the tick's self-heal applied the verified snapshot");
     }
 
     stop.notify_waiters();

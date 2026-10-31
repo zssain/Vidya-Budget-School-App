@@ -195,14 +195,14 @@ pub async fn fetch_bootstrap(
     addrs: &[String],
     port: u16,
     fingerprint: &str,
-) -> Result<Vec<crate::sync::protocol::Change>, String> {
+) -> Result<crate::sync::protocol::Snapshot, String> {
     use crate::sync::transport::HttpsTransport;
     let mut last_err = "no server address in the invitation".to_string();
     for addr in addrs {
         let base = format!("https://{addr}:{port}");
         match HttpsTransport::new(&base, token.to_string(), fingerprint) {
             Ok(t) => match t.snapshot().await {
-                Ok(changes) => return Ok(changes),
+                Ok(snap) => return Ok(snap),
                 Err(e) => last_err = format!("{e:?}"),
             },
             Err(e) => last_err = e,
@@ -211,10 +211,10 @@ pub async fn fetch_bootstrap(
     Err(last_err)
 }
 
-/// Apply a fetched bootstrap snapshot into this client's DB (all or nothing — see
-/// [`crate::sync::engine::apply_snapshot`]).
-pub fn apply_bootstrap(conn: &mut Connection, changes: &[crate::sync::protocol::Change]) -> Result<usize, String> {
-    crate::sync::engine::apply_snapshot(conn, changes)
+/// Apply a fetched bootstrap snapshot into this client's DB (manifest-verified, all or
+/// nothing — see [`crate::sync::engine::apply_snapshot`]).
+pub fn apply_bootstrap(conn: &mut Connection, snap: &crate::sync::protocol::Snapshot) -> Result<usize, String> {
+    crate::sync::engine::apply_snapshot(conn, &snap.manifest, &snap.changes)
 }
 
 /// Run one sync cycle as a client: build the LAN route(s) from the stored identity and
@@ -232,8 +232,8 @@ pub async fn client_sync_tick(conn: &mut Connection) -> Result<String, String> {
     // before the normal op sync.
     if !crate::sync::engine::bootstrap_complete(conn) {
         match fetch_bootstrap(&id.device_token, &id.server_addrs, id.server_port, &id.server_fingerprint).await {
-            Ok(changes) => {
-                if let Err(e) = apply_bootstrap(conn, &changes) {
+            Ok(snap) => {
+                if let Err(e) = apply_bootstrap(conn, &snap) {
                     tracing::warn!("bootstrap snapshot not applied (will retry): {e}");
                 }
             }
@@ -325,8 +325,15 @@ pub fn client_drive_tick(conn: &mut Connection) -> Result<(), String> {
     // The school PC's canonical export for this device (school data without the LAN).
     if let Ok(Some(down)) = exchange::read_down_export(&drive, &exchange_folder, &id.device_id, &id.session_key) {
         let held: i64 = crate::kv::get(conn, "down_cursor").ok().flatten().unwrap_or(-1);
-        if down.cursor > held && crate::sync::engine::apply_snapshot(conn, &down.changes).is_ok() {
-            let _ = crate::kv::set(conn, "down_cursor", &down.cursor);
+        // The export carries the same manifest as a LAN snapshot; one without it (or
+        // whose rows don't match it) is not applied.
+        if let Some(m) = down.manifest.as_ref().filter(|_| down.cursor > held) {
+            match crate::sync::engine::apply_snapshot(conn, m, &down.changes) {
+                Ok(_) => {
+                    let _ = crate::kv::set(conn, "down_cursor", &down.cursor);
+                }
+                Err(e) => tracing::warn!("down export not applied: {e}"),
+            }
         }
     }
     Ok(())

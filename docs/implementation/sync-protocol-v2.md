@@ -69,13 +69,18 @@ fields, privacy actions, backups, bulk import, transfers, guardian edits, store 
 
 ## 3. School PC → devices
 
-* **LAN:** `/v1/sync/snapshot` (join bootstrap, applied all-or-nothing with
-  `bootstrap_complete`) and `/v1/sync/pull` (changes + **tombstones** for
+* **LAN:** `/v1/sync/snapshot` (join bootstrap) = JSON `{manifest, changes}`, manifest
+  `{v:1, snapshot_id, server_epoch, cursor, row_count, tables, digest}` (digest =
+  SHA-256(`vidya/snapshot/v1\n<id>\n<epoch>\n<cursor>\n` ‖ sorted rows
+  `table\0record_id\0canonical-json\n`)). The device verifies counts + digest + epoch
+  before writing, then applies all-or-nothing with `bootstrap_complete`; a mismatch
+  is refused and refetched by the sync loop and `/v1/sync/pull` (changes + **tombstones** for
   `homework_note`). Clients apply canonical rows with FK enforcement off (rows
   reference the server-only device registry).
 * **Drive (down export):** each Drive pass, for every live device whose data moved,
   `exchange/down/<device>.vdown` = seal(`s2c`, AAD `vidya/down/v1\n<device>`,
-  `{v:1, device_id, cursor, server_epoch, changes}`) — the device's **complete**
+  `{v:1, device_id, cursor, server_epoch, changes, manifest}`, manifest as for the LAN
+  snapshot; the native client requires and verifies it) — the device's **complete**
   role-scoped data. A revoked or removed device gets no new export and its old
   `.vdown` is deleted on the next pass. The PWA replaces all local stores from it in one IndexedDB
   transaction (keeping rows with pending local edits); native off-LAN applies it.

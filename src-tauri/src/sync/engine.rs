@@ -124,6 +124,8 @@ fn upsert_canonical(conn: &Connection, table: &str, payload: &serde_json::Value)
 /// app_kv flag: the join bootstrap snapshot was applied completely (set in the same
 /// transaction as the rows). A school row alone is not proof of completion.
 pub const KV_BOOTSTRAP_COMPLETE: &str = "bootstrap_complete";
+/// app_kv: `{snapshot_id, cursor, server_epoch}` of the last applied snapshot.
+pub const KV_BOOTSTRAP_SNAPSHOT: &str = "bootstrap_snapshot";
 
 /// Tables that exist only on the school server (never sent to a client): client rows
 /// may reference them (e.g. `payment.device_id`), which is informational there.
@@ -140,7 +142,20 @@ pub fn bootstrap_complete(conn: &Connection) -> bool {
 /// intact) and is reported, so a device never looks set up while missing data. Foreign
 /// keys are checked at commit, so row order within the snapshot doesn't matter. On
 /// success `bootstrap_complete` is set in the same transaction. Returns rows applied.
-pub fn apply_snapshot(conn: &mut Connection, changes: &[crate::sync::protocol::Change]) -> Result<usize, String> {
+///
+/// Before anything is written the rows are checked against the server's `manifest`
+/// (G1): row count, per-table counts and the digest must match, and the manifest's
+/// epoch must not be older than the newest epoch this device trusts. Any mismatch
+/// refuses the snapshot untouched; the sync loop's self-heal fetches a fresh one.
+pub fn apply_snapshot(
+    conn: &mut Connection,
+    manifest: &crate::sync::protocol::SnapshotManifest,
+    changes: &[crate::sync::protocol::Change],
+) -> Result<usize, String> {
+    manifest.verify(changes)?;
+    if manifest.server_epoch < known_epoch(conn).map_err(|e| e.to_string())? {
+        return Err("snapshot is from an older school PC epoch (EPOCH_OLD)".into());
+    }
     if changes.is_empty() {
         return Err("empty bootstrap snapshot".into());
     }
@@ -152,12 +167,16 @@ pub fn apply_snapshot(conn: &mut Connection, changes: &[crate::sync::protocol::C
     // which is never sent to clients). Completeness is checked explicitly below.
     // (`PRAGMA foreign_keys` can't change inside a transaction, so it wraps it.)
     conn.execute_batch("PRAGMA foreign_keys = OFF").map_err(|e| e.to_string())?;
-    let result = apply_snapshot_tx(conn, changes);
+    let result = apply_snapshot_tx(conn, manifest, changes);
     conn.execute_batch("PRAGMA foreign_keys = ON").map_err(|e| e.to_string())?;
     result
 }
 
-fn apply_snapshot_tx(conn: &mut Connection, changes: &[crate::sync::protocol::Change]) -> Result<usize, String> {
+fn apply_snapshot_tx(
+    conn: &mut Connection,
+    manifest: &crate::sync::protocol::SnapshotManifest,
+    changes: &[crate::sync::protocol::Change],
+) -> Result<usize, String> {
     let tx = conn.transaction().map_err(|e| e.to_string())?;
     for ch in changes {
         let safe = crate::sync::protocol::is_safe_ident(&ch.table)
@@ -186,6 +205,14 @@ fn apply_snapshot_tx(conn: &mut Connection, changes: &[crate::sync::protocol::Ch
         return Err(format!("bootstrap snapshot references rows it does not contain: {}", dangling.join(", ")));
     }
     crate::kv::set(&tx, KV_BOOTSTRAP_COMPLETE, &true).map_err(|e| e.to_string())?;
+    // Which snapshot this device holds, and the server position it reflects.
+    crate::kv::set(
+        &tx,
+        KV_BOOTSTRAP_SNAPSHOT,
+        &serde_json::json!({ "snapshot_id": manifest.snapshot_id, "cursor": manifest.cursor, "server_epoch": manifest.server_epoch }),
+    )
+    .map_err(|e| e.to_string())?;
+    advance_known_epoch(&tx, manifest.server_epoch).map_err(|e| e.to_string())?;
     // Now that the staff rows exist, give this device its own local device row.
     if let Some(id) = crate::sync::client::load(&tx) {
         crate::sync::client::ensure_self_device_row(&tx, &id).map_err(|e| e.to_string())?;

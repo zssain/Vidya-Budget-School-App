@@ -421,6 +421,21 @@ pub fn snapshot(conn: &Connection, auth: &DeviceAuth) -> rusqlite::Result<Vec<Ch
     }
 }
 
+/// The `/v1/sync/snapshot` body: [`snapshot`] plus its manifest (per-table counts,
+/// digest, snapshot id, epoch and the op_log cursor the rows reflect — read on the
+/// same connection, under the caller's DB lock, so rows and cursor agree).
+pub fn snapshot_with_manifest(conn: &Connection, auth: &DeviceAuth) -> rusqlite::Result<Snapshot> {
+    let changes = snapshot(conn, auth)?;
+    snapshot_of(conn, changes)
+}
+
+/// Wrap already-built role-scoped rows with a manifest at the current cursor/epoch.
+pub fn snapshot_of(conn: &Connection, changes: Vec<Change>) -> rusqlite::Result<Snapshot> {
+    let cursor: i64 = conn.query_row("SELECT COALESCE(MAX(server_seq),0) FROM op_log", [], |r| r.get(0))?;
+    let epoch = school_info(conn)?.map(|s| s.server_epoch).unwrap_or(1);
+    Ok(Snapshot::new(epoch, cursor, changes))
+}
+
 // -------------------------------------------------------- /device/heartbeat --
 
 pub fn heartbeat(conn: &mut Connection, auth: &DeviceAuth, req: &HeartbeatReq, now: time::OffsetDateTime) -> rusqlite::Result<HeartbeatResp> {

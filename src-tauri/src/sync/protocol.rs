@@ -196,6 +196,163 @@ pub struct Change {
     pub hlc: Option<String>,
 }
 
+// ------------------------------------------------------- /sync/snapshot ------
+
+/// What a bootstrap snapshot claims to contain (G1). The client checks the rows it
+/// received against it before committing anything; a mismatch (a truncated body, a
+/// dropped or altered row, a server bug that lost rows) refuses the whole snapshot
+/// and the sync loop's self-heal fetches a fresh one.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SnapshotManifest {
+    /// Manifest format version.
+    pub v: u32,
+    /// Unique per snapshot build (diagnostics; stored on the device once applied).
+    pub snapshot_id: String,
+    pub server_epoch: i64,
+    /// The school PC's op_log position (`MAX(server_seq)`) the rows reflect; read
+    /// under the same DB lock as the rows.
+    pub cursor: i64,
+    /// Total rows.
+    pub row_count: usize,
+    /// Rows per table.
+    pub tables: std::collections::BTreeMap<String, usize>,
+    /// Hex SHA-256 over the header and every row in canonical form — see
+    /// [`snapshot_digest`].
+    pub digest: String,
+}
+
+/// Current [`SnapshotManifest::v`].
+pub const SNAPSHOT_MANIFEST_V: u32 = 1;
+
+/// `/v1/sync/snapshot` body: the manifest plus the role-scoped canonical rows.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Snapshot {
+    pub manifest: SnapshotManifest,
+    pub changes: Vec<Change>,
+}
+
+/// JSON with object keys sorted at every level, so the digest does not depend on
+/// how either side orders a row's columns.
+fn canonical_json(v: &serde_json::Value, out: &mut String) {
+    match v {
+        serde_json::Value::Object(m) => {
+            let mut keys: Vec<&String> = m.keys().collect();
+            keys.sort();
+            out.push('{');
+            for (i, k) in keys.iter().enumerate() {
+                if i > 0 {
+                    out.push(',');
+                }
+                out.push_str(&serde_json::Value::String((*k).clone()).to_string());
+                out.push(':');
+                canonical_json(&m[k.as_str()], out);
+            }
+            out.push('}');
+        }
+        serde_json::Value::Array(a) => {
+            out.push('[');
+            for (i, x) in a.iter().enumerate() {
+                if i > 0 {
+                    out.push(',');
+                }
+                canonical_json(x, out);
+            }
+            out.push(']');
+        }
+        other => out.push_str(&other.to_string()),
+    }
+}
+
+/// The manifest digest: SHA-256 over `vidya/snapshot/v1`, the snapshot id, epoch and
+/// cursor, then every row as `table \0 record_id \0 canonical(payload)` in
+/// (table, record_id) order — order-independent, so only the SET of rows counts.
+pub fn snapshot_digest(snapshot_id: &str, server_epoch: i64, cursor: i64, changes: &[Change]) -> String {
+    use sha2::{Digest, Sha256};
+    let mut rows: Vec<String> = changes
+        .iter()
+        .map(|c| {
+            let mut s = String::new();
+            s.push_str(&c.table);
+            s.push('\0');
+            s.push_str(&c.record_id);
+            s.push('\0');
+            canonical_json(&c.payload, &mut s);
+            s
+        })
+        .collect();
+    rows.sort();
+    let mut h = Sha256::new();
+    h.update(format!("vidya/snapshot/v1\n{snapshot_id}\n{server_epoch}\n{cursor}\n").as_bytes());
+    for r in &rows {
+        h.update(r.as_bytes());
+        h.update(b"\n");
+    }
+    h.finalize().iter().map(|b| format!("{b:02x}")).collect()
+}
+
+fn table_counts(changes: &[Change]) -> std::collections::BTreeMap<String, usize> {
+    let mut m = std::collections::BTreeMap::new();
+    for c in changes {
+        *m.entry(c.table.clone()).or_insert(0) += 1;
+    }
+    m
+}
+
+impl SnapshotManifest {
+    /// Build the manifest for `changes` (school PC side).
+    pub fn build(snapshot_id: impl Into<String>, server_epoch: i64, cursor: i64, changes: &[Change]) -> Self {
+        let snapshot_id = snapshot_id.into();
+        let digest = snapshot_digest(&snapshot_id, server_epoch, cursor, changes);
+        Self {
+            v: SNAPSHOT_MANIFEST_V,
+            snapshot_id,
+            server_epoch,
+            cursor,
+            row_count: changes.len(),
+            tables: table_counts(changes),
+            digest,
+        }
+    }
+
+    /// Check `changes` against this manifest (device side). Names what differs.
+    pub fn verify(&self, changes: &[Change]) -> Result<(), String> {
+        if self.v != SNAPSHOT_MANIFEST_V {
+            return Err(format!("snapshot manifest v{} not supported", self.v));
+        }
+        if self.snapshot_id.is_empty() {
+            return Err("snapshot has no manifest".into());
+        }
+        if changes.len() != self.row_count {
+            return Err(format!("snapshot row count {} ≠ manifest {}", changes.len(), self.row_count));
+        }
+        let got = table_counts(changes);
+        if got != self.tables {
+            let mut diff: Vec<String> = self
+                .tables
+                .keys()
+                .chain(got.keys())
+                .filter(|t| self.tables.get(*t) != got.get(*t))
+                .map(|t| format!("{t}: {} ≠ {}", got.get(t).copied().unwrap_or(0), self.tables.get(t).copied().unwrap_or(0)))
+                .collect();
+            diff.sort();
+            diff.dedup();
+            return Err(format!("snapshot table counts differ from manifest ({})", diff.join(", ")));
+        }
+        if snapshot_digest(&self.snapshot_id, self.server_epoch, self.cursor, changes) != self.digest {
+            return Err("snapshot digest does not match its manifest".into());
+        }
+        Ok(())
+    }
+}
+
+impl Snapshot {
+    /// Wrap `changes` with a fresh manifest (new snapshot id).
+    pub fn new(server_epoch: i64, cursor: i64, changes: Vec<Change>) -> Self {
+        let manifest = SnapshotManifest::build(uuid::Uuid::now_v7().to_string(), server_epoch, cursor, &changes);
+        Self { manifest, changes }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Delete {
     pub table: String,
@@ -384,5 +541,22 @@ mod tests {
         });
         roundtrip(&SealedRequest { counter: 7, body: serde_json::json!({ "ops": [] }) });
         roundtrip(&SealedResponse { status: 200, body: serde_json::json!({ "results": [] }) });
+    }
+
+    #[test]
+    fn snapshot_digest_ignores_key_and_row_order_but_not_content() {
+        let ch = |t: &str, id: &str, p: serde_json::Value| Change { table: t.into(), record_id: id.into(), payload: p, server_seq: 0, hlc: None };
+        let a = vec![ch("school", "s", serde_json::json!({"id":"s","name":"A","n":{"x":1,"y":[1,2]}})), ch("class", "c", serde_json::json!({"id":"c"}))];
+        let mut b_obj = serde_json::Map::new();
+        b_obj.insert("n".into(), serde_json::json!({"y":[1,2],"x":1}));
+        b_obj.insert("name".into(), "A".into());
+        b_obj.insert("id".into(), "s".into());
+        let b = vec![ch("class", "c", serde_json::json!({"id":"c"})), ch("school", "s", serde_json::Value::Object(b_obj))];
+        let m = SnapshotManifest::build("snap-1", 2, 9, &a);
+        assert!(m.verify(&b).is_ok());
+        let mut c = a.clone();
+        c[0].payload["n"]["y"] = serde_json::json!([2, 1]);
+        assert!(m.verify(&c).unwrap_err().contains("digest"));
+        assert_ne!(snapshot_digest("snap-1", 2, 9, &a), snapshot_digest("snap-2", 2, 9, &a), "header is bound");
     }
 }
