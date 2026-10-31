@@ -172,15 +172,35 @@ export async function buildCtx(drive: DriveApi): Promise<ExchangeCtx | null> {
   return { drive, exchangeId, deviceId, sessionKey }
 }
 
+/** kv key holding the wall-clock ms of the last COMPLETED pass (the Sync screen's
+ *  and Teacher Home's "synced … ago"; never set by a pass that failed). */
+export const LAST_SYNC_OK_KEY = 'last_sync_ok'
+
 /** Run one sync pass immediately (best effort) — e.g. right after a local write. */
 export async function syncNow(drive: DriveApi): Promise<SyncResult | null> {
   const ctx = await buildCtx(drive)
-  return ctx ? syncOnce(ctx) : null
+  if (!ctx) return null
+  const res = await syncOnce(ctx)
+  await kvPut(LAST_SYNC_OK_KEY, Date.now())
+  return res
 }
 
 let timer: ReturnType<typeof setTimeout> | null = null
 let running = false
 let kick: (() => void) | null = null
+/** Callers of requestSyncPass waiting for the pass in flight / the next one to end. */
+let passWaiters: ((ok: boolean) => void)[] = []
+
+/** "Sync now" for the PWA: ask the foreground loop for a pass right away and resolve
+ *  when it has finished (true = the pass completed, false = it failed or the loop is
+ *  not running yet). Never starts a second, concurrent pass. */
+export function requestSyncPass(): Promise<boolean> {
+  if (!kick) return Promise.resolve(false)
+  return new Promise((resolve) => {
+    passWaiters.push(resolve)
+    if (!running) kick?.()
+  })
+}
 
 /** Start the foreground sync loop: 20 s ± 3 s while visible, and immediately on
  *  `online` / when the app becomes visible (§8.3). No background sync (§18). Calling
@@ -196,14 +216,24 @@ export function startSync(drive: DriveApi): void {
     running = true
     if (timer) clearTimeout(timer)
     timer = null
+    let ok = false
+    // Waiters registered before this pass started are answered by it; any that
+    // arrive while it runs wait for the one they kick afterwards.
+    const waiting = passWaiters
+    passWaiters = []
     try {
       if (typeof document === 'undefined' || document.visibilityState === 'visible') {
-        await syncNow(drive)
+        ok = (await syncNow(drive)) !== null
       }
     } catch {
       /* offline / quota — the Sync screen surfaces "Needs attention" */
     } finally {
       running = false
+    }
+    for (const w of waiting) w(ok)
+    if (passWaiters.length > 0) {
+      void tick()
+      return
     }
     const jitter = 20_000 + Math.floor((Math.random() - 0.5) * 6_000)
     timer = setTimeout(() => void tick(), jitter)

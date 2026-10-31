@@ -49,6 +49,8 @@ import {
 import { buildHomeworkNotes, type HomeworkNoteRec } from './notes'
 import { audienceFor, newId, writeOp } from './op'
 import { getMarksSheet, getReportRemarks, saveReportRemark, writeMarks } from './marks'
+import { cancelRequest, dashboardTeacher, listExams, listRequests, listStudents, syncStatus } from './teacher'
+import { requestSyncPass } from './drive/sync'
 import { getAttendanceSheet, listAbsent, listCirculars, markCircularRead, recordMessage, requestLeave, staffCheckIn, staffCheckOut, writeAttendance } from './phone'
 
 /** A Web command handler: `(args) => result`. */
@@ -298,6 +300,24 @@ export const WEB_COMMANDS: Record<string, WebHandler> = {
   // on the school PCs; the UI hides that entry point on web (nav.ts `command`).
   // Changes the school PC refused (kept in the outbox with their reason).
   list_sync_problems: async () => syncProblems(),
+  // Live Teacher Home + its tiles (repair T1); see teacher.ts.
+  dashboard_teacher: async () => dashboardTeacher(localToday()),
+  list_exams: async () => listExams(),
+  list_students: async (args) => listStudents((args?.classId as string | null | undefined) ?? null),
+  list_requests: async (args) => listRequests((args?.status as string | null | undefined) ?? null, (args?.kind as string | null | undefined) ?? null),
+  cancel_request: async (args) => cancelRequest(String(args?.id ?? '')),
+  sync_status: async () => syncStatus(),
+  // "Sync now": one pass of the foreground Drive loop (never a concurrent second one).
+  sync_now: async () => {
+    await requestSyncPass()
+    return syncStatus()
+  },
+}
+
+/** Today's date (YYYY-MM-DD) in the device's local time zone. */
+function localToday(): string {
+  const d = new Date()
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 }
 
 /** Commands that may run while the PWA is locked: routing state, the PIN gate (and its
