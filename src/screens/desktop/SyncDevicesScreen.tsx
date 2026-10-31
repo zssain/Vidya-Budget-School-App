@@ -175,6 +175,7 @@ export default function SyncDevicesScreen() {
   const [devices, setDevices] = useState<DeviceDto[]>([])
   const [sync, setSync] = useState<SyncStatusDto | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [syncing, setSyncing] = useState(false)
 
   useEffect(() => {
     let live = true
@@ -203,11 +204,14 @@ export default function SyncDevicesScreen() {
       .catch(() => setError(t('sd.title')))
   }, [])
 
+  // Runs a real pass (up to ~30 s); the button stays disabled until it reports.
   const syncNow = useCallback(() => {
+    setSyncing(true)
     api
       .sync_now()
       .then((y) => setSync(y))
       .catch(() => setError(t('sd.title')))
+      .finally(() => setSyncing(false))
   }, [])
 
   const headers = [
@@ -300,6 +304,8 @@ export default function SyncDevicesScreen() {
         <button
           type="button"
           onClick={syncNow}
+          disabled={syncing}
+          aria-busy={syncing}
           style={{
             marginLeft: 'auto',
             display: 'inline-flex',
@@ -312,7 +318,8 @@ export default function SyncDevicesScreen() {
             color: '#FFFFFF',
             fontWeight: 500,
             fontSize: '13px',
-            cursor: 'pointer',
+            cursor: syncing ? 'progress' : 'pointer',
+            opacity: syncing ? 0.6 : 1,
           }}
         >
           <Icon name="sync" size={16} color="#FFFFFF" />

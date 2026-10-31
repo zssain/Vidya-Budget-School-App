@@ -132,6 +132,8 @@ fn build_ctx(app: &tauri::AppHandle, data_dir: std::path::PathBuf) -> RtCtx {
         db_key_hex,
         key_missing: Mutex::new(key_missing),
         server_stop: std::sync::Arc::new(tokio::sync::Notify::new()),
+        sync_wake: std::sync::Arc::new(tokio::sync::Notify::new()),
+        sync_done: std::sync::Arc::new(tokio::sync::Notify::new()),
     }
 }
 
@@ -235,9 +237,13 @@ pub fn run() {
                             return;
                         }
                     };
+                    let (wake, done) = (ctx.sync_wake.clone(), ctx.sync_done.clone());
                     let mut ticker = tokio::time::interval(std::time::Duration::from_secs(15));
                     loop {
-                        ticker.tick().await;
+                        tokio::select! {
+                            _ = ticker.tick() => {}
+                            _ = wake.notified() => {}
+                        }
                         match sync::client::client_sync_tick(&mut conn).await {
                             Ok(route) => tracing::debug!("client synced via {route}"),
                             Err(e) => {
@@ -259,6 +265,7 @@ pub fn run() {
                                 .await;
                             }
                         }
+                        done.notify_waiters();
                     }
                 });
             }
@@ -271,9 +278,9 @@ pub fn run() {
             {
                 let handle = app.handle().clone();
                 tauri::async_runtime::spawn(async move {
-                    let (mode, key_hex, db_path) = {
+                    let (mode, key_hex, db_path, wake, done) = {
                         let ctx = handle.state::<RtCtx>();
-                        (ctx.device_mode, ctx.db_key_hex.clone(), ctx.db_path())
+                        (ctx.device_mode, ctx.db_key_hex.clone(), ctx.db_path(), ctx.sync_wake.clone(), ctx.sync_done.clone())
                     };
                     if mode != DeviceMode::Server {
                         return;
@@ -283,7 +290,10 @@ pub fn run() {
                     };
                     let mut ticker = tokio::time::interval(std::time::Duration::from_secs(20));
                     loop {
-                        ticker.tick().await;
+                        tokio::select! {
+                            _ = ticker.tick() => {}
+                            _ = wake.notified() => {}
+                        }
                         let (db_path, key_hex) = (db_path.clone(), key_hex.clone());
                         let _ = tauri::async_runtime::spawn_blocking(move || {
                             match db::open_encrypted(&db_path, &key_hex) {
@@ -296,6 +306,7 @@ pub fn run() {
                             }
                         })
                         .await;
+                        done.notify_waiters();
                     }
                 });
             }

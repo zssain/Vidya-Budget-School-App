@@ -2076,12 +2076,63 @@ pub fn sync_status(state: State<RtCtx>) -> CmdResult<SyncStatusDto> {
     state.with_db(sync_status_logic)
 }
 
+/// How long "Sync now" waits for the pass it triggered before reporting anyway.
+const SYNC_NOW_WAIT: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// W2: run a sync pass now. Wakes the background loop (a joined device's LAN tick
+/// with Drive fallback, or the school PC's Drive pass), waits for that pass to
+/// finish (bounded), then reports the state it left — honest pending counts, never a
+/// fake "synced". A single-PC school with Drive off simply reports its state.
 #[tauri::command]
-pub fn sync_now(state: State<RtCtx>) -> CmdResult<SyncStatusDto> {
+pub async fn sync_now(state: State<'_, RtCtx>) -> CmdResult<SyncStatusDto> {
     state.require_session()?;
-    // Single-PC server: nothing to push (it IS the server) — report current state,
-    // honestly (no fake "synced"). On client devices this triggers the engine.
+    trigger_sync_pass(&state.sync_wake, &state.sync_done, SYNC_NOW_WAIT).await;
     state.with_db(sync_status_logic)
+}
+
+/// Wake the background sync loop and wait (at most `wait`) for the next pass to end.
+/// Subscribes to `done` BEFORE waking, so a pass that finishes instantly is not
+/// missed. Returns whether a pass was observed finishing.
+pub async fn trigger_sync_pass(wake: &tokio::sync::Notify, done: &tokio::sync::Notify, wait: std::time::Duration) -> bool {
+    let finished = done.notified();
+    tokio::pin!(finished);
+    finished.as_mut().enable();
+    wake.notify_one();
+    tokio::time::timeout(wait, finished).await.is_ok()
+}
+
+#[cfg(test)]
+mod sync_now_tests {
+    use super::trigger_sync_pass;
+    use std::{sync::Arc, time::Duration};
+    use tokio::sync::Notify;
+
+    #[tokio::test]
+    async fn sync_now_wakes_the_loop_and_waits_for_its_pass() {
+        let (wake, done) = (Arc::new(Notify::new()), Arc::new(Notify::new()));
+        let passes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let (w, d, p) = (wake.clone(), done.clone(), passes.clone());
+        tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    _ = tokio::time::sleep(Duration::from_secs(3600)) => {}
+                    _ = w.notified() => {}
+                }
+                p.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                d.notify_waiters();
+            }
+        });
+        assert!(trigger_sync_pass(&wake, &done, Duration::from_secs(5)).await);
+        assert_eq!(passes.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert!(trigger_sync_pass(&wake, &done, Duration::from_secs(5)).await);
+        assert_eq!(passes.load(std::sync::atomic::Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn sync_now_reports_anyway_when_no_loop_runs() {
+        let (wake, done) = (Notify::new(), Notify::new());
+        assert!(!trigger_sync_pass(&wake, &done, Duration::from_millis(50)).await);
+    }
 }
 
 // ------------------------------------------------------ P04: conflict review ---

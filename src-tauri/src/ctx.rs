@@ -62,6 +62,12 @@ pub struct RtCtx {
     /// Fired to stop the school server + relay tunnel when this PC is fenced out
     /// (licence `moved`, P05 Step 5). The LAN accept loop and the tunnel both watch it.
     pub server_stop: std::sync::Arc<tokio::sync::Notify>,
+    /// "Sync now" (W2): wakes the background sync loop (client LAN/Drive tick, or the
+    /// school PC's Drive pass) instead of waiting for the next timer tick.
+    pub sync_wake: std::sync::Arc<tokio::sync::Notify>,
+    /// Fired by the background sync loop after every pass, so "Sync now" can wait for
+    /// the pass it asked for and report the state that pass left behind.
+    pub sync_done: std::sync::Arc<tokio::sync::Notify>,
 }
 
 impl RtCtx {
