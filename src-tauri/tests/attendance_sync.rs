@@ -111,6 +111,7 @@ async fn phone_attendance_reaches_the_school_pc_and_other_devices() {
     assert!(vidya_core::hlc::Hlc::parse(&hlc).is_ok(), "packed HLC, not an ISO timestamp: {hlc}");
 
     // Push over the (loopback) LAN as the authenticated phone → confirmed.
+    let head_before: i64 = server.query_row("SELECT MAX(server_seq) FROM op_log", [], |r| r.get(0)).unwrap();
     let server = Arc::new(Mutex::new(server));
     let t = LoopbackTransport::new(server.clone(), DeviceAuth { device_id: "dev-phone".into(), staff_id: "stf-meena".into() }, now());
     let out = sync_once(&mut phone, &t).await.unwrap();
@@ -137,6 +138,8 @@ async fn phone_attendance_reaches_the_school_pc_and_other_devices() {
         s.execute("INSERT INTO device(id,staff_id,platform,name,token_hash) VALUES ('dev-p','stf-priya','android','P','h')", []).unwrap();
         let mut c = db::open_in_memory(KEY).unwrap();
         db::run_migrations(&mut c).unwrap();
+        // As if bootstrapped just before the phone's push (pull resumes there).
+        c.execute("INSERT INTO sync_cursor(peer,last_server_seq,updated_at) VALUES ('server',?1,'t')", [head_before]).unwrap();
         c
     };
     let tp = LoopbackTransport::new(server.clone(), DeviceAuth { device_id: "dev-p".into(), staff_id: "stf-priya".into() }, now());
@@ -502,6 +505,7 @@ async fn teacher_phone_messages_reads_remarks_and_note_deletes_sync() {
     assert_eq!((out.confirmed, out.rejected), (4, 0), "{out:?}");
 
     delete_homework_note_with(&mut phone, &meena(), Some("dev-phone"), DeviceMode::Client, &note.id).unwrap();
+    let head_before: i64 = server.lock().unwrap().query_row("SELECT MAX(server_seq) FROM op_log", [], |r| r.get(0)).unwrap();
     let out = sync_once(&mut phone, &t).await.unwrap();
     assert_eq!((out.confirmed, out.rejected), (1, 0));
 
@@ -520,6 +524,8 @@ async fn teacher_phone_messages_reads_remarks_and_note_deletes_sync() {
     // Another teacher device that had the note receives the tombstone.
     let mut other = joined_phone(&server.lock().unwrap(), "dev-phone2", "stf-meena");
     other.execute("INSERT INTO homework_note(id,class_id,kind,text,created_at,updated_at) VALUES (?1,'cls-5a','notes','x','t','t')", [&note.id]).unwrap();
+    // It had synced up to just before the delete.
+    other.execute("UPDATE sync_cursor SET last_server_seq=?1 WHERE peer='server'", [head_before]).unwrap();
     server.lock().unwrap().execute("INSERT INTO device(id,staff_id,platform,name,token_hash) VALUES ('dev-phone2','stf-meena','android','P2','h')", []).unwrap();
     let t2 = LoopbackTransport::new(server.clone(), DeviceAuth { device_id: "dev-phone2".into(), staff_id: "stf-meena".into() }, now());
     sync_once(&mut other, &t2).await.unwrap();
@@ -576,4 +582,50 @@ async fn second_pc_admission_and_expense_reach_the_school_pc() {
     assert!(adm.is_some(), "official number reached the device");
     let enr: i64 = pc2.query_row("SELECT COUNT(*) FROM enrollment WHERE student_id=?1", [&stu.id], |r| r.get(0)).unwrap();
     assert_eq!(enr, 1, "no duplicate enrolment");
+}
+
+/// Change feed + duty roster (P21): a school-PC write that never called
+/// `append_op` (assigning a substitute) still reaches a joined phone over LAN pull,
+/// and the covering teacher receives the covered class's roster with it — so the
+/// substitute can actually take attendance from the phone.
+#[tokio::test]
+async fn a_substitute_assigned_after_join_gets_the_class_roster_over_lan_pull() {
+    let server = server();
+    server
+        .execute("INSERT INTO device(id,staff_id,platform,name,token_hash) VALUES ('dev-anita','stf-anita','android','Phone','h2')", [])
+        .unwrap();
+    let mut phone = joined_phone(&server, "dev-anita", "stf-anita");
+    let va = roster(&server, "cls-4a");
+    assert!(roster(&phone, "cls-4a").is_empty(), "not her class before the grant");
+
+    // The bootstrap left the phone's pull cursor at the server's head, so whatever
+    // arrives next came through the change feed.
+    let head: i64 = server.query_row("SELECT MAX(server_seq) FROM op_log", [], |r| r.get(0)).unwrap();
+    let at: i64 = phone.query_row("SELECT last_server_seq FROM sync_cursor WHERE peer='server'", [], |r| r.get(0)).unwrap();
+    assert_eq!(at, head);
+
+    // The Principal assigns Anita to cover IV-A's attendance today (raw write, as
+    // `assign_substitute_logic` does).
+    let today = vidya_lib::commands::today();
+    server
+        .execute(
+            "INSERT INTO substitution(id,date,absent_teacher_id,substitute_teacher_id,class_id,period_no,includes_attendance) \
+             VALUES ('sub-1',?1,'stf-nair','stf-anita','cls-4a',NULL,1)",
+            [&today],
+        )
+        .unwrap();
+
+    let server = Arc::new(Mutex::new(server));
+    let t = LoopbackTransport::new(server.clone(), DeviceAuth { device_id: "dev-anita".into(), staff_id: "stf-anita".into() }, now());
+    sync_once(&mut phone, &t).await.unwrap();
+
+    let got: i64 = phone.query_row("SELECT COUNT(*) FROM substitution WHERE id='sub-1'", [], |r| r.get(0)).unwrap();
+    assert_eq!(got, 1, "the substitution reached the phone via the change feed");
+    let today_roster = {
+        let mut st = phone.prepare("SELECT student_id FROM enrollment WHERE class_id='cls-4a' AND to_date IS NULL ORDER BY student_id").unwrap();
+        st.query_map([], |r| r.get::<_, String>(0)).unwrap().collect::<Result<Vec<_>, _>>().unwrap()
+    };
+    assert_eq!(today_roster.len(), va.len(), "the covered class's roster arrived with the grant");
+    let addr: Option<String> = phone.query_row("SELECT address FROM student WHERE id=?1", [&va[0]], |r| r.get(0)).unwrap();
+    assert!(addr.is_none(), "not her class: address withheld");
 }

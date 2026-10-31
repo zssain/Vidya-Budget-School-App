@@ -148,7 +148,7 @@ mod tests {
         let s: i64 = conn.query_row("SELECT count(*) FROM student", [], |r| r.get(0)).unwrap();
         let a: i64 = conn.query_row("SELECT count(*) FROM audit_log", [], |r| r.get(0)).unwrap();
         let o: i64 = conn.query_row("SELECT count(*) FROM outbox", [], |r| r.get(0)).unwrap();
-        let l: i64 = conn.query_row("SELECT count(*) FROM op_log", [], |r| r.get(0)).unwrap();
+        let l: i64 = conn.query_row("SELECT count(*) FROM op_log WHERE kind != 'touch'", [], |r| r.get(0)).unwrap();
         (s, a, o, l)
     }
 
@@ -165,6 +165,29 @@ mod tests {
         })
         .unwrap();
         assert_eq!(counts(&conn), (1, 1, 1, 0));
+    }
+
+    fn touches(conn: &Connection) -> i64 {
+        conn.query_row("SELECT count(*) FROM op_log WHERE kind='touch' AND \"table\"='student' AND record_id='s1'", [], |r| r.get(0)).unwrap()
+    }
+
+    /// The change feed: a school-PC row written WITHOUT `append_op` (a raw command
+    /// write) still lands in op_log so LAN pull delivers it; a joined device records
+    /// nothing.
+    #[test]
+    fn change_feed_records_raw_school_pc_writes_and_is_off_on_a_joined_device() {
+        let conn = fresh();
+        conn.execute("INSERT INTO student(id, name, created_at, updated_at, sync_state) VALUES ('s1','Riya','t','t','confirmed')", []).unwrap();
+        conn.execute("UPDATE student SET name='Riya K' WHERE id='s1'", []).unwrap();
+        assert_eq!(touches(&conn), 2);
+        // Bookkeeping tables are not fed (no recursion through op_log itself).
+        let fed_kv: i64 = conn.query_row("SELECT count(*) FROM op_log WHERE \"table\"='app_kv'", [], |r| r.get(0)).unwrap();
+        assert_eq!(fed_kv, 0);
+
+        let client = fresh();
+        client.execute("INSERT INTO app_kv(key, value_json, updated_at) VALUES ('client_identity','{}','t')", []).unwrap();
+        client.execute("INSERT INTO student(id, name, created_at, updated_at, sync_state) VALUES ('s1','Riya','t','t','confirmed')", []).unwrap();
+        assert_eq!(touches(&client), 0);
     }
 
     #[test]

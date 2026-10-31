@@ -51,6 +51,109 @@ fn guardian_visible_to_teacher(conn: &Connection, classes: &BTreeSet<String>, gu
     Ok(conn.query_row(&sql, args.as_slice(), |_| Ok(())).optional()?.is_some())
 }
 
+/// Every table a device can receive (the union of all role snapshots). The school
+/// PC's change feed (`db::install_change_feed_triggers`) records writes to exactly
+/// these tables, so a row changed by ANY school-PC command reaches joined devices on
+/// their next LAN pull — not only rows written through `write::append_op`.
+pub const SYNC_TABLES: &[&str] = &[
+    "school", "academic_session", "term", "subject", "school_week", "calendar_event", "period",
+    "report_template", "leave_type", "staff", "message_template", "message", "circular", "circular_read",
+    "class", "class_subject", "student", "enrollment", "guardian", "student_guardian", "consent",
+    "attendance_sheet", "attendance_mark",
+    "fee_head", "fee_due", "payment", "payment_allocation", "reversal", "request",
+    "ledger_account", "voucher", "ledger_entry", "expense", "expense_reversal",
+    "salary_structure", "staff_advance", "salary_run", "salary_line",
+    "store_item", "store_sale", "stock_move",
+    "timetable_slot", "substitution", "homework_note", "report_remark",
+    "exam_room", "exam_seat", "exam_schedule",
+    "staff_attendance", "leave_record",
+    "marks_sheet", "mark_entry", "exam", "exam_subject",
+];
+
+/// A teacher's current and upcoming attendance grants (substitution with
+/// attendance, approved attendance duty) whose range ends on/after `from_day`,
+/// grouped by class: `class_id -> [(from, to)]`. Same sources as
+/// `apply::attendance_grants_for`, but over a date window rather than one day, so a
+/// phone receives the roster of a class it will cover before the day starts.
+pub fn duty_grants(conn: &Connection, staff_id: &str, from_day: &str) -> rusqlite::Result<std::collections::BTreeMap<String, Vec<(String, String)>>> {
+    let mut out: std::collections::BTreeMap<String, Vec<(String, String)>> = Default::default();
+    let mut st = conn.prepare("SELECT class_id, date FROM substitution WHERE substitute_teacher_id=?1 AND includes_attendance=1 AND date>=?2")?;
+    for r in st.query_map(rusqlite::params![staff_id, from_day], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))? {
+        let (c, d) = r?;
+        out.entry(c).or_default().push((d.clone(), d));
+    }
+    let mut st = conn.prepare("SELECT after_json FROM request WHERE type='attendance_duty' AND requested_by=?1 AND status='approved'")?;
+    for aj in st.query_map([staff_id], |r| r.get::<_, String>(0))? {
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(&aj?) else { continue };
+        let g = |k: &str| v.get(k).and_then(|x| x.as_str()).map(str::to_string);
+        if let (Some(c), Some(f), Some(t)) = (g("class_id"), g("from_date"), g("to_date")) {
+            if t.as_str() >= from_day {
+                out.entry(c).or_default().push((f, t));
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// The first day whose grants still matter: yesterday (UTC), so a school ahead of
+/// UTC (India, +5:30) never loses "today" around midnight.
+pub fn duty_window_start() -> String {
+    (time::OffsetDateTime::now_utc() - time::Duration::days(1))
+        .date()
+        .format(time::macros::format_description!("[year]-[month]-[day]"))
+        .unwrap_or_default()
+}
+
+fn in_ranges(ranges: &[(String, String)], day: &str) -> bool {
+    ranges.iter().any(|(f, t)| f.as_str() <= day && day <= t.as_str())
+}
+
+/// The roster a covering teacher needs for a duty class (not one of their own):
+/// the class row, its current students (address withheld — not their class),
+/// enrollments, and only the attendance sheets/marks of the covered days. No
+/// guardians, marks or notes: the grant is for attendance only.
+pub fn duty_roster(conn: &Connection, class_id: &str, ranges: &[(String, String)]) -> rusqlite::Result<Vec<(String, String)>> {
+    let mut rows: Vec<(String, String)> = vec![("class".into(), class_id.into())];
+    for id in ids_of(conn, "SELECT student_id FROM enrollment WHERE class_id=?1 AND to_date IS NULL", &[&class_id])? {
+        rows.push(("student".into(), id));
+    }
+    for id in ids_of(conn, "SELECT id FROM enrollment WHERE class_id=?1 AND to_date IS NULL", &[&class_id])? {
+        rows.push(("enrollment".into(), id));
+    }
+    let mut st = conn.prepare("SELECT id, substr(date,1,10) FROM attendance_sheet WHERE class_id=?1")?;
+    let sheets: Vec<(String, String)> = st.query_map([class_id], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<rusqlite::Result<_>>()?;
+    for (sid, day) in sheets {
+        if in_ranges(ranges, &day) {
+            rows.push(("attendance_sheet".into(), sid.clone()));
+            for m in ids_of(conn, "SELECT id FROM attendance_mark WHERE sheet_id=?1", &[&sid])? {
+                rows.push(("attendance_mark".into(), m));
+            }
+        }
+    }
+    Ok(rows)
+}
+
+/// Is `(table, id)` part of a duty-class roster this teacher may receive? Used by
+/// `visible_row` for rows outside the teacher's own classes.
+fn duty_visible(conn: &Connection, actor: &Actor, table: &str, id: &str) -> rusqlite::Result<bool> {
+    let class_sql = match table {
+        "class" => "SELECT id, NULL FROM class WHERE id=?1",
+        "student" => "SELECT class_id, NULL FROM enrollment WHERE student_id=?1 AND to_date IS NULL LIMIT 1",
+        "enrollment" => "SELECT class_id, NULL FROM enrollment WHERE id=?1 AND to_date IS NULL",
+        "attendance_sheet" => "SELECT class_id, substr(date,1,10) FROM attendance_sheet WHERE id=?1",
+        "attendance_mark" => "SELECT s.class_id, substr(s.date,1,10) FROM attendance_mark m JOIN attendance_sheet s ON s.id=m.sheet_id WHERE m.id=?1",
+        _ => return Ok(false),
+    };
+    let hit: Option<(String, Option<String>)> = conn.query_row(class_sql, [id], |r| Ok((r.get(0)?, r.get(1)?))).optional()?;
+    let Some((class_id, day)) = hit else { return Ok(false) };
+    let grants = duty_grants(conn, &actor.staff_id, &duty_window_start())?;
+    Ok(match (grants.get(&class_id), day) {
+        (Some(_), None) => true,
+        (Some(r), Some(d)) => in_ranges(r, &d),
+        (None, _) => false,
+    })
+}
+
 /// The class ids a teacher actor is scoped to (class-teacher-of ∪ taught classes).
 pub fn teacher_class_ids(conn: &Connection, actor: &Actor) -> rusqlite::Result<BTreeSet<String>> {
     let mut ids: BTreeSet<String> = actor.class_teacher_of.iter().cloned().collect();
@@ -193,6 +296,23 @@ pub fn visible_row(conn: &Connection, actor: &Actor, table: &str, id: &str) -> r
         }
         Role::Teacher => {
             let classes = teacher_class_ids(conn, actor)?;
+            // A covered (duty) class outside the teacher's own: roster rows only.
+            let own_class = |t: &str| -> rusqlite::Result<bool> {
+                let sql = match t {
+                    "class" => "SELECT id FROM class WHERE id=?1",
+                    "student" => "SELECT class_id FROM enrollment WHERE student_id=?1 AND to_date IS NULL LIMIT 1",
+                    "enrollment" => "SELECT class_id FROM enrollment WHERE id=?1",
+                    "attendance_sheet" => "SELECT class_id FROM attendance_sheet WHERE id=?1",
+                    "attendance_mark" => "SELECT s.class_id FROM attendance_mark m JOIN attendance_sheet s ON s.id=m.sheet_id WHERE m.id=?1",
+                    _ => return Ok(true),
+                };
+                let c: Option<String> = conn.query_row(sql, [id], |r| r.get(0)).optional()?;
+                Ok(c.is_some_and(|c| classes.contains(&c)))
+            };
+            if !own_class(table)? && duty_visible(conn, actor, table, id)? {
+                let f = |r: &mut serde_json::Value| { if let Some(o) = r.as_object_mut() { o.insert("address".into(), serde_json::Value::Null); } };
+                return Ok(if table == "student" { mk(row, Some(&f)) } else { mk(row, None) });
+            }
             match table {
                 "school" | "academic_session" | "term" | "subject" => Ok(mk(row, None)),
                 "staff" => {
@@ -428,6 +548,22 @@ pub fn snapshot(conn: &Connection, actor: &Actor) -> rusqlite::Result<Vec<Change
         }
         Role::Teacher => {
             let classes = teacher_class_ids(conn, actor)?;
+            // Rosters of classes covered through a current/upcoming attendance grant
+            // (substitute / duty) that aren't the teacher's own — attendance only.
+            for (cid, ranges) in duty_grants(conn, &actor.staff_id, &duty_window_start())? {
+                if classes.contains(&cid) {
+                    continue;
+                }
+                let addr_filter = |row: &mut serde_json::Value| {
+                    if let Some(obj) = row.as_object_mut() {
+                        obj.insert("address".into(), serde_json::Value::Null);
+                    }
+                };
+                for (t, id) in duty_roster(conn, &cid, &ranges)? {
+                    let f: Option<&dyn Fn(&mut serde_json::Value)> = if t == "student" { Some(&addr_filter) } else { None };
+                    push(conn, &t, &id, f)?;
+                }
+            }
             if classes.is_empty() {
                 return Ok(out);
             }
@@ -576,6 +712,46 @@ mod tests {
 
     fn tables(changes: &[Change]) -> BTreeSet<String> {
         changes.iter().map(|c| c.table.clone()).collect()
+    }
+
+    #[test]
+    fn every_snapshot_table_is_in_the_change_feed() {
+        let c = seeded();
+        let p = actor(Role::Principal, "stf-principal", &[], &[]);
+        for t in tables(&snapshot(&c, &p).unwrap()) {
+            assert!(SYNC_TABLES.contains(&t.as_str()), "{t} is sent in snapshots but not fed to pulls");
+        }
+    }
+
+    #[test]
+    fn a_substitute_receives_the_covered_class_roster_for_attendance_only() {
+        let c = seeded();
+        // Anita teaches VI-B Maths only; she covers V-A's attendance today.
+        let a = actor(Role::Teacher, "stf-anita", &[], &["cs-6b-maths"]);
+        let roster_of = |snap: &[Change]| snap.iter().filter(|x| x.table == "student").count();
+        let before = roster_of(&snapshot(&c, &a).unwrap());
+        let day = &crate::commands::today();
+        c.execute(
+            "INSERT INTO substitution(id,date,absent_teacher_id,substitute_teacher_id,class_id,period_no,includes_attendance) \
+             VALUES ('sub-t','{day}','stf-meena','stf-anita','cls-5a',NULL,1)".replace("{day}", day).as_str(),
+            [],
+        )
+        .unwrap();
+        let snap = snapshot(&c, &a).unwrap();
+        assert_eq!(roster_of(&snap), before + 34, "V-A roster added");
+        assert!(snap.iter().any(|x| x.table == "class" && x.record_id == "cls-5a"));
+        // Not their class: addresses withheld, and no guardians/marks of V-A.
+        let va: BTreeSet<String> = ids_of(&c, "SELECT student_id FROM enrollment WHERE class_id='cls-5a' AND to_date IS NULL", &[]).unwrap().into_iter().collect();
+        for st in snap.iter().filter(|x| x.table == "student" && va.contains(&x.record_id)) {
+            assert!(st.payload.get("address").is_some_and(|v| v.is_null()));
+        }
+        let va_links: BTreeSet<String> = ids_of(&c, "SELECT sg.id FROM student_guardian sg JOIN enrollment e ON e.student_id=sg.student_id AND e.to_date IS NULL WHERE e.class_id='cls-5a'", &[]).unwrap().into_iter().collect();
+        assert!(!snap.iter().any(|x| x.table == "student_guardian" && va_links.contains(&x.record_id)));
+        // Pull-side visibility follows the grant, and ends with it.
+        let sid = va.iter().next().unwrap().clone();
+        assert!(visible_row(&c, &a, "student", &sid).unwrap().is_some());
+        c.execute("DELETE FROM substitution WHERE id='sub-t'", []).unwrap();
+        assert!(visible_row(&c, &a, "student", &sid).unwrap().is_none());
     }
 
     #[test]

@@ -212,6 +212,14 @@ fn apply_snapshot_tx(
         &serde_json::json!({ "snapshot_id": manifest.snapshot_id, "cursor": manifest.cursor, "server_epoch": manifest.server_epoch }),
     )
     .map_err(|e| e.to_string())?;
+    // Pull resumes from the position the snapshot reflects: every row changed up to
+    // `manifest.cursor` is already in it (the cursor is read under the same lock as
+    // the rows), and the school PC's change feed logs every later write. Replaying
+    // the whole feed from 0 would page through every write the school ever made.
+    // Only ever moves forward (a self-heal re-bootstrap never rewinds it).
+    if cursor(&tx).map_err(|e| e.to_string())? < manifest.cursor {
+        set_cursor(&tx, manifest.cursor).map_err(|e| e.to_string())?;
+    }
     advance_known_epoch(&tx, manifest.server_epoch).map_err(|e| e.to_string())?;
     // Now that the staff rows exist, give this device its own local device row.
     if let Some(id) = crate::sync::client::load(&tx) {

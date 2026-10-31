@@ -10455,7 +10455,7 @@ mod tests {
         // The repo agrees: 2026-09-26 (Saturday) is now non-working.
         assert!(!crate::calendar::is_working_day(&c, "2026-09-26").unwrap());
         // Audited, and one op per weekday landed in op_log (Server mode).
-        let ops: i64 = c.query_row("SELECT count(*) FROM op_log WHERE \"table\"='school_week'", [], |r| r.get(0)).unwrap();
+        let ops: i64 = c.query_row("SELECT count(*) FROM op_log WHERE \"table\"='school_week' AND kind != 'touch'", [], |r| r.get(0)).unwrap();
         assert_eq!(ops, 7);
     }
 
@@ -10492,7 +10492,7 @@ mod tests {
         // Row persisted with the creator; op logged (Server mode).
         let n: i64 = c.query_row("SELECT count(*) FROM message WHERE status='tapped' AND created_by='stf-suresh'", [], |r| r.get(0)).unwrap();
         assert_eq!(n, 1);
-        let ops: i64 = c.query_row("SELECT count(*) FROM op_log WHERE \"table\"='message'", [], |r| r.get(0)).unwrap();
+        let ops: i64 = c.query_row("SELECT count(*) FROM op_log WHERE \"table\"='message' AND kind != 'touch'", [], |r| r.get(0)).unwrap();
         assert_eq!(ops, 1);
         // Listed for its creator, filtered by the related payment.
         let list = list_messages_logic(&mut c, &accountant(), None, Some("pay-1")).unwrap();

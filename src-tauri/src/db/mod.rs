@@ -132,7 +132,43 @@ pub fn is_readable(conn: &Connection) -> bool {
 pub fn run_migrations(conn: &mut Connection) -> rusqlite::Result<i64> {
     let v = run_migrations_inner(conn)?;
     install_revision_triggers(conn)?;
+    install_change_feed_triggers(conn)?;
     Ok(v)
+}
+
+/// The school PC's change feed: AFTER INSERT/UPDATE/DELETE triggers on every
+/// [`crate::sync::scope::SYNC_TABLES`] table append a `touch` (or `delete`) row to
+/// `op_log`, so `pull` delivers the canonical row after ANY school-PC write — many
+/// commands write rows directly and never called `write::append_op`, which left
+/// LAN-joined devices stale until a re-bootstrap. Pull reads the CURRENT row and
+/// scopes it per device, so the trigger records only (table, id). Disabled on a
+/// joined device (it has a `client_identity`), whose op_log is unused.
+pub fn install_change_feed_triggers(conn: &Connection) -> rusqlite::Result<()> {
+    let ready = ["op_log", "app_kv"].iter().all(|t| {
+        conn.query_row("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?1", [t], |_| Ok(())).is_ok()
+    });
+    if !ready {
+        return Ok(());
+    }
+    for t in crate::sync::scope::SYNC_TABLES {
+        let has_id: bool = conn
+            .query_row(&format!("SELECT 1 FROM pragma_table_info('{t}') WHERE name='id'"), [], |_| Ok(()))
+            .is_ok();
+        if !has_id {
+            continue;
+        }
+        for (ev, row, kind) in [("INSERT", "NEW", "touch"), ("UPDATE", "NEW", "touch"), ("DELETE", "OLD", "delete")] {
+            let name = format!("trg_feed_{}_{}", t, ev.to_lowercase());
+            conn.execute_batch(&format!(
+                "CREATE TRIGGER IF NOT EXISTS {name} AFTER {ev} ON {t} \
+                 WHEN NOT EXISTS (SELECT 1 FROM app_kv WHERE key='client_identity') BEGIN \
+                   INSERT INTO op_log(op_id, hlc, device_id, staff_id, \"table\", record_id, kind, payload, applied_at) \
+                   VALUES ('feed-' || lower(hex(randomblob(16))), strftime('%Y-%m-%dT%H:%M:%fZ','now'), 'school-pc', '', '{t}', {row}.id, '{kind}', '{{}}', strftime('%Y-%m-%dT%H:%M:%fZ','now')); \
+                 END;"
+            ))?;
+        }
+    }
+    Ok(())
 }
 
 /// Tables whose writes do NOT count as a data change for backups: sync/device

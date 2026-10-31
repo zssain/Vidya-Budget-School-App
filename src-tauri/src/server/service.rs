@@ -397,6 +397,25 @@ pub fn pull(conn: &Connection, auth: &DeviceAuth, since: i64, limit: i64, now: t
                 changes.push(c);
             }
         }
+        // A new substitute / attendance-duty grant arrived in this batch: send the
+        // covered class's roster with it (its students didn't change, so the feed
+        // alone would never deliver them). Duplicates are harmless upserts.
+        let granted = actor.role == vidya_core::types::Role::Teacher
+            && changes.iter().any(|c| c.table == "substitution" || c.table == "request");
+        if granted {
+            let own = scope::teacher_class_ids(conn, &actor)?;
+            for (cid, ranges) in scope::duty_grants(conn, &actor.staff_id, &scope::duty_window_start())? {
+                if own.contains(&cid) {
+                    continue;
+                }
+                for (t, id) in scope::duty_roster(conn, &cid, &ranges)? {
+                    if let Some(mut c) = scope::visible_row(conn, &actor, &t, &id)? {
+                        c.server_seq = next_cursor;
+                        changes.push(c);
+                    }
+                }
+            }
+        }
     }
 
     Ok(PullResp {

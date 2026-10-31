@@ -466,7 +466,7 @@ mod tests {
         assert_eq!(status, "sent");
         assert_eq!(pref.as_deref(), Some("gmail-msg-0"));
         // A status op was logged so devices sync the honest 'sent'.
-        let ops: i64 = c.query_row("SELECT COUNT(*) FROM op_log WHERE \"table\"='message'", [], |r| r.get(0)).unwrap();
+        let ops: i64 = c.query_row("SELECT COUNT(*) FROM op_log WHERE \"table\"='message' AND kind != 'touch'", [], |r| r.get(0)).unwrap();
         assert_eq!(ops, 2);
     }
 

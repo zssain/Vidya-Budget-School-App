@@ -77,6 +77,18 @@ fields, privacy actions, backups, bulk import, transfers, guardian edits, store 
   is refused and refetched by the sync loop and `/v1/sync/pull` (changes + **tombstones** for
   `homework_note`). Clients apply canonical rows with FK enforcement off (rows
   reference the server-only device registry).
+* **Change feed (P21):** on the school PC, AFTER INSERT/UPDATE/DELETE triggers on every
+  `scope::SYNC_TABLES` table append a `touch`/`delete` row to `op_log`
+  (`db::install_change_feed_triggers`; off on joined devices). Pull reads the current
+  row and scopes it per device, so ANY school-PC write reaches LAN devices — before,
+  only writes made through `write::append_op` did (e.g. assigning a substitute never
+  reached a phone). A bootstrap sets the device's pull cursor to `manifest.cursor`, so
+  pull continues from the snapshot instead of replaying the whole feed.
+* **Duty rosters:** a teacher covering a class through a current/upcoming attendance
+  grant (substitution with attendance, approved attendance duty; from yesterday UTC
+  on) receives that class's row, its students (address withheld), enrollments and
+  only the covered days' sheets/marks — in the snapshot, the down export, and in the
+  pull that delivers the grant itself (`scope::duty_grants` / `duty_roster`).
 * **Drive (down export):** each Drive pass, for every live device whose data moved,
   `exchange/down/<device>.vdown` = seal(`s2c`, AAD `vidya/down/v1\n<device>`,
   `{v:1, device_id, cursor, server_epoch, changes, manifest}`, manifest as for the LAN
