@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'react'
 import type { CSSProperties, ReactNode } from 'react'
 import { Icon } from '@/components/Icon'
-import { navForRole, type NavItem, type NavSection, type Role } from '@/lib/nav'
+import { hideUnavailable, navForRole, type NavItem, type NavSection, type Role } from '@/lib/nav'
+import { isWeb } from '@/lib/platform'
+import { isAvailableOnWeb } from '@/lib/web/backend'
 import { navigate } from '@/lib/router'
 import { useStore } from '@/lib/store'
 import * as api from '@/lib/api'
@@ -131,9 +133,13 @@ export default function AppShell({ role, active, children }: AppShellProps) {
   }, [])
 
   // Hide items whose optional module is OFF (§14), then drop any now-empty section.
-  const sections: NavSection[] = navForRole(role)
-    .map((s) => ({ ...s, items: s.items.filter((it) => !it.module || !offModules.has(it.module)) }))
-    .filter((s) => s.items.length > 0)
+  // On the iPhone PWA also hide items whose command the web backend does not serve.
+  const sections: NavSection[] = hideUnavailable(
+    navForRole(role)
+      .map((s) => ({ ...s, items: s.items.filter((it) => !it.module || !offModules.has(it.module)) }))
+      .filter((s) => s.items.length > 0),
+    (cmd) => !isWeb || isAvailableOnWeb(cmd),
+  )
   const user = store.app?.state.kind === 'unlocked' ? store.app.state.staff : null
   const schoolName = school?.name ?? t('app.name')
   const sessionLabel = school?.session_label ?? ''

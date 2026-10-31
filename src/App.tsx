@@ -12,6 +12,7 @@ import SetupWizard from '@/screens/shared/SetupWizard'
 import RecoverScreen from '@/screens/shared/RecoverScreen'
 import JoinScreen from '@/screens/web/JoinScreen'
 import { isWeb } from '@/lib/platform'
+import { isAvailableOnWeb } from '@/lib/web/backend'
 import { GoogleDrive } from '@/lib/web/drive/google'
 import { startSync } from '@/lib/web/drive/sync'
 import PinUnlockScreen from '@/screens/shared/PinUnlockScreen'
@@ -329,7 +330,9 @@ function desktopRoute(base: string, role: Role): { active: string; node: ReactNo
   if (base === '/principal/daybook') return { active: 'fees', node: <DayBookScreen /> }
   if (base === '/accountant/daybook') return { active: 'daybook', node: <DayBookScreen /> }
   if (base === '/principal/home') return { active: 'home', node: <PrincipalHomeContainer /> }
-  if (base === '/accountant/collect') return { active: 'collect', node: <CollectFeeContainer /> }
+  // Payments stay on the school PCs: the iPhone PWA has no collect-fee (falls to home).
+  if (base === '/accountant/collect' && !(isWeb && !isAvailableOnWeb('record_payment')))
+    return { active: 'collect', node: <CollectFeeContainer /> }
   if (role === 'accountant') return { active: 'home', node: <AccountantHomeScreen /> }
   return { active: 'home', node: <PrincipalHomeContainer /> }
 }

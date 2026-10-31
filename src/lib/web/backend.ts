@@ -13,6 +13,8 @@ import type {
   CheckInInput,
   LeaveRequestInput,
   MarkInput,
+  MarkEntryInput,
+  ReportRemarkInput,
   AppState,
   AppStateResponse,
   ClassDto,
@@ -46,6 +48,7 @@ import {
 } from './timetable'
 import { buildHomeworkNotes, type HomeworkNoteRec } from './notes'
 import { audienceFor, newId, writeOp } from './op'
+import { getMarksSheet, getReportRemarks, saveReportRemark, writeMarks } from './marks'
 import { getAttendanceSheet, listAbsent, listCirculars, markCircularRead, recordMessage, requestLeave, staffCheckIn, staffCheckOut, writeAttendance } from './phone'
 
 /** A Web command handler: `(args) => result`. */
@@ -283,6 +286,16 @@ export const WEB_COMMANDS: Record<string, WebHandler> = {
   record_message: async (args) => recordMessage(args?.input as RecordMessageInput),
   list_circulars: async () => listCirculars(),
   mark_circular_read: async (args) => markCircularRead(String(args?.circularId ?? '')),
+  // Marks entry + report remarks (repair P1): same ops as the native client; see marks.ts.
+  get_marks_sheet: async (args) => getMarksSheet(String(args?.examSubjectId ?? '')),
+  save_marks_draft: async (args) =>
+    writeMarks(String(args?.examSubjectId ?? ''), (args?.entries ?? []) as MarkEntryInput[], false),
+  submit_marks: async (args) =>
+    writeMarks(String(args?.examSubjectId ?? ''), (args?.entries ?? []) as MarkEntryInput[], true),
+  get_report_remarks: async (args) => getReportRemarks(String(args?.examId ?? ''), String(args?.classId ?? '')),
+  save_report_remark: async (args) => saveReportRemark(args?.input as ReportRemarkInput),
+  // Accountant collect-fee (record_payment) is intentionally NOT here: payments stay
+  // on the school PCs; the UI hides that entry point on web (nav.ts `command`).
   // Changes the school PC refused (kept in the outbox with their reason).
   list_sync_problems: async () => (await refusedOps()).map((r) => ({ id: r.op_id, reason: r.reason ?? null })),
 }

@@ -23,6 +23,11 @@ the mechanics. "Replay" = the school PC runs the same domain function as the aut
 
 Ported: PIN/lock, attendance read + save/submit, check-in/out, leave request, absence
 alerts (list + record), circulars (list + read), homework notes, teacher home,
-timetable, class list. Data arrives through the per-device Drive down export.
-Not ported: marks entry, report remarks, accountant collect-fee (return
-`NOT_AVAILABLE_ON_WEB`).
+timetable, class list, **marks entry** (read + save draft/submit: one `marks_sheet`
+action op `{exam_subject_id, submit, entries[]}`, id `msheet-<exam_subject>`) and
+**report remarks** (read + save: `report_remark` ClientCmd `save_report_remark`, id
+`rmk-<exam>-<student>`) — the same op JSON the native client sends, with the same
+local permission checks. Data arrives through the per-device Drive down export.
+Not ported (by design): accountant collect-fee (`record_payment` returns
+`NOT_AVAILABLE_ON_WEB`; payments stay on the school PCs and the web UI hides the
+Collect-fee entry points).

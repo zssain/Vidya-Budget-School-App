@@ -20,6 +20,10 @@ export interface NavItem {
    *  entirely (§14 — e.g. the optional School store). Items whose module defaults
    *  on (accounts, circulars) omit this and show a MODULE_OFF state on-screen. */
   module?: string
+  /** The command the screen needs to work. On the iPhone PWA an item whose command
+   *  the web backend does not implement is HIDDEN (rather than opening a screen
+   *  that only errors NOT_AVAILABLE_ON_WEB) — see `hideUnavailable`. */
+  command?: string
 }
 
 export interface NavSection {
@@ -89,7 +93,8 @@ export const ACCOUNTANT_NAV: NavSection[] = [
   {
     items: [
       { key: 'home', labelKey: 'nav.home', icon: 'home', path: '/accountant/home' },
-      { key: 'collect', labelKey: 'nav.collect', icon: 'fees', path: '/accountant/collect' },
+      // Payments stay on the school PCs: hidden in the iPhone PWA (no record_payment there).
+      { key: 'collect', labelKey: 'nav.collect', icon: 'fees', path: '/accountant/collect', command: 'record_payment' },
       { key: 'students', labelKey: 'nav.studentsAdmissions', icon: 'students', path: '/accountant/students' },
       { key: 'receipts', labelKey: 'nav.receipts', icon: 'receipts', path: '/accountant/receipts' },
       { key: 'daybook', labelKey: 'nav.daybook', icon: 'daybook', path: '/accountant/daybook' },
@@ -104,4 +109,12 @@ export const ACCOUNTANT_NAV: NavSection[] = [
 
 export function navForRole(role: Role): NavSection[] {
   return role === 'accountant' ? ACCOUNTANT_NAV : PRINCIPAL_NAV
+}
+
+/** Drop nav items whose `command` is unavailable (the PWA's web backend), then any
+ *  now-empty section. Pure → unit-tested; AppShell passes `isAvailableOnWeb` on web. */
+export function hideUnavailable(sections: NavSection[], available: (cmd: string) => boolean): NavSection[] {
+  return sections
+    .map((s) => ({ ...s, items: s.items.filter((it) => !it.command || available(it.command)) }))
+    .filter((s) => s.items.length > 0)
 }

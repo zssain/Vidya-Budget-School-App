@@ -6,6 +6,8 @@ import { useStore } from '@/lib/store'
 import { t } from '@/lib/i18n'
 import { formatMoney } from '@/lib/format'
 import * as api from '@/lib/api'
+import { isWeb } from '@/lib/platform'
+import { isAvailableOnWeb } from '@/lib/web/backend'
 import type { AccountantDashboard, ReceiptSummaryDto, RequestDto } from '@/lib/api'
 
 // Accountant home (prompts/P07 Accountant): collected today, receipts today,
@@ -43,7 +45,8 @@ export default function AccountantHomeScreen() {
         title={t('acc.title')}
         sub={t('acc.sub')}
         actions={
-          <button type="button" onClick={() => navigate('/accountant/collect')} style={{ height: '44px', padding: '0 18px', borderRadius: '6px', border: '1px solid var(--accent)', background: 'var(--accent)', color: 'var(--white)', fontSize: '14px', fontWeight: 500, cursor: 'pointer' }}>{t('acc.collectFee')}</button>
+          // Payments stay on the school PCs: no Collect-fee entry in the iPhone PWA.
+          isWeb && !isAvailableOnWeb('record_payment') ? undefined : <button type="button" onClick={() => navigate('/accountant/collect')} style={{ height: '44px', padding: '0 18px', borderRadius: '6px', border: '1px solid var(--accent)', background: 'var(--accent)', color: 'var(--white)', fontSize: '14px', fontWeight: 500, cursor: 'pointer' }}>{t('acc.collectFee')}</button>
         }
       />
 
