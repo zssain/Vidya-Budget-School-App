@@ -162,10 +162,20 @@ export async function buildCtx(drive: DriveApi): Promise<ExchangeCtx | null> {
   const deviceId = await kvGet<string>('device_id')
   const schoolName = await kvGet<string>('school_name')
   const schoolId = await kvGet<string>('school_id')
-  const keys = await secretGet<AudienceKeys>('audience_keys')
-  if (!deviceId || !schoolName || !schoolId || !keys) return null
-  const sessionKey = await secretGet<string>('session_key')
-  if (!sessionKey) return null
+  if (!deviceId || !schoolName || !schoolId) return null
+  // K2: the session + audience keys are PIN-wrapped, so they can only be read while
+  // the app is unlocked. While locked this pass is skipped (null) — the outbox keeps
+  // every op and the loop resumes as soon as the PIN is entered (startSync kicks it).
+  let keys: AudienceKeys | undefined
+  let sessionKey: string | undefined
+  try {
+    keys = await secretGet<AudienceKeys>('audience_keys')
+    sessionKey = await secretGet<string>('session_key')
+  } catch (e) {
+    if ((e as { code?: string })?.code === 'LOCKED') return null
+    throw e
+  }
+  if (!keys || !sessionKey) return null
   const keyVersion = (await kvGet<number>('audience_keyver')) ?? 1
   const exchangeId = await resolveExchange(drive, schoolName, schoolId)
   return { drive, exchangeId, deviceId, sessionKey, keys, keyVersion }
@@ -178,22 +188,36 @@ export async function syncNow(drive: DriveApi): Promise<SyncResult | null> {
 }
 
 let timer: ReturnType<typeof setTimeout> | null = null
+let running = false
+let kick: (() => void) | null = null
 
 /** Start the foreground sync loop: 20 s ± 3 s while visible, and immediately on
- *  `online` / when the app becomes visible (§8.3). No background sync (§18). */
+ *  `online` / when the app becomes visible (§8.3). No background sync (§18). Calling
+ *  it again while running (App does so on every unlock) runs a pass right away — the
+ *  passes skipped while locked (K2: secrets are PIN-wrapped) are caught up at once. */
 export function startSync(drive: DriveApi): void {
-  if (timer) return
+  if (timer || running) {
+    kick?.()
+    return
+  }
   const tick = async (): Promise<void> => {
+    if (running) return
+    running = true
+    if (timer) clearTimeout(timer)
+    timer = null
     try {
       if (typeof document === 'undefined' || document.visibilityState === 'visible') {
         await syncNow(drive)
       }
     } catch {
       /* offline / quota — the Sync screen surfaces "Needs attention" */
+    } finally {
+      running = false
     }
     const jitter = 20_000 + Math.floor((Math.random() - 0.5) * 6_000)
     timer = setTimeout(() => void tick(), jitter)
   }
+  kick = () => void tick()
   if (typeof window !== 'undefined') {
     window.addEventListener('online', () => void tick())
     document.addEventListener('visibilitychange', () => {

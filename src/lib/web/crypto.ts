@@ -38,23 +38,31 @@ export function dbKey(): Promise<CryptoKey> {
   return keyPromise
 }
 
-/** Encrypt a JSON-serialisable value → `iv(12) ‖ AES-GCM ciphertext`. */
-export async function encryptJson(value: unknown): Promise<Uint8Array> {
-  const key = await dbKey()
+/** AES-GCM encrypt raw bytes under `key` → `iv(12) ‖ ciphertext` (optional AAD). */
+export async function encryptBytesWith(key: CryptoKey, pt: Uint8Array, aad?: Uint8Array): Promise<Uint8Array> {
   const iv = crypto.getRandomValues(new Uint8Array(IV_LEN))
-  const pt = new TextEncoder().encode(JSON.stringify(value))
-  const ct = new Uint8Array(await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, pt))
+  const params: AesGcmParams = aad ? { name: 'AES-GCM', iv, additionalData: aad as BufferSource } : { name: 'AES-GCM', iv }
+  const ct = new Uint8Array(await crypto.subtle.encrypt(params, key, pt as BufferSource))
   const out = new Uint8Array(IV_LEN + ct.length)
   out.set(iv, 0)
   out.set(ct, IV_LEN)
   return out
 }
 
-/** Decrypt an `iv(12) ‖ ciphertext` blob back to its value. Throws on tamper. */
-export async function decryptJson<T>(enc: Uint8Array): Promise<T> {
-  const key = await dbKey()
+/** Decrypt an `iv(12) ‖ ciphertext` blob under `key`. Throws on tamper / wrong key / AAD. */
+export async function decryptBytesWith(key: CryptoKey, enc: Uint8Array, aad?: Uint8Array): Promise<Uint8Array> {
   const iv = enc.slice(0, IV_LEN)
   const ct = enc.slice(IV_LEN)
-  const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, ct)
-  return JSON.parse(new TextDecoder().decode(pt)) as T
+  const params: AesGcmParams = aad ? { name: 'AES-GCM', iv, additionalData: aad as BufferSource } : { name: 'AES-GCM', iv }
+  return new Uint8Array(await crypto.subtle.decrypt(params, key, ct))
+}
+
+/** Encrypt a JSON-serialisable value → `iv(12) ‖ AES-GCM ciphertext`. */
+export async function encryptJson(value: unknown): Promise<Uint8Array> {
+  return encryptBytesWith(await dbKey(), new TextEncoder().encode(JSON.stringify(value)))
+}
+
+/** Decrypt an `iv(12) ‖ ciphertext` blob back to its value. Throws on tamper. */
+export async function decryptJson<T>(enc: Uint8Array): Promise<T> {
+  return JSON.parse(new TextDecoder().decode(await decryptBytesWith(await dbKey(), enc))) as T
 }

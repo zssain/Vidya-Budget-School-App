@@ -62,7 +62,11 @@ export async function stashJoinFragment(payload: InvitePayload): Promise<void> {
 
 /** The stashed invitation, if a join is in progress. */
 export async function takeStashedJoin(): Promise<InvitePayload | null> {
-  return (await secretGet<InvitePayload>(FRAGMENT_KV)) ?? null
+  try {
+    return (await secretGet<InvitePayload>(FRAGMENT_KV)) ?? null
+  } catch {
+    return null // PIN-wrapped (K2) and the app is locked — no resumable join now
+  }
 }
 
 function randomId(): string {

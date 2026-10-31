@@ -59,6 +59,9 @@ export const joinV2Aad = (inviteId: string, requestId: string, schoolId: string)
 
 // ---- PIN (the browser supplies the 16-byte salt) ----
 export const pinHash = (pin: string): string => w.pin_hash_with_salt(pin, randomBytes(16))
+/** The same Argon2id (same params) with a caller-held 16-byte salt — used to DERIVE
+ *  the PIN wrapping key (K2) from a separate salt, never to store a verifier. */
+export const pinHashWithSalt = (pin: string, salt: Uint8Array): string => w.pin_hash_with_salt(pin, salt)
 export const pinVerify = (pin: string, phc: string): boolean => w.pin_verify(pin, phc)
 export const pinLockoutSeconds = (failCount: number): number | null => w.pin_lockout_seconds(failCount) ?? null
 export const pinRemaining = (failCount: number): number => w.pin_remaining(failCount)

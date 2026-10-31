@@ -6,7 +6,8 @@
 // like one from the app.
 
 import { APPLIED_OPS, CURSORS, KV, OUTBOX, openDb, RECORD_STORES, type RecordStore, reqDone, tx } from './db'
-import { decryptJson, encryptJson } from './crypto'
+import { dbKey, decryptBytesWith, decryptJson, encryptBytesWith, encryptJson } from './crypto'
+import { currentPinKey } from './pinkey'
 
 interface EncRow {
   id: string
@@ -328,30 +329,110 @@ export async function kvPut(key: string, value: unknown): Promise<void> {
   })
 }
 
-// ---- secrets (device token, session key, audience keys, pending invite) -------
+/** Put several kv entries in ONE transaction (all or nothing). */
+export async function kvPutMany(entries: [string, unknown][]): Promise<void> {
+  if (entries.length === 0) return
+  const db = await openDb()
+  await tx(db, [KV], 'readwrite', (t) => {
+    for (const [key, value] of entries) t.objectStore(KV).put({ key, value })
+  })
+}
 
-/** KV entries holding secrets are stored encrypted under the non-extractable data
- *  key (crypto.ts), never as plain values. */
+// ---- secrets (device token, session key, audience keys, pending invite) -------
+//
+// Two layers (repair K2):
+//   { sealed }    — AES-GCM under the non-extractable data key only. Written before a
+//                   PIN exists (join) or while locked; re-wrapped at the next unlock.
+//   { pinsealed } — data-key AES-GCM over an inner AES-GCM under the PIN-derived key
+//                   (pinkey.ts), AAD-bound to the kv name. Needs the unlocked session.
+// A legacy plain value (older build) is read once and re-stored sealed.
+
+/** Every kv entry that holds a secret (all go through secretPut/secretGet). */
+export const SECRET_KEYS = ['device_token', 'session_key', 'audience_keys', 'pending_join_fragment'] as const
+
 interface SealedKv {
   sealed: Uint8Array
 }
+interface PinSealedKv {
+  pinsealed: Uint8Array
+}
+export type StoredSecret = SealedKv | PinSealedKv
 
 function isSealed(v: unknown): v is SealedKv {
   return typeof v === 'object' && v !== null && (v as SealedKv).sealed instanceof Uint8Array
 }
-
-/** Store a secret encrypted (null deletes it). */
-export async function secretPut(key: string, value: unknown): Promise<void> {
-  if (value == null) return kvPut(key, null)
-  await kvPut(key, { sealed: await encryptJson(value) } satisfies SealedKv)
+export function isPinSealed(v: unknown): v is PinSealedKv {
+  return typeof v === 'object' && v !== null && (v as PinSealedKv).pinsealed instanceof Uint8Array
 }
 
-/** Read a secret; a legacy plain value (from an older build) is returned once and
- *  immediately re-stored encrypted. */
+const secretAad = (name: string): Uint8Array => new TextEncoder().encode('vidya-secret:' + name)
+const LOCKED_ERR = { code: 'LOCKED', message_key: 'error.LOCKED', vars: {} }
+
+/** Seal a secret value (pure given the keys): PIN layer when a PIN key is held. */
+export async function sealSecretWith(name: string, value: unknown, dataKey: CryptoKey, pinKey: CryptoKey | null): Promise<StoredSecret> {
+  const json = new TextEncoder().encode(JSON.stringify(value))
+  if (!pinKey) return { sealed: await encryptBytesWith(dataKey, json) }
+  const inner = await encryptBytesWith(pinKey, json, secretAad(name))
+  return { pinsealed: await encryptBytesWith(dataKey, inner) }
+}
+
+/** Open a stored secret (pure given the keys). A PIN-sealed value without the PIN key
+ *  rejects with LOCKED; a legacy plain value is returned as is. */
+export async function openSecretWith<T>(name: string, stored: unknown, dataKey: CryptoKey, pinKey: CryptoKey | null): Promise<T | undefined> {
+  if (stored == null) return undefined
+  if (isPinSealed(stored)) {
+    if (!pinKey) throw LOCKED_ERR
+    const inner = await decryptBytesWith(dataKey, stored.pinsealed)
+    return JSON.parse(new TextDecoder().decode(await decryptBytesWith(pinKey, inner, secretAad(name)))) as T
+  }
+  if (isSealed(stored)) return JSON.parse(new TextDecoder().decode(await decryptBytesWith(dataKey, stored.sealed))) as T
+  return stored as T
+}
+
+/** Re-wrap stored secrets from `fromPin` (null = no PIN layer yet) to `toPin` (pure
+ *  given the keys). Values already PIN-sealed under the same key are left alone; a
+ *  PIN-sealed value that `fromPin` can't open throws (never silently dropped). */
+export async function rewrapValues(
+  entries: [string, unknown][],
+  dataKey: CryptoKey,
+  fromPin: CryptoKey | null,
+  toPin: CryptoKey,
+): Promise<[string, StoredSecret][]> {
+  const out: [string, StoredSecret][] = []
+  for (const [name, stored] of entries) {
+    if (stored == null) continue
+    if (isPinSealed(stored) && fromPin === toPin) continue
+    const value = await openSecretWith<unknown>(name, stored, dataKey, fromPin)
+    out.push([name, await sealSecretWith(name, value, dataKey, toPin)])
+  }
+  return out
+}
+
+/** Re-wrap every stored secret under `toPin` (migration at unlock / PIN creation, or
+ *  a PIN change from `fromPin`); `extra` kv entries commit in the same transaction. */
+export async function rewrapSecrets(fromPin: CryptoKey | null, toPin: CryptoKey, extra: [string, unknown][] = []): Promise<number> {
+  const raw: [string, unknown][] = []
+  for (const name of SECRET_KEYS) raw.push([name, await kvGet<unknown>(name)])
+  const rewrapped = await rewrapValues(raw, await dbKey(), fromPin, toPin)
+  await kvPutMany([...rewrapped, ...extra])
+  return rewrapped.length
+}
+
+/** Store a secret encrypted (null deletes it): under the PIN key too when unlocked. */
+export async function secretPut(key: string, value: unknown): Promise<void> {
+  if (value == null) return kvPut(key, null)
+  await kvPut(key, await sealSecretWith(key, value, await dbKey(), currentPinKey()))
+}
+
+/** Read a secret. Rejects with LOCKED for a PIN-sealed value while locked (callers
+ *  that run while locked — the Drive sync loop — treat that as "skip this pass"). A
+ *  legacy plain or data-key-only value is re-stored under the strongest layer held. */
 export async function secretGet<T>(key: string): Promise<T | undefined> {
   const v = await kvGet<unknown>(key)
   if (v == null) return undefined
-  if (isSealed(v)) return decryptJson<T>(v.sealed)
-  await secretPut(key, v)
-  return v as T
+  const pin = currentPinKey()
+  const value = await openSecretWith<T>(key, v, await dbKey(), pin)
+  if (!isPinSealed(v) && (pin || !isSealed(v))) await secretPut(key, value)
+  return value
 }
+

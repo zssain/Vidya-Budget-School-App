@@ -34,3 +34,6 @@ Collect-fee entry points).
 Refused ops (rejected / conflict / flagged in the school PC's ack) stay in the PWA
 outbox with their reason and are listed by `list_sync_problems` — shown on the
 phone's About screen and as a Teacher-home notice (never dropped silently).
+The PWA's session/audience keys are PIN-wrapped (repair K2), so its Drive loop only
+runs while the app is unlocked: passes are skipped on the PIN screen and one runs
+immediately on unlock (queued ops are never lost).

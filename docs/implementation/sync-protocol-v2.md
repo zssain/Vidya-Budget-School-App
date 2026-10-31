@@ -12,7 +12,7 @@ production assurance).
 | Device token (32 random bytes, hex) | device; server stores SHA-256 | LAN bearer auth (`/v1/sync/*`) |
 | Session key (32 bytes, base64) | device + server (`device.session_key`) | per-device keys: `c2s`, `s2c` = HMAC-expand(session_key, "vidya/relay/{c2s,s2c}/v1") |
 | Audience keys (`admin`, `finance`, `class:<id>`) | server + devices in that audience | legacy bundle sealing; **no longer used for uploads** |
-| Device PIN | device only (encrypted `app_kv` / PWA kv) | unlocks the UI session; never sent anywhere |
+| Device PIN | device only (encrypted `app_kv` / PWA kv) | unlocks the UI session; never sent anywhere. On the PWA it also derives (Argon2id, separate salt) the in-memory key that wraps the stored secrets (K2) |
 
 The join token authenticates the **device**, never a human session. A joined device
 needs its own PIN (`pin_setup` state) and auto-locks after 5 minutes idle.
