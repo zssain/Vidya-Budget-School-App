@@ -28,7 +28,7 @@ import type {
 } from '../api'
 import { hasJoined } from './join'
 import { createPin, hasPin, isUnlocked, lock, touch, type UnlockResult, unlock as pinUnlock } from './lock'
-import { kvGet, listRecords, syncProblems } from './store'
+import { dismissSyncProblem, kvGet, listRecords, syncProblems } from './store'
 import {
   buildStaffDay,
   type LeaveRecordRec,
@@ -300,6 +300,7 @@ export const WEB_COMMANDS: Record<string, WebHandler> = {
   // on the school PCs; the UI hides that entry point on web (nav.ts `command`).
   // Changes the school PC refused (kept in the outbox with their reason).
   list_sync_problems: async () => syncProblems(),
+  dismiss_sync_problem: async (args) => dismissSyncProblem(String(args?.id ?? '')),
   // Live Teacher Home + its tiles (repair T1); see teacher.ts.
   dashboard_teacher: async () => dashboardTeacher(localToday()),
   list_exams: async () => listExams(),

@@ -90,6 +90,17 @@ export function formatDateLongIn(date: Date, lang: string): string {
 }
 
 /**
+ * A short day + month ("12 Oct", "12 अक्तू॰") in the app language, from an ISO
+ * date/time; '' for a missing or unreadable value.
+ */
+export function formatDateShortIn(iso: string | null | undefined, lang: string): string {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  return new Intl.DateTimeFormat(INTL_LOCALE[lang] ?? INTL_LOCALE.en, { day: 'numeric', month: 'short' }).format(d);
+}
+
+/**
  * Format an academic session (April–March) from its start year.
  *
  * Uses an EN DASH and a 2-digit end year: 2026 → "2026–27".

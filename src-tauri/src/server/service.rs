@@ -351,12 +351,11 @@ pub fn push(conn: &mut Connection, auth: &DeviceAuth, ops: &[Op], now: time::Off
 
 // ----------------------------------------------------------- /sync/pull ------
 
-/// Tables with a delete path whose deletions are delivered as pull tombstones.
-const TOMBSTONE_TABLES: &[&str] = &["homework_note"];
-
 /// Incremental changes since `cursor` (op_log server_seq), scoped to the device's
-/// current actor. Rows the actor may no longer see are omitted; explicit row
-/// deletes surface in `deletes` (broad delete-on-lost-assignment is Phase 6+).
+/// current actor. Rows the actor may no longer see are omitted; every row the school
+/// PC deleted from a synced table surfaces in `deletes` (the change feed logs them).
+/// Within one page only a row's final state is sent, so a delete followed by a
+/// re-insert of the same id (or the reverse) can't be applied in the wrong order.
 pub fn pull(conn: &Connection, auth: &DeviceAuth, since: i64, limit: i64, now: time::OffsetDateTime) -> rusqlite::Result<PullResp> {
     let school = school_info(conn)?;
     let epoch = school.as_ref().map(|s| s.server_epoch).unwrap_or(1);
@@ -385,12 +384,16 @@ pub fn pull(conn: &Connection, auth: &DeviceAuth, since: i64, limit: i64, now: t
                 break;
             }
             next_cursor = *seq;
-            // Tombstone: a row the school PC deleted (only for tables with a delete
-            // path). Sent to every device — deleting a row it doesn't hold is a no-op.
-            if kind == "delete" && TOMBSTONE_TABLES.contains(&table.as_str()) {
-                deletes.push(Delete { table: table.clone(), record_id: record_id.clone() });
+            // Tombstone: a row the school PC deleted. Sent to every device — it carries
+            // only the table and id, and deleting a row a device doesn't hold is a no-op.
+            if kind == "delete" {
+                if scope::SYNC_TABLES.contains(&table.as_str()) {
+                    changes.retain(|c: &Change| !(c.table == *table && c.record_id == *record_id));
+                    deletes.push(Delete { table: table.clone(), record_id: record_id.clone() });
+                }
                 continue;
             }
+            deletes.retain(|d: &Delete| !(d.table == *table && d.record_id == *record_id));
             if let Some(mut c) = scope::visible_row(conn, &actor, table, record_id)? {
                 c.server_seq = *seq;
                 c.hlc = Some(hlc.clone());

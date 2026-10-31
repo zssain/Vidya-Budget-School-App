@@ -330,6 +330,9 @@ pub fn client_drive_tick(conn: &mut Connection) -> Result<(), String> {
         if let Some(m) = down.manifest.as_ref().filter(|_| down.cursor > held) {
             match crate::sync::engine::apply_snapshot(conn, m, &down.changes) {
                 Ok(_) => {
+                    if let Err(e) = crate::sync::engine::apply_tombstones(conn, &down.deletes) {
+                        tracing::warn!("down export deletions not applied: {e}");
+                    }
                     let _ = crate::kv::set(conn, "down_cursor", &down.cursor);
                 }
                 Err(e) => tracing::warn!("down export not applied: {e}"),

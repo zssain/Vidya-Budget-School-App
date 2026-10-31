@@ -272,4 +272,30 @@ fn down_export_reaches_only_its_device_and_tracks_changes() {
     assert_eq!(exchange::write_down_exports(&s, &acct, &l.exchange).unwrap(), 1);
     assert!(exchange::read_down_export(&acct, &l.exchange, "dev-other", &sk_other).unwrap().is_none());
     assert!(exchange::read_down_export(&acct, &l.exchange, "dev-ipad", &sk).unwrap().is_some());
+
+    // A row the school PC deletes is listed in the next export's `deletes` (the native
+    // client upserts exports, so it would otherwise keep the row); a row deleted and
+    // re-created is a live row, not a tombstone.
+    let today = vidya_lib::commands::today();
+    for id in ["sub-gone", "sub-back"] {
+        s.execute(
+            "INSERT INTO substitution(id,date,absent_teacher_id,substitute_teacher_id,class_id,period_no,includes_attendance) \
+             VALUES (?1,?2,'stf-nair','stf-meena','cls-4a',NULL,0)",
+            params![id, today],
+        )
+        .unwrap();
+    }
+    s.execute("DELETE FROM substitution", []).unwrap();
+    s.execute(
+        "INSERT INTO substitution(id,date,absent_teacher_id,substitute_teacher_id,class_id,period_no,includes_attendance) \
+         VALUES ('sub-back',?1,'stf-nair','stf-meena','cls-4a',NULL,0)",
+        params![today],
+    )
+    .unwrap();
+    assert_eq!(exchange::write_down_exports(&s, &acct, &l.exchange).unwrap(), 1);
+    let after = exchange::read_down_export(&acct, &l.exchange, "dev-ipad", &sk).unwrap().unwrap();
+    let tomb = |id: &str| after.deletes.iter().any(|d| d.table == "substitution" && d.record_id == id);
+    assert!(tomb("sub-gone"), "the deleted cover is a tombstone");
+    assert!(!tomb("sub-back"), "re-created: no tombstone");
+    assert!(after.changes.iter().any(|c| c.table == "substitution" && c.record_id == "sub-back"));
 }

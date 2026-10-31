@@ -75,7 +75,7 @@ fields, privacy actions, backups, bulk import, transfers, guardian edits, store 
   `table\0record_id\0canonical-json\n`)). The device verifies counts + digest + epoch
   before writing, then applies all-or-nothing with `bootstrap_complete`; a mismatch
   is refused and refetched by the sync loop and `/v1/sync/pull` (changes + **tombstones** for
-  `homework_note`). Clients apply canonical rows with FK enforcement off (rows
+  every synced table — see Deletes below). Clients apply canonical rows with FK enforcement off (rows
   reference the server-only device registry).
 * **Change feed (P21):** on the school PC, AFTER INSERT/UPDATE/DELETE triggers on every
   `scope::SYNC_TABLES` table append a `touch`/`delete` row to `op_log`
@@ -84,6 +84,13 @@ fields, privacy actions, backups, bulk import, transfers, guardian edits, store 
   only writes made through `write::append_op` did (e.g. assigning a substitute never
   reached a phone). A bootstrap sets the device's pull cursor to `manifest.cursor`, so
   pull continues from the snapshot instead of replaying the whole feed.
+* **Deletes (P21 D1):** every school-PC delete on a `SYNC_TABLES` table is a feed
+  `delete` row. Pull sends it as a tombstone (table + id only, to every device); within
+  one page only a row's final state is sent, so delete→re-insert can't apply out of
+  order. The down export carries `deletes` (up to 5000 most recent, excluding rows
+  that exist again) because the native client upserts exports; the PWA replaces its
+  store from the export and ignores them. A device never deletes a row that still has
+  an unsent outbox op (`engine::apply_tombstones`) — the school PC answers that op.
 * **Duty rosters:** a teacher covering a class through a current/upcoming attendance
   grant (substitution with attendance, approved attendance duty; from yesterday UTC
   on) receives that class's row, its students (address withheld), enrollments and

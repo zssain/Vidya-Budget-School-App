@@ -203,6 +203,17 @@ export async function toSyncProblems(rows: OutboxRow[], openOp: (r: OutboxRow) =
   )
 }
 
+/** "Dismiss" a refused change: drop its outbox row. Only refused rows — a pending
+ *  change is never removed this way. */
+export async function dismissSyncProblem(opId: string): Promise<void> {
+  const db = await openDb()
+  const row = (await allOutbox()).find((r) => r.op_id === opId)
+  if (!row || row.status == null) return
+  await tx(db, [OUTBOX], 'readwrite', (t) => {
+    t.objectStore(OUTBOX).delete(opId)
+  })
+}
+
 /** The refused changes for `list_sync_problems`. */
 export async function syncProblems(): Promise<SyncProblem[]> {
   return toSyncProblems(await refusedOps(), (r) => decryptJson<Op>(r.enc))

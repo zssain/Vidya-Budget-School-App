@@ -8,6 +8,7 @@ import type { CmdError, RequestDto } from '@/lib/api'
 import { Icon } from '@/components/Icon'
 import PhoneScreen, { PHONE_CARD, PHONE_SECONDARY, PhoneEmpty, PhonePill } from '@/components/PhoneScreen'
 import { t, useLang } from '@/lib/i18n'
+import { formatDateShortIn } from '@/lib/format'
 import { navigate } from '@/lib/router'
 import { useStore } from '@/lib/store'
 import { isWeb } from '@/lib/platform'
@@ -22,13 +23,9 @@ const STATUS_TONE: Record<string, 'ok' | 'warn' | 'bad' | 'muted' | 'accent'> = 
   cancelled: 'muted',
 }
 
-function shortDate(iso: string): string {
-  const d = new Date(iso)
-  return Number.isNaN(d.getTime()) ? '' : d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })
-}
 
 export default function PhoneRequestsScreen() {
-  useLang()
+  const lang = useLang()
   const store = useStore()
   const myId = store.app?.state.kind === 'unlocked' ? store.app.state.staff.id : ''
   const [rows, setRows] = useState<RequestDto[] | null>(null)
@@ -81,7 +78,7 @@ export default function PhoneRequestsScreen() {
             <div key={r.id} style={{ display: 'flex', flexDirection: 'column', gap: 6, padding: '14px 16px', borderTop: i === 0 ? 0 : '1px solid var(--track)' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                 <b style={{ flexGrow: 1, fontWeight: 600, fontSize: 15 }}>{requestKindLabel(r.kind, t)}</b>
-                <span style={{ fontSize: 12, color: 'var(--muted)' }}>{shortDate(r.created_at)}</span>
+                <span style={{ fontSize: 12, color: 'var(--muted)' }}>{formatDateShortIn(r.created_at, lang)}</span>
                 <PhonePill tone={STATUS_TONE[r.status] ?? 'muted'}>{t(`tp.req.status.${STATUS_TONE[r.status] ? r.status : 'pending'}`)}</PhonePill>
               </div>
               {r.reason ? <span style={{ fontSize: 13, color: 'var(--ink)', lineHeight: 1.45 }}>{r.reason}</span> : null}

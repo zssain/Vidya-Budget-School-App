@@ -179,3 +179,14 @@ describe('parseDigits', () => {
     expect(parseDigits('42', 10)).toBe('42');
   });
 });
+
+import { formatDateShortIn } from './format'
+
+describe('formatDateShortIn', () => {
+  it('formats in the app language and tolerates missing/bad input', () => {
+    expect(formatDateShortIn('2026-10-12T09:00:00', 'en')).toBe('12 Oct')
+    expect(formatDateShortIn('2026-10-12T09:00:00', 'hi')).not.toBe('12 Oct')
+    expect(formatDateShortIn(null, 'en')).toBe('')
+    expect(formatDateShortIn('not a date', 'te')).toBe('')
+  })
+})

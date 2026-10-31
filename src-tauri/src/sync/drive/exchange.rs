@@ -319,6 +319,37 @@ pub struct DownExport {
     /// applies anything. (The PWA ignores it; the AEAD already binds the body.)
     #[serde(default)]
     pub manifest: Option<crate::sync::protocol::SnapshotManifest>,
+    /// Rows the school PC deleted that are not in `changes` (newest first, bounded).
+    /// The native client upserts an export, so without these a row deleted on the
+    /// school PC would stay on a Drive-only second PC/phone forever. (The PWA
+    /// replaces its whole store from `changes` and doesn't need them.)
+    #[serde(default)]
+    pub deletes: Vec<crate::sync::protocol::Delete>,
+}
+
+/// How many recent deletions a down export carries.
+const DOWN_TOMBSTONES: i64 = 5000;
+
+/// The most recent distinct deletions from synced tables, minus rows that exist
+/// again (re-created after the delete — they are in the export as live rows).
+fn recent_tombstones(conn: &Connection, live: &[crate::sync::protocol::Change]) -> rusqlite::Result<Vec<crate::sync::protocol::Delete>> {
+    let live: std::collections::HashSet<(&str, &str)> = live.iter().map(|c| (c.table.as_str(), c.record_id.as_str())).collect();
+    let mut st = conn.prepare(
+        "SELECT \"table\", record_id FROM op_log WHERE kind='delete' GROUP BY \"table\", record_id ORDER BY MAX(server_seq) DESC LIMIT ?1",
+    )?;
+    let rows = st.query_map(params![DOWN_TOMBSTONES], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+    let mut out = Vec::new();
+    for row in rows {
+        let (table, record_id) = row?;
+        if !crate::sync::scope::SYNC_TABLES.contains(&table.as_str()) || live.contains(&(table.as_str(), record_id.as_str())) {
+            continue;
+        }
+        let exists: bool = conn.query_row(&format!("SELECT EXISTS(SELECT 1 FROM {table} WHERE id=?1)"), params![record_id], |r| r.get(0))?;
+        if !exists {
+            out.push(crate::sync::protocol::Delete { table, record_id });
+        }
+    }
+    Ok(out)
 }
 
 /// School PC: for every live device with a session key, write `down/<device>.vdown`
@@ -363,7 +394,8 @@ pub fn write_down_exports(conn: &Connection, drive: &impl DriveApi, exchange_fol
             cursor,
             &changes,
         );
-        let body = DownExport { v: 1, device_id: device.clone(), cursor, server_epoch: epoch, changes, manifest: Some(manifest) };
+        let deletes = recent_tombstones(conn, &changes)?;
+        let body = DownExport { v: 1, device_id: device.clone(), cursor, server_epoch: epoch, changes, manifest: Some(manifest), deletes };
         let json = serde_json::to_vec(&body).map_err(|e| ExchangeError::Bundle(e.to_string()))?;
         let Ok(keys) = seal::derive_keys(&sk) else { continue };
         let sealed = seal::seal(&keys.s2c, &vidya_core::seal::device_down_aad(&device), &json);

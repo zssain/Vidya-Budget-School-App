@@ -188,6 +188,7 @@
     "sync_status",
     "sync_now",
     "list_sync_problems",
+    "dismiss_sync_problem",
     "list_conflicts",
     "resolve_conflict",
     "list_review_flags",

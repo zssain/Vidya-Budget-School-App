@@ -1793,6 +1793,8 @@ export interface SyncProblemDto {
   table?: string
 }
 export const list_sync_problems = () => invoke<SyncProblemDto[]>('list_sync_problems')
+/** Remove a refused change from the list once read (nothing is resent). */
+export const dismiss_sync_problem = (id: string) => invoke<void>('dismiss_sync_problem', { id })
 export const list_conflicts = () => invoke<ConflictDto[]>('list_conflicts')
 export const resolve_conflict = (id: string, choice: string, value?: string) =>
   invoke<void>('resolve_conflict', { id, choice, value: value ?? null })

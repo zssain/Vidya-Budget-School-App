@@ -8,16 +8,12 @@ import type { CircularDto } from '@/lib/api'
 import { Icon } from '@/components/Icon'
 import PhoneScreen, { PHONE_CARD, PhoneEmpty, PhonePill } from '@/components/PhoneScreen'
 import { t, useLang } from '@/lib/i18n'
+import { formatDateShortIn } from '@/lib/format'
 import { SyncProblemsCard } from './SyncProblems'
 
-function shortDate(iso: string | null): string {
-  if (!iso) return ''
-  const d = new Date(iso)
-  return Number.isNaN(d.getTime()) ? '' : d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })
-}
 
 export default function PhoneInboxScreen() {
-  useLang()
+  const lang = useLang()
   const [rows, setRows] = useState<CircularDto[] | null>(null)
   const [open, setOpen] = useState<string | null>(null)
 
@@ -55,7 +51,7 @@ export default function PhoneInboxScreen() {
                 <span style={{ flexGrow: 1, minWidth: 0, display: 'flex', flexDirection: 'column', gap: 2 }}>
                   <b style={{ fontWeight: c.read_by_me ? 500 : 700, fontSize: 15 }}>{c.title}</b>
                   <span style={{ fontSize: 12, color: 'var(--muted)' }}>
-                    {[c.number, shortDate(c.sent_at ?? c.created_at)].filter(Boolean).join(' · ')}
+                    {[c.number, formatDateShortIn(c.sent_at ?? c.created_at, lang)].filter(Boolean).join(' · ')}
                   </span>
                 </span>
                 {!c.read_by_me ? <PhonePill tone="warn">{t('tp.inbox.new')}</PhonePill> : null}

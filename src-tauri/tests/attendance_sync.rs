@@ -629,3 +629,52 @@ async fn a_substitute_assigned_after_join_gets_the_class_roster_over_lan_pull() 
     let addr: Option<String> = phone.query_row("SELECT address FROM student WHERE id=?1", [&va[0]], |r| r.get(0)).unwrap();
     assert!(addr.is_none(), "not her class: address withheld");
 }
+
+/// Rows the school PC deletes (any synced table, via the change feed) reach a joined
+/// device as tombstones over LAN pull: a cancelled substitution disappears from the
+/// phone; a row deleted and re-created in the same batch survives; a row behind an
+/// unsent local change is kept until the school PC answers that change.
+#[tokio::test]
+async fn school_pc_deletes_reach_the_phone_over_lan_pull() {
+    let server = server();
+    let mut phone = joined_phone(&server, "dev-phone", "stf-meena");
+    let today = vidya_lib::commands::today();
+    let sub = |id: &str| {
+        format!(
+            "INSERT INTO substitution(id,date,absent_teacher_id,substitute_teacher_id,class_id,period_no,includes_attendance) \
+             VALUES ('{id}','{today}','stf-nair','stf-meena','cls-4a',NULL,0)"
+        )
+    };
+    server.execute_batch(&format!("{}; {};", sub("sub-gone"), sub("sub-back"))).unwrap();
+
+    let server = Arc::new(Mutex::new(server));
+    let t = LoopbackTransport::new(server.clone(), DeviceAuth { device_id: "dev-phone".into(), staff_id: "stf-meena".into() }, now());
+    sync_once(&mut phone, &t).await.unwrap();
+    let held = |c: &Connection, id: &str| -> i64 { c.query_row("SELECT COUNT(*) FROM substitution WHERE id=?1", [id], |r| r.get(0)).unwrap() };
+    assert_eq!((held(&phone, "sub-gone"), held(&phone, "sub-back")), (1, 1));
+
+    // The Principal cancels one cover, and replaces the other in place (delete + re-insert).
+    server
+        .lock()
+        .unwrap()
+        .execute_batch(&format!("DELETE FROM substitution WHERE id IN ('sub-gone','sub-back'); {};", sub("sub-back")))
+        .unwrap();
+    sync_once(&mut phone, &t).await.unwrap();
+    assert_eq!(held(&phone, "sub-gone"), 0, "the cancelled cover is gone from the phone");
+    assert_eq!(held(&phone, "sub-back"), 1, "the re-created row is not deleted by its earlier tombstone");
+
+    // A tombstone for a row with an unsent local change leaves it in place.
+    phone.execute_batch("PRAGMA foreign_keys = OFF").unwrap(); // the absent teacher isn't on the phone
+    phone.execute("INSERT INTO substitution(id,date,absent_teacher_id,substitute_teacher_id,class_id,period_no,includes_attendance) VALUES ('sub-mine',?1,'stf-nair','stf-meena','cls-4a',NULL,0)", [&today]).unwrap();
+    phone
+        .execute(
+            "INSERT INTO outbox(op_id,hlc,device_id,staff_id,audience,\"table\",record_id,kind,payload,server_epoch) \
+             VALUES ('op-mine','h','dev-phone','stf-meena','school','substitution','sub-mine','update','{}',1)",
+            [],
+        )
+        .unwrap();
+    let del = |id: &str| vidya_lib::sync::protocol::Delete { table: "substitution".into(), record_id: id.into() };
+    let removed = vidya_lib::sync::engine::apply_tombstones(&phone, &[del("sub-mine"), del("sub-back"), del("nope")]).unwrap();
+    assert_eq!(removed, 1);
+    assert_eq!((held(&phone, "sub-mine"), held(&phone, "sub-back")), (1, 0));
+}

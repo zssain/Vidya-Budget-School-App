@@ -213,6 +213,7 @@ pub const COMMANDS: &[&str] = &[
     "sync_status",
     "sync_now",
     "list_sync_problems",
+    "dismiss_sync_problem",
     "list_conflicts",
     "resolve_conflict",
     "list_review_flags",
@@ -2166,6 +2167,49 @@ pub fn list_sync_problems(state: State<RtCtx>) -> CmdResult<Vec<SyncProblemDto>>
             })
             .collect())
     })
+}
+
+/// "Dismiss" on a refused change once the user has read why: marks MY rejection
+/// Inbox item read, so it leaves the list. Nothing is resent (the school PC would
+/// refuse the same op again); the user re-enters the change if it is still needed.
+#[tauri::command]
+pub fn dismiss_sync_problem(state: State<RtCtx>, id: String) -> CmdResult<()> {
+    let actor = state.require_session()?;
+    state.with_db(|conn| dismiss_sync_problem_logic(conn, &actor.id, &id))
+}
+
+pub fn dismiss_sync_problem_logic(conn: &rusqlite::Connection, staff_id: &str, id: &str) -> CmdResult<()> {
+    conn.execute(
+        "UPDATE notification SET read_at=strftime('%Y-%m-%dT%H:%M:%SZ','now') \
+         WHERE id=?1 AND staff_id=?2 AND kind='rejected' AND read_at IS NULL",
+        rusqlite::params![id, staff_id],
+    )?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod dismiss_sync_problem_tests {
+    use super::*;
+
+    #[test]
+    fn dismiss_removes_only_my_rejection() {
+        let mut c = crate::db::open_in_memory("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef").unwrap();
+        crate::db::run_migrations(&mut c).unwrap();
+        crate::seed::seed_demo_school(&mut c, now_utc()).unwrap();
+        c.execute_batch(
+            "INSERT INTO notification(id,staff_id,kind,title_key,vars_json,link) VALUES \
+               ('ntf-a','stf-meena','rejected','sync.rejected','{}','inbox'), \
+               ('ntf-b','stf-anita','rejected','sync.rejected','{}','inbox');",
+        )
+        .unwrap();
+        dismiss_sync_problem_logic(&c, "stf-meena", "ntf-a").unwrap();
+        dismiss_sync_problem_logic(&c, "stf-meena", "ntf-b").unwrap(); // not hers: no effect
+        let unread = |id: &str| -> bool {
+            c.query_row("SELECT read_at IS NULL FROM notification WHERE id=?1", [id], |r| r.get(0)).unwrap()
+        };
+        assert!(!unread("ntf-a"));
+        assert!(unread("ntf-b"));
+    }
 }
 
 #[tauri::command]

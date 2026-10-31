@@ -243,14 +243,32 @@ fn apply_pull_rows(conn: &Connection, pull: &PullResp) -> rusqlite::Result<usize
     for ch in &pull.changes {
         upsert_canonical(conn, &ch.table, &ch.payload)?;
     }
-    for del in &pull.deletes {
+    apply_tombstones(conn, &pull.deletes)?;
+    set_cursor(conn, pull.next_cursor)?;
+    Ok(pull.changes.len())
+}
+
+/// Remove rows the school PC deleted. A row behind an unsent local change is kept:
+/// that change is still on its way and the school PC answers it (refused, or a
+/// conflict the user sees) — deleting it here would lose the edit silently.
+/// Returns how many rows were removed.
+pub fn apply_tombstones(conn: &Connection, deletes: &[crate::sync::protocol::Delete]) -> rusqlite::Result<usize> {
+    let mut removed = 0;
+    for del in deletes {
         if !crate::sync::protocol::is_safe_ident(&del.table) {
             continue;
         }
-        conn.execute(&format!("DELETE FROM {} WHERE id=?1", del.table), params![del.record_id]).ok();
+        let pending: bool = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM outbox WHERE \"table\"=?1 AND record_id=?2)",
+            params![del.table, del.record_id],
+            |r| r.get(0),
+        )?;
+        if pending {
+            continue;
+        }
+        removed += conn.execute(&format!("DELETE FROM {} WHERE id=?1", del.table), params![del.record_id]).unwrap_or(0);
     }
-    set_cursor(conn, pull.next_cursor)?;
-    Ok(pull.changes.len())
+    Ok(removed)
 }
 
 /// The highest server epoch this device has ever trusted (§8.9 fencing).
