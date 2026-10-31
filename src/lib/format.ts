@@ -77,6 +77,18 @@ export function formatDateLong(date: Date): string {
   return `${weekday}, ${day} ${month}`;
 }
 
+const INTL_LOCALE: Record<string, string> = { en: 'en-IN', hi: 'hi-IN', te: 'te-IN' };
+
+/**
+ * The long weekday + day + month date in the app language (no year): English keeps
+ * the mock's "Wednesday, 23 September" shape exactly (formatDateLong); Hindi/Telugu
+ * use the platform's own Indian-locale wording ("बुधवार, 23 सितंबर").
+ */
+export function formatDateLongIn(date: Date, lang: string): string {
+  if (lang !== 'hi' && lang !== 'te') return formatDateLong(date);
+  return new Intl.DateTimeFormat(INTL_LOCALE[lang], { weekday: 'long', day: 'numeric', month: 'long' }).format(date);
+}
+
 /**
  * Format an academic session (April–March) from its start year.
  *
