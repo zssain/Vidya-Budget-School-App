@@ -34,7 +34,6 @@ fn identity_for(staff_id: &str) -> ClientIdentity {
         school_name: "Demo".into(),
         receipt_series: "R".into(),
         admission_series: "A".into(),
-        audience_keys: vec![],
         server_fingerprint: "fp".into(),
         server_addrs: vec!["192.168.0.188".into()],
         server_port: 47650,

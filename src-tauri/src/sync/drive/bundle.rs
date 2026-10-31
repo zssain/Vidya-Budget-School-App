@@ -92,6 +92,9 @@ pub fn bundle_properties(audience: &str, key_version: i64) -> BTreeMap<String, S
     p
 }
 
+/// LEGACY (format v1, audience-sealed). Nothing in the app seals or opens these any
+/// more and no audience keys are issued (P21 A8); kept only so tests can forge a
+/// legacy bundle and prove the school PC quarantines it.
 /// Seal one group of same-audience ops into a `.vop` body.
 pub fn seal_bundle(
     audience_key: &[u8; 32],

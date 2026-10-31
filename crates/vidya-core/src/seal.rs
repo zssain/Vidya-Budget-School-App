@@ -109,7 +109,7 @@ pub fn device_down_aad(device_id: &str) -> Vec<u8> {
 //
 // v1 sealed the response under SHA-256(invite code) and put the code in the
 // plaintext request, so anyone able to read `exchange/joins/` could open the
-// response (device token, session key, every audience key). v2:
+// response (device token, session key). v2:
 //   * the web invite carries a fresh 256-bit `secret` in the URL FRAGMENT (never
 //     sent to the host, never uploaded); the short code is not used on this route;
 //   * the request carries only non-secret fields + `proof` =

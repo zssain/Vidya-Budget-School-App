@@ -64,7 +64,6 @@ fn joined_phone(server: &Connection, device: &str, staff: &str) -> Connection {
             school_name: "Demo".into(),
             receipt_series: "A9".into(),
             admission_series: "A9".into(),
-            audience_keys: vec![],
             server_fingerprint: "fp".into(),
             server_addrs: vec![],
             server_port: 47650,

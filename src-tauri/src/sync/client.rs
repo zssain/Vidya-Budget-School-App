@@ -1,5 +1,5 @@
 //! Client-side identity for a device that JOINED a school (Phase B). A client keeps
-//! its own credentials (device id/token, session key, audience keys) plus how to reach
+//! its own credentials (device id/token, session key) plus how to reach
 //! its school server (pinned TLS fingerprint + LAN addresses), so the app can run as a
 //! Client (`DeviceMode::Client`) and sync. Stored as one JSON blob in the encrypted
 //! `app_kv` table.
@@ -9,7 +9,7 @@
 //! deferred in P04; this module is its foundation.
 
 use crate::kv;
-use crate::sync::protocol::{AudienceKey, JoinPayload, JoinReq, JoinResp};
+use crate::sync::protocol::{JoinPayload, JoinReq, JoinResp};
 use rusqlite::{Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
@@ -30,9 +30,6 @@ pub struct ClientIdentity {
     pub school_name: String,
     pub receipt_series: String,
     pub admission_series: String,
-    /// Per-audience keys this device holds (to open sealed bundles on the Drive/relay
-    /// route; the LAN route is plain over pinned TLS and does not need them).
-    pub audience_keys: Vec<AudienceKey>,
     /// The school server's pinned TLS cert fingerprint (from the invite).
     pub server_fingerprint: String,
     /// LAN addresses advertised for the server (from the invite; refreshed by mDNS).
@@ -64,7 +61,6 @@ pub fn apply_join_response(
         school_name: resp.school.name.clone(),
         receipt_series: resp.receipt_series.clone(),
         admission_series: resp.admission_series.clone(),
-        audience_keys: resp.audience_keys.clone(),
         server_fingerprint: server_fingerprint.to_string(),
         server_addrs: server_addrs.to_vec(),
         server_port,
@@ -373,7 +369,6 @@ mod tests {
             staff: StaffLite { id: "stf-1".into(), name: "Meena".into(), role: "teacher".into() },
             receipt_series: "A2".into(),
             admission_series: "ADM".into(),
-            audience_keys: vec![AudienceKey { audience: "class:5".into(), key_b64: "AAAA".into(), version: 1 }],
             session_key: "c2Vzc2lvbg==".into(),
             school: SchoolLite { id: "sch-1".into(), name: "Saraswati".into() },
             lease_expires_at: "2026-10-31T00:00:00Z".into(),
@@ -400,7 +395,6 @@ mod tests {
         assert_eq!(id.server_addrs, vec!["192.168.1.5", "192.168.1.6"]);
         assert_eq!(id.server_port, 47650);
         assert_eq!(id.bootstrap_cursor, 42);
-        assert_eq!(id.audience_keys.len(), 1);
         // The known epoch is fenced to the server's epoch.
         assert_eq!(crate::sync::engine::known_epoch(&c).unwrap(), 3);
 

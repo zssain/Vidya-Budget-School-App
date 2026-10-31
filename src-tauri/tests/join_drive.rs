@@ -87,7 +87,16 @@ fn pwa_join_via_drive_answers_with_a_sealed_response_the_device_can_open() {
 
     let sealed = answer_join_request(&mut c, &req_bytes, now()).unwrap();
     let resp = open_resp(&secret, &invite_id, "req-abc", &sealed).expect("device opens its response");
-    assert!(!resp.device_token.is_empty() && !resp.session_key.is_empty() && !resp.audience_keys.is_empty());
+    assert!(!resp.device_token.is_empty() && !resp.session_key.is_empty());
+    // A8: a join issues no audience keys — nothing school PC → device is sealed under
+    // one, so there is nothing a later revocation would have to rotate.
+    let plain = vidya_core::seal::open(
+        &vidya_core::seal::join_v2_response_key(&secret, "req-abc"),
+        &vidya_core::seal::join_v2_aad(&invite_id, "req-abc", "sch-demo"),
+        &sealed,
+    )
+    .unwrap();
+    assert!(!String::from_utf8_lossy(&plain).contains("audience_key"));
     assert_eq!(resp.staff.id, "stf-meena");
 
     // A Drive reader holds the request + response but not the secret: nothing derivable

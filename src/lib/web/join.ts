@@ -103,18 +103,12 @@ export async function requestJoin(drive: DriveApi, payload: InvitePayload): Prom
   return requestId
 }
 
-interface AudienceKey {
-  audience: string
-  key_b64: string
-  version: number
-}
 interface JoinResp {
   device_id: string
   device_token: string
   staff: { id: string; name: string; role: string }
   receipt_series: string
   admission_series: string
-  audience_keys: AudienceKey[]
   session_key: string
   school: { id: string; name: string }
   lease_expires_at: string
@@ -122,7 +116,7 @@ interface JoinResp {
 }
 
 /** Poll once for the school PC's sealed join response. Returns true once joined (the
- *  identity + audience keys are stored for the sync engine); false while waiting. */
+ *  identity + session key are stored for the sync engine); false while waiting. */
 export async function pollJoinResponse(
   drive: DriveApi,
   payload: InvitePayload,
@@ -141,7 +135,8 @@ export async function pollJoinResponse(
   )
   const resp = JSON.parse(decoder.decode(plain)) as JoinResp
 
-  // Persist the joined identity + the audience keys the Drive sync engine reads.
+  // Persist the joined identity + the session key the Drive sync engine reads (no
+  // audience keys: every school-PC -> device payload is sealed per device).
   await kvPut('device_id', resp.device_id)
   await secretPut('device_token', resp.device_token)
   await kvPut('staff', resp.staff)
@@ -152,19 +147,11 @@ export async function pollJoinResponse(
   await secretPut('session_key', resp.session_key)
   await kvPut('lease_expires_at', resp.lease_expires_at)
   await kvPut('server_epoch', resp.server_epoch)
-  const keys: Record<string, string> = {}
-  let keyver = 1
-  for (const k of resp.audience_keys) {
-    keys[k.audience] = k.key_b64
-    keyver = k.version
-  }
-  await secretPut('audience_keys', keys)
-  await kvPut('audience_keyver', keyver)
   await secretPut(FRAGMENT_KV, null) // join complete — clear the stash
   return true
 }
 
-/** Whether this device has completed a join (has an identity + audience keys). */
+/** Whether this device has completed a join (has an identity + session key). */
 export async function hasJoined(): Promise<boolean> {
-  return (await kvGet<string>('device_id')) != null && (await kvGet<unknown>('audience_keys')) != null
+  return (await kvGet<string>('device_id')) != null && (await secretGet<string>('session_key')) != null
 }

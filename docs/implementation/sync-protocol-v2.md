@@ -11,7 +11,7 @@ production assurance).
 |---|---|---|
 | Device token (32 random bytes, hex) | device; server stores SHA-256 | LAN bearer auth (`/v1/sync/*`) |
 | Session key (32 bytes, base64) | device + server (`device.session_key`) | per-device keys: `c2s`, `s2c` = HMAC-expand(session_key, "vidya/relay/{c2s,s2c}/v1") |
-| Audience keys (`admin`, `finance`, `class:<id>`) | server + devices in that audience | legacy bundle sealing; **no longer used for uploads** |
+| Audience keys | nobody (removed) | no longer issued at join (A8): nothing in either direction is sealed under an audience key, so revoking a device needs no key rotation — its token and session key die with the device row |
 | Device PIN | device only (encrypted `app_kv` / PWA kv) | unlocks the UI session; never sent anywhere. On the PWA it also derives (Argon2id, separate salt) the in-memory key that wraps the stored secrets (K2) |
 
 The join token authenticates the **device**, never a human session. A joined device
@@ -73,7 +73,8 @@ fields, privacy actions, backups, bulk import, transfers, guardian edits, store 
 * **Drive (down export):** each Drive pass, for every live device whose data moved,
   `exchange/down/<device>.vdown` = seal(`s2c`, AAD `vidya/down/v1\n<device>`,
   `{v:1, device_id, cursor, server_epoch, changes}`) — the device's **complete**
-  role-scoped data. The PWA replaces all local stores from it in one IndexedDB
+  role-scoped data. A revoked or removed device gets no new export and its old
+  `.vdown` is deleted on the next pass. The PWA replaces all local stores from it in one IndexedDB
   transaction (keeping rows with pending local edits); native off-LAN applies it.
 
 ## 4. Drive uploads (device → school PC)

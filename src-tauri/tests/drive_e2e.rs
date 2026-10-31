@@ -256,12 +256,16 @@ fn down_export_reaches_only_its_device_and_tracks_changes() {
     assert_eq!(exchange::write_down_exports(&s, &acct, &l.exchange).unwrap(), 2);
     let again = exchange::read_down_export(&acct, &l.exchange, "dev-ipad", &sk).unwrap().unwrap();
     assert!(again.cursor > mine.cursor);
-    // Revoked → no more exports for that device.
-    s.execute("UPDATE device SET revoked_at='t' WHERE id='dev-other'", []).unwrap();
+    // Revoked → no more exports for that device, and its stale export is taken down.
+    assert!(exchange::read_down_export(&acct, &l.exchange, "dev-other", &sk_other).unwrap().is_some());
+    let mut s = s;
+    vidya_lib::server::service::revoke_device(&mut s, "dev-other", now()).unwrap();
     s.execute(
         "INSERT INTO op_log(op_id,hlc,device_id,staff_id,\"table\",record_id,kind,payload,applied_at) VALUES ('op-y','h','d','stf-priya','class','cls-5a','update','{}','t')",
         [],
     )
     .unwrap();
     assert_eq!(exchange::write_down_exports(&s, &acct, &l.exchange).unwrap(), 1);
+    assert!(exchange::read_down_export(&acct, &l.exchange, "dev-other", &sk_other).unwrap().is_none());
+    assert!(exchange::read_down_export(&acct, &l.exchange, "dev-ipad", &sk).unwrap().is_some());
 }

@@ -14,7 +14,6 @@
 //! * [`DriveApi`] — the minimal Drive surface the sync engine needs, so the real
 //!   `drive.file` client and the test [`fake::FakeDrive`] are interchangeable.
 //! * [`bundle`] — the `.vop` seal/verify + chunking format (§11).
-//! * [`keys`] — the server-side versioned audience-key store + rotation (§8.8).
 //! * [`fake::FakeDrive`] — a local, permission-enforcing, fault-injecting Drive
 //!   for the Step 9 harness (a "local folder implementing the same trait").
 
@@ -24,7 +23,6 @@ pub mod exchange;
 pub mod fake;
 pub mod google;
 pub mod join;
-pub mod keys;
 pub mod live;
 pub mod oauth;
 

@@ -322,7 +322,6 @@ fn provision_from_invite(
         staff: StaffLite { id: staff_id.clone(), name, role },
         receipt_series: series.clone(),
         admission_series: series,
-        audience_keys: audience_keys_for(conn, &staff_id).unwrap_or_default(),
         session_key,
         school: SchoolLite { id: school.school_id.clone(), name: school.school_name.clone() },
         lease_expires_at: lease,
@@ -330,39 +329,6 @@ fn provision_from_invite(
         protocol: PROTOCOL,
         server_epoch: school.server_epoch,
     })
-}
-
-/// Audience sealing keys for a staff member's audiences (admin/finance/class:*).
-/// Delivered at join. Keys are the server's **persisted, versioned** audience
-/// keys (`sync::drive::keys`, `app_kv:audience_key:<audience>`), created on demand
-/// — so every device in an audience is sealed the SAME key (the pre-P06 code
-/// minted a fresh key each call and never stored it). Rotation on assignment
-/// change is `keys::rotate` (P06 Step 3).
-fn audience_keys_for(conn: &Connection, staff_id: &str) -> rusqlite::Result<Vec<AudienceKey>> {
-    let role: String = conn.query_row("SELECT role FROM staff WHERE id=?1", params![staff_id], |r| r.get(0))?;
-    let mut audiences: Vec<String> = Vec::new();
-    match role.as_str() {
-        "principal" => {
-            audiences.push("admin".into());
-            audiences.push("finance".into());
-            let mut s = conn.prepare("SELECT id FROM class")?;
-            for c in s.query_map([], |r| r.get::<_, String>(0))? {
-                audiences.push(format!("class:{}", c?));
-            }
-        }
-        "accountant" => audiences.push("finance".into()),
-        _ => {
-            let mut s = conn.prepare("SELECT id FROM class WHERE class_teacher_id=?1")?;
-            for c in s.query_map(params![staff_id], |r| r.get::<_, String>(0))? {
-                audiences.push(format!("class:{}", c?));
-            }
-        }
-    }
-    let mut out = Vec::new();
-    for a in audiences {
-        out.push(crate::sync::drive::keys::get_or_create(conn, &a)?);
-    }
-    Ok(out)
 }
 
 // ----------------------------------------------------------- /sync/push ------
@@ -474,8 +440,12 @@ pub fn heartbeat(conn: &mut Connection, auth: &DeviceAuth, req: &HeartbeatReq, n
     Ok(HeartbeatResp { server_time: now_iso_s, revoked: revoked.is_some(), lease_expires_at: lease, protocol: PROTOCOL, server_epoch: epoch })
 }
 
-/// Revoke a device: kill its token immediately (§9). Audience-key rotation for
-/// Drive bundles happens in Phase 6.
+/// Revoke a device: kill its token immediately (§9). From then on the device is
+/// refused on every LAN route, its Drive uploads are quarantined and no Drive down
+/// export or ack is sealed for it again. There is no audience key to rotate (P21
+/// A8): every school PC -> device payload is sealed per device (s2c of its own
+/// session key) or sent over pinned TLS to an authenticated token, and joins issue
+/// no audience keys, so a revoked device holds no key that opens future data.
 pub fn revoke_device(conn: &mut Connection, device_id: &str, now: time::OffsetDateTime) -> rusqlite::Result<()> {
     let now_iso_s = now.format(&time::format_description::well_known::Rfc3339).unwrap_or_default();
     conn.execute("UPDATE device SET revoked_at=?1 WHERE id=?2", params![now_iso_s, device_id])?;

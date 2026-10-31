@@ -137,14 +137,6 @@ pub struct SchoolLite {
     pub name: String,
 }
 
-/// A per-audience sealing key (§8.8). `key_b64` is the raw key; version supports rotation.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct AudienceKey {
-    pub audience: String,
-    pub key_b64: String,
-    pub version: i64,
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct JoinResp {
     pub device_id: String,
@@ -152,7 +144,11 @@ pub struct JoinResp {
     pub staff: StaffLite,
     pub receipt_series: String,
     pub admission_series: String,
-    pub audience_keys: Vec<AudienceKey>,
+    // No audience keys (P21 A8): nothing school PC -> device is sealed under an
+    // audience key any more (uploads use the device's c2s key, the Drive down export
+    // and acks its s2c key, LAN is pinned TLS), so a join issues none and a revoked
+    // device holds nothing that opens future data. Per-device keys die with the
+    // device row (`revoked_at` -> never sealed for again).
     pub session_key: String,
     pub school: SchoolLite,
     pub lease_expires_at: String,
@@ -356,7 +352,6 @@ mod tests {
             device_id: "d".into(), device_token: "tok".into(),
             staff: StaffLite { id: "st".into(), name: "N".into(), role: "teacher".into() },
             receipt_series: "A2".into(), admission_series: "A2".into(),
-            audience_keys: vec![AudienceKey { audience: "class:1".into(), key_b64: "AA==".into(), version: 1 }],
             session_key: "AA==".into(), school: SchoolLite { id: "s".into(), name: "S".into() },
             lease_expires_at: "t".into(), bootstrap_cursor: 0, protocol: PROTOCOL, server_epoch: 1,
         });

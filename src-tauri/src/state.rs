@@ -263,7 +263,6 @@ mod tests {
             school_name: "S".into(),
             receipt_series: "R".into(),
             admission_series: "A".into(),
-            audience_keys: vec![],
             server_fingerprint: "fp".into(),
             server_addrs: vec![],
             server_port: 47650,

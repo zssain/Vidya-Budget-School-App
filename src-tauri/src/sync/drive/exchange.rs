@@ -4,11 +4,11 @@
 //! test [`super::fake::FakeDrive`], so the exchange mechanics are provable without
 //! Google (and without the Step-0 spike — only the real client + OAuth are gated).
 //!
-//! * [`push_outbox`] (device) — group the outbox by audience, seal each group into
-//!   a `.vop`, upload (temp name → verify-by-readback → rename), mark rows
+//! * [`push_outbox`] (device) — seal the outbox with this device's own c2s key into
+//!   `.vop` bundles (format v2), upload (temp name → verify-by-readback → rename), mark rows
 //!   `shared_drive`. Retry-safe: the final name is a pure function of the ops.
 //! * [`import_all`] (server) — discover every `ops-*` folder, download bundles,
-//!   open with the right audience key **version**, apply all ops in global HLC
+//!   open with the owning live device's c2s key, apply all ops in global HLC
 //!   order through the normal [`apply_op`] path (idempotent by op_id), archive
 //!   processed bundles to `_done/`. Acks are written by [`write_ack`].
 
@@ -30,12 +30,7 @@ pub enum ExchangeError {
     Bundle(String),
     #[error("db: {0}")]
     Db(#[from] rusqlite::Error),
-    #[error("no held key for audience {0}")]
-    NoKey(String),
 }
-
-/// A device's held audience keys (delivered at join / on change): (audience, version) → raw key.
-pub type HeldKeys = BTreeMap<(String, i64), [u8; 32]>;
 
 // ---- tables that carry the §7 sync columns (so `shared_drive` is meaningful) --
 fn is_synced(table: &str) -> bool {
@@ -339,10 +334,16 @@ pub fn write_down_exports(conn: &Connection, drive: &impl DriveApi, exchange_fol
         let rows = st.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
         rows.collect::<rusqlite::Result<_>>()?
     };
-    if devices.is_empty() {
-        return Ok(0);
-    }
     let down = drive.ensure_folder(exchange_folder, DOWN)?;
+    // A revoked (or removed) device's last export is taken down: nothing new is ever
+    // sealed for it, and its stale copy should not linger in the shared folder (A8).
+    for f in drive.list(&down)? {
+        if let Some(id) = f.name.strip_suffix(".vdown") {
+            if !devices.iter().any(|(d, _, _)| d == id) {
+                drive.delete(&f.id).ok();
+            }
+        }
+    }
     let mut written = 0;
     for (device, staff, sk) in devices {
         let marker = format!("down_cursor:{device}");

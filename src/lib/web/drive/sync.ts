@@ -1,8 +1,7 @@
 // The Drive sync route in the browser (Phase 19, Step 4). Pushes sealed `.vop`
-// bundles to exchange/ops-<device_id>/, reads the school PC's acks, and pulls peers'
-// bundles for audiences this device holds a key for — applying them PROVISIONALLY
-// (§8.3). Sealing is the WASM (byte-identical to the app); the audience keys and the
-// device/school identity come from the join (Step 5, stored in kv). Runtime is
+// device-sealed bundles to exchange/ops-<device_id>/, reads the school PC's acks and
+// its per-device down export (§8.3). Sealing is the WASM (byte-identical to the app);
+// the session key and the device/school identity come from the join (Step 5, stored in kv). Runtime is
 // verified by the Playwright/fake-Drive harness (Step 9); this module is pure logic
 // over the DriveApi interface, so the harness can drive it with FakeDrive.
 
@@ -18,17 +17,12 @@ const MAX_OPS_PER_BUNDLE = 500 // matches vidya-core/Rust (§11)
 const enc = new TextEncoder()
 const dec = new TextDecoder()
 
-/** audience → base64 32-byte key, populated at join (§8.8). */
-type AudienceKeys = Record<string, string>
-
 interface ExchangeCtx {
   drive: DriveApi
   exchangeId: string
   deviceId: string
   /** base64 per-device session key (from join) — opens this device's acks. */
   sessionKey: string
-  keys: AudienceKeys
-  keyVersion: number
 }
 
 /** Resolve (creating) Vidya/<school> (<school_id>)/exchange; return its folder id. */
@@ -163,22 +157,19 @@ export async function buildCtx(drive: DriveApi): Promise<ExchangeCtx | null> {
   const schoolName = await kvGet<string>('school_name')
   const schoolId = await kvGet<string>('school_id')
   if (!deviceId || !schoolName || !schoolId) return null
-  // K2: the session + audience keys are PIN-wrapped, so they can only be read while
-  // the app is unlocked. While locked this pass is skipped (null) — the outbox keeps
-  // every op and the loop resumes as soon as the PIN is entered (startSync kicks it).
-  let keys: AudienceKeys | undefined
+  // K2: the session key is PIN-wrapped, so it can only be read while the app is
+  // unlocked. While locked this pass is skipped (null) — the outbox keeps every op and
+  // the loop resumes as soon as the PIN is entered (startSync kicks it).
   let sessionKey: string | undefined
   try {
-    keys = await secretGet<AudienceKeys>('audience_keys')
     sessionKey = await secretGet<string>('session_key')
   } catch (e) {
     if ((e as { code?: string })?.code === 'LOCKED') return null
     throw e
   }
-  if (!keys || !sessionKey) return null
-  const keyVersion = (await kvGet<number>('audience_keyver')) ?? 1
+  if (!sessionKey) return null
   const exchangeId = await resolveExchange(drive, schoolName, schoolId)
-  return { drive, exchangeId, deviceId, sessionKey, keys, keyVersion }
+  return { drive, exchangeId, deviceId, sessionKey }
 }
 
 /** Run one sync pass immediately (best effort) — e.g. right after a local write. */
