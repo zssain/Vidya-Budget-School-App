@@ -5877,25 +5877,77 @@ pub struct TeacherClassDto {
     pub class_id: String,
     pub display: String,
     pub submitted_today: bool,
+    /// Today's sheet: `not_started` (no sheet yet), `draft` or `submitted`.
+    pub status: String,
+    /// Students enrolled in the class today (the sheet's roster size).
+    pub student_count: i64,
+    /// True when the teacher may mark this class today only through a substitution
+    /// or an approved attendance-duty grant (not as its class teacher).
+    pub duty: bool,
 }
 
 #[derive(Debug, Serialize)]
 pub struct TeacherDashboard {
+    /// Every class the teacher may take attendance for TODAY: the classes they are
+    /// class teacher of, then any covered by a substitution / attendance-duty grant
+    /// for today (the same rule `attendance_write` enforces).
     pub classes: Vec<TeacherClassDto>,
+    /// Classes the teacher is class teacher of (report-card remarks).
+    pub class_teacher_of: Vec<String>,
+    /// class_subject ids the teacher teaches (marks entry).
+    pub class_subject_ids: Vec<String>,
 }
 
 pub fn dashboard_teacher_logic(conn: &mut Connection, actor_s: &SessionStaff, today: &str) -> CmdResult<TeacherDashboard> {
-    let mut stmt = conn.prepare(
-        "SELECT c.id, c.display, \
-           EXISTS(SELECT 1 FROM attendance_sheet s WHERE s.class_id=c.id AND s.date=?2 AND s.status='submitted') \
-         FROM class c WHERE c.class_teacher_id=?1 ORDER BY c.sort_order",
-    )?;
-    let classes = stmt
-        .query_map(params![actor_s.id, today], |r| {
-            Ok(TeacherClassDto { class_id: r.get(0)?, display: r.get(1)?, submitted_today: r.get::<_, i64>(2)? == 1 })
-        })?
-        .collect::<rusqlite::Result<_>>()?;
-    Ok(TeacherDashboard { classes })
+    let day = &today[..today.len().min(10)];
+    let mut class_teacher_of: Vec<String> = Vec::new();
+    let mut class_subject_ids: Vec<String> = Vec::new();
+    // (class_id, duty) in display order: own classes first, then today's grants.
+    let mut wanted: Vec<(String, bool)> = Vec::new();
+    {
+        let mut st = conn.prepare("SELECT id FROM class WHERE class_teacher_id=?1 ORDER BY sort_order, display")?;
+        for id in st.query_map(params![actor_s.id], |r| r.get::<_, String>(0))? {
+            let id = id?;
+            class_teacher_of.push(id.clone());
+            wanted.push((id, false));
+        }
+        let mut st = conn.prepare("SELECT id FROM class_subject WHERE teacher_id=?1 ORDER BY id")?;
+        for id in st.query_map(params![actor_s.id], |r| r.get::<_, String>(0))? {
+            class_subject_ids.push(id?);
+        }
+    }
+    if actor_s.role == "teacher" {
+        let grants = crate::sync::apply::attendance_grants_for(conn, &actor_s.id, day)?;
+        for cid in permissions::granted_attendance_classes(&grants, day) {
+            if !wanted.iter().any(|(c, _)| *c == cid) {
+                wanted.push((cid, true));
+            }
+        }
+    }
+    let mut classes = Vec::with_capacity(wanted.len());
+    for (class_id, duty) in wanted {
+        let Some(display) = conn
+            .query_row("SELECT display FROM class WHERE id=?1", params![class_id], |r| r.get::<_, String>(0))
+            .optional()?
+        else {
+            continue;
+        };
+        let status: Option<String> = conn
+            .query_row(
+                "SELECT status FROM attendance_sheet WHERE class_id=?1 AND substr(date,1,10)=?2",
+                params![class_id, day],
+                |r| r.get(0),
+            )
+            .optional()?;
+        let student_count: i64 = conn.query_row(
+            "SELECT COUNT(*) FROM enrollment WHERE class_id=?1 AND from_date<=?2 AND (to_date IS NULL OR to_date>=?2)",
+            params![class_id, day],
+            |r| r.get(0),
+        )?;
+        let status = status.unwrap_or_else(|| "not_started".into());
+        classes.push(TeacherClassDto { submitted_today: status == "submitted", class_id, display, status, student_count, duty });
+    }
+    Ok(TeacherDashboard { classes, class_teacher_of, class_subject_ids })
 }
 
 // ================================================================ misc ========
@@ -10326,6 +10378,62 @@ mod tests {
         // The substitution is linked to the leave record.
         let linked: i64 = c.query_row("SELECT COUNT(*) FROM substitution WHERE absent_teacher_id='stf-meena' AND date='2026-09-24' AND leave_record_id IS NOT NULL", [], |r| r.get(0)).unwrap();
         assert!(linked > 0, "substitution linked to the leave record");
+    }
+
+    #[test]
+    fn teacher_dashboard_lists_own_and_duty_classes_for_today() {
+        let mut c = seeded();
+        // Seeded day: Meena is class teacher of V-A (submitted) and VII-B (draft).
+        let d = dashboard_teacher_logic(&mut c, &teacher("stf-meena"), "2026-09-23").unwrap();
+        let ids: Vec<&str> = d.classes.iter().map(|x| x.class_id.as_str()).collect();
+        assert_eq!(ids, vec!["cls-5a", "cls-7b"]);
+        assert_eq!(d.classes[0].status, "submitted");
+        assert!(d.classes[0].submitted_today);
+        assert_eq!(d.classes[1].status, "draft");
+        assert!(d.classes.iter().all(|x| !x.duty));
+        let roster: i64 = c
+            .query_row("SELECT COUNT(*) FROM enrollment WHERE class_id='cls-5a' AND to_date IS NULL", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(d.classes[0].student_count, roster);
+        assert_eq!(d.class_teacher_of, vec!["cls-5a".to_string(), "cls-7b".to_string()]);
+        let own_cs: i64 = c.query_row("SELECT COUNT(*) FROM class_subject WHERE teacher_id='stf-meena'", [], |r| r.get(0)).unwrap();
+        assert_eq!(d.class_subject_ids.len() as i64, own_cs);
+        assert!(d.class_subject_ids.contains(&"cs-5a-eng".to_string()));
+        // Next day: no sheet yet.
+        let d = dashboard_teacher_logic(&mut c, &teacher("stf-meena"), "2026-09-24").unwrap();
+        assert_eq!(d.classes[0].status, "not_started");
+
+        // Before any cover, Anita has no duty row for V-A.
+        let before = dashboard_teacher_logic(&mut c, &teacher("stf-anita"), "2026-09-24").unwrap();
+        assert!(!before.classes.iter().any(|x| x.class_id == "cls-5a"));
+        // Meena on leave on the 24th, Anita assigned: Anita gets a duty row that day
+        // (and may really mark it: attendance_write accepts the same grant) ...
+        let r = request_leave_logic(&mut c, &teacher("stf-meena"), &leave_input("lt-casual", "2026-09-24", "2026-09-24")).unwrap();
+        decide_request_logic(&mut c, &principal(), DeviceMode::Server, &r.id, "approve", None).unwrap();
+        assign_substitute_logic(&mut c, &principal(), "2026-09-24", "stf-meena", "stf-anita").unwrap();
+        let d = dashboard_teacher_logic(&mut c, &teacher("stf-anita"), "2026-09-24").unwrap();
+        let duty = d.classes.iter().find(|x| x.class_id == "cls-5a").expect("duty class listed");
+        assert!(duty.duty);
+        assert_eq!(duty.student_count, roster);
+        assert!(!d.class_teacher_of.contains(&"cls-5a".to_string()));
+        // Own classes come first, duty classes after.
+        assert!(!d.classes[0].duty);
+        assert!(require_may_take_attendance(&c, &teacher("stf-anita"), "cls-5a", "2026-09-24").is_ok());
+        // ... but not on another day.
+        let other = dashboard_teacher_logic(&mut c, &teacher("stf-anita"), "2026-09-25").unwrap();
+        assert!(!other.classes.iter().any(|x| x.class_id == "cls-5a"));
+
+        // Submitting as the substitute flips the status.
+        let students: Vec<String> = {
+            let mut st = c.prepare("SELECT student_id FROM enrollment WHERE class_id='cls-5a' AND to_date IS NULL").unwrap();
+            st.query_map([], |r| r.get::<_, String>(0)).unwrap().map(|x| x.unwrap()).collect()
+        };
+        let marks: Vec<MarkInput> = students.iter().map(|s| MarkInput { student_id: s.clone(), mark: "P".into() }).collect();
+        submit_attendance_logic(&mut c, &teacher("stf-anita"), "cls-5a", "2026-09-24", &marks).unwrap();
+        let d = dashboard_teacher_logic(&mut c, &teacher("stf-anita"), "2026-09-24").unwrap();
+        let duty = d.classes.iter().find(|x| x.class_id == "cls-5a").unwrap();
+        assert_eq!(duty.status, "submitted");
+        assert!(duty.submitted_today);
     }
 
     // ---- Phase 13: calendar ------------------------------------------------

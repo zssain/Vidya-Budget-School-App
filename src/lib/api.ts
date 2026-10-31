@@ -711,8 +711,24 @@ export interface AccountantDashboard {
   students_with_dues: number
 }
 
+/** A class the teacher may take attendance for today (own, or a duty/substitute grant). */
+export interface TeacherClassDto {
+  class_id: string
+  display: string
+  submitted_today: boolean
+  /** Today's sheet: 'not_started' | 'draft' | 'submitted'. */
+  status: string
+  student_count: number
+  /** Covered today through a substitution / attendance-duty grant, not as class teacher. */
+  duty: boolean
+}
+
 export interface TeacherDashboard {
-  classes: { class_id: string; display: string; submitted_today: boolean }[]
+  classes: TeacherClassDto[]
+  /** Classes the teacher is class teacher of (report-card remarks). */
+  class_teacher_of: string[]
+  /** class_subject ids the teacher teaches (marks entry). */
+  class_subject_ids: string[]
 }
 
 export interface RecoveryKeyDto {
