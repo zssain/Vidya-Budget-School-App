@@ -151,7 +151,34 @@ jobs:
         with:
           distribution: temurin
           java-version: '17'
+      # setup-android@v3 defaults fail on the current runner two ways: its own
+      # `sdkmanager --licenses` errors mid-accept, and its default package set includes
+      # the obsolete `tools` package ("Failed to find package 'tools'" → exit 1). So
+      # disable both and accept + install exactly what we need manually below.
       - uses: android-actions/setup-android@v3
+        with:
+          accept-android-sdk-licenses: false
+          packages: ''
+      - name: Accept SDK licenses + ensure API 36 packages + NDK (incl. OpenSSL cross tools)
+        run: |
+          SDK="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          yes | "$SDK" --licenses >/dev/null 2>&1 || true
+          "$SDK" "platform-tools" "platforms;android-36" "build-tools;36.0.0" >/dev/null 2>&1 || true
+          # Tauri needs the NDK; use the runner's preinstalled one.
+          NDK="${ANDROID_NDK_LATEST_HOME:-${ANDROID_NDK_ROOT:-}}"
+          echo "NDK_HOME=$NDK" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_HOME=$NDK" >> "$GITHUB_ENV"
+          echo "ANDROID_NDK_ROOT=$NDK" >> "$GITHUB_ENV"
+          # rusqlite(bundled-sqlcipher-vendored-openssl) builds OpenSSL from source for
+          # Android; its Makefile calls <triple>-ranlib/-ar, which NDK r23+ renamed to
+          # llvm-*. Symlink the old names to the llvm tools and put the toolchain on PATH.
+          TC="$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          for t in aarch64-linux-android armv7a-linux-androideabi arm-linux-androideabi; do
+            ln -sf "$TC/llvm-ranlib" "$TC/${t}-ranlib"
+            ln -sf "$TC/llvm-ar" "$TC/${t}-ar"
+          done
+          echo "$TC" >> "$GITHUB_PATH"
+          echo "using NDK at: $NDK (toolchain: $TC)"
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: aarch64-linux-android,armv7-linux-androideabi
