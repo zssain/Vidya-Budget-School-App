@@ -137,7 +137,7 @@ jobs:
           path: size-report.json
           if-no-files-found: error
 
-  # ---- Android debug build + size report ----------------------------------
+  # ---- Android unsigned release build + size report ----------------------------------
   android:
     name: Android — split APKs · size gate
     runs-on: ubuntu-latest
@@ -186,6 +186,8 @@ jobs:
       # Release profile, unsigned (no keystore in CI), ARM only — what phones get, so
       # the size gate measures the real download. A debug build is 270–770 MB per ABI
       # (unstripped symbols) and x86/x86_64 are emulator-only, as in release.yml.
+      - name: CI-only build config (throwaway licence key — not a release)
+        run: node scripts/write-ci-config.mjs
       - name: Build split APKs (release profile, unsigned, ARM only)
         run: npm run tauri android build -- --apk --split-per-abi --target aarch64 --target armv7
       - name: Size gate (download ≤ 40 MB, installed ≤ 50 MB)
