@@ -44,7 +44,7 @@ export default async function DashboardPage({ searchParams }: { searchParams: Pr
       </section>
 
       <h2 className="mb-2 mt-8 text-base font-semibold">Needs owner review</h2>
-      <p className="mb-2 text-xs text-slate-500">An issued offline perpetual licence cannot be remotely disabled. Refunds/disputes are recorded and future transfers/re-issues are blocked; nothing is changed on the school PC.</p>
+      <p className="mb-2 text-xs text-slate-500">An issued offline perpetual licence cannot be remotely disabled. Refunds/disputes are recorded and future transfers and issuance retries are blocked; nothing is changed on the school PC.</p>
       <Table head={["When", "Kind", "Target", "Detail", ""]} empty={reviews.length === 0}>
         {reviews.map((r) => (
           <tr key={r.id}>

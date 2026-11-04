@@ -1,10 +1,11 @@
 // Shared fixtures for the integration suite. All data is synthetic: fake schools,
 // fake contacts, TEST FIXTURE prices and fake (non-Razorpay) secrets.
-import { randomBytes, randomUUID } from "node:crypto";
+import { createPrivateKey, createPublicKey, randomBytes, randomUUID, sign as edSign, verify as edVerify } from "node:crypto";
 import pg from "pg";
 import {
   attachProviderOrder,
   createCheckoutOrder,
+  groupKey,
   ingestRazorpayWebhook,
   signWebhookBody,
   type Environment,
@@ -176,6 +177,83 @@ export async function fakeSigner(ctx: Ctx, issuanceId: string) {
     `UPDATE billing.jobs SET state = 'done', completed_at = now() WHERE dedupe_key = $1`,
     [`issue:${issuanceId}`],
   );
+}
+
+// ---------------------------------------------------------------------------------
+// A REAL test-key signer (ed25519 via node:crypto) producing the exact v2 artefact
+// format of services/licence-signer / tools/licence-maker. It is pinned to the
+// cross-crate golden vector (seed [42;32]) in durability.test.ts, so artefacts it
+// writes are byte-compatible with what vidya_core::licence::verify_v2 accepts.
+// TEST KEY ONLY — never a production key.
+
+/** The golden key pinned by licence-maker, vidya-core and services/licence-signer/tests/golden.rs. */
+export const GOLDEN_KEY =
+  "eyJ2IjoyLCJsaWNlbmNlX2lkIjoiMDE5M2I2YzAtMDAwMC03MDAwLTgwMDAtMDAwMDAwMDAwMDAxIiwic2Nob29sX25hbWUiOiJTYXJhc3dhdGkgUHVibGljIFNjaG9vbCIsIm1hY2hpbmVfY29kZSI6IjNOMFMtMTBZWC1KUUNSLVQiLCJpc3N1ZWRfYXQiOiIyMDI2LTA5LTI1VDAwOjAwOjAwWiIsInBsYW4iOiJwZXJwZXR1YWwiLCJtb2R1bGVzIjpbImNvcmUiXX0sel8zbFpx8xCuDxYhHoM9kZ6raBqbSkf-O3JKmdQ5t2OK9Z0ZYQO3RhjJdKu2gdWndFijhL48Powb0xSDAIoD";
+
+const PKCS8_ED25519 = Buffer.from("302e020100300506032b657004220420", "hex");
+export const TEST_SIGNING_KEY = createPrivateKey({
+  key: Buffer.concat([PKCS8_ED25519, Buffer.alloc(32, 42)]),
+  format: "der",
+  type: "pkcs8",
+});
+export const TEST_PUBLIC_KEY = createPublicKey(TEST_SIGNING_KEY);
+
+export interface LicenceFields {
+  licence_id: string;
+  school_name: string;
+  machine_code: string;
+  issued_at: string;
+  modules: string[];
+}
+
+/** serde_json::to_vec(&LicenceV2{…}) — same field order, compact. */
+export function licencePayload(f: LicenceFields): Buffer {
+  return Buffer.from(
+    JSON.stringify({ v: 2, licence_id: f.licence_id, school_name: f.school_name, machine_code: f.machine_code, issued_at: f.issued_at, plan: "perpetual", modules: f.modules }),
+    "utf8",
+  );
+}
+
+export function signArtefact(f: LicenceFields) {
+  const payload = licencePayload(f);
+  const signature = edSign(null, payload, TEST_SIGNING_KEY);
+  const vlic = Buffer.concat([payload, signature]).toString("base64url");
+  return { payload, signature, vlic, licenceKey: groupKey(vlic) };
+}
+
+/** Parse a key/.vlic (whitespace ignored) and verify it like verify_v2: signature + machine binding. */
+export function verifyArtefact(text: string, machineCode: string): LicenceFields & { v: number; plan: string } {
+  const bytes = Buffer.from(text.replace(/\s+/g, ""), "base64url");
+  const payload = bytes.subarray(0, bytes.length - 64);
+  const signature = bytes.subarray(bytes.length - 64);
+  if (!edVerify(null, payload, TEST_PUBLIC_KEY, signature)) throw new Error("signature does not verify");
+  const lic = JSON.parse(payload.toString("utf8"));
+  if (lic.v !== 2 || lic.plan !== "perpetual") throw new Error("not a v2 perpetual licence");
+  if (lic.machine_code !== machineCode) throw new Error("licence is bound to another machine");
+  return lic;
+}
+
+/** Sign a pending issuance as the REAL vidya_signer role (like the Rust signer's commit). */
+export async function realSigner(ctx: Ctx, issuanceId: string) {
+  const r = await ctx.signer.query<{ licence_id: string; machine_code: string; issued_at: string; school_name: string; modules: string[] }>(
+    `SELECT i.licence_id, i.machine_code, i.issued_at, e.school_name, e.modules
+       FROM billing.licence_issuances i JOIN billing.entitlements e ON e.id = i.entitlement_id WHERE i.id = $1`,
+    [issuanceId],
+  );
+  const a = signArtefact({ ...r.rows[0]! });
+  await ctx.signer.query(
+    `UPDATE billing.licence_issuances
+        SET payload = $2, signature = $3, licence_key = $4, vlic = $5, signer_key_id = 'test-golden-42',
+            status = 'issued', issued_ts = now()
+      WHERE id = $1 AND status = 'pending'`,
+    [issuanceId, a.payload, a.signature, a.licenceKey, a.vlic],
+  );
+  await ctx.signer.query(
+    `UPDATE billing.jobs SET state = 'done', completed_at = now()
+      WHERE kind = 'issue_licence' AND payload->>'issuance_id' = $1 AND state IN ('ready', 'running')`,
+    [issuanceId],
+  );
+  return a;
 }
 
 export async function counts(ctx: Ctx, orderId: string) {

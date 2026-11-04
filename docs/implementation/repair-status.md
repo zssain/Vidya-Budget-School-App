@@ -82,7 +82,7 @@ Status: **FIXED** (code + regression test on this branch) · **PARTIAL** · **OP
 
 | Part | Where | Status | Evidence |
 |---|---|---|---|
-| Billing schema + least-privilege roles + RLS | `infra/licensing/migrations/0001_billing.sql`, `0002_portal_support.sql` | **BUILT** | applied to Postgres 16; role grants exercised by tests |
+| Billing schema + least-privilege roles + RLS | `infra/licensing/migrations/0001_billing.sql`, `0002_portal_support.sql`, `0003_issuance_retry.sql` | **BUILT** | applied to Postgres 16; role grants exercised by tests |
 | Licence signer (isolated Rust workspace) | `services/licence-signer/` | **BUILT** | 32/32 tests (re-run by the coordinator); byte-identical to `tools/licence-maker` incl. a run of the real binary; `verify_v2` accepts |
 | Billing core + worker | `packages/billing-core/`, `services/billing-worker/` | **BUILT** | 38 + 42 tests vs real Postgres (webhook HMAC, wrong amount/currency/env, duplicates, out-of-order, 8 concurrent workers → one entitlement, crash/lease, reconciliation, email outage no re-issue) |
 | Owner portal + checkout (Next 16) | `apps/licence-portal/` | **BUILT** | 47 tests (requireOwner AAL2 matrix, CSRF, step-up, surface split), `next build`, HTTP smoke test; isolation check passes |

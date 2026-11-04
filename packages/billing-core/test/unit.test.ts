@@ -18,6 +18,8 @@ import {
   hashStatusToken,
   newStatusToken,
   looksLikeStatusToken,
+  fulfilmentState,
+  groupKey,
 } from "../src/index";
 
 // Vectors produced by running the REAL Rust implementation
@@ -170,5 +172,45 @@ describe("state machine + misc", () => {
     expect(hash).toBe(hashStatusToken(token));
     expect(hash).not.toContain(token);
     expect(looksLikeStatusToken("short")).toBe(false);
+  });
+});
+
+describe("fulfilment label (owner decisions 2026-11-05)", () => {
+  it("paid + signing pending or failed → Paid · Licence pending; failed offers Retry issuance", () => {
+    expect(fulfilmentState({ orderStatus: "paid", issuanceStatus: "pending", deliveryState: null })).toMatchObject({
+      label: "Paid · Licence pending",
+      action: null,
+    });
+    expect(fulfilmentState({ orderStatus: "paid", issuanceStatus: null, deliveryState: null }).label).toBe("Paid · Licence pending");
+    expect(fulfilmentState({ orderStatus: "paid", issuanceStatus: "failed", deliveryState: null })).toMatchObject({
+      label: "Paid · Licence pending",
+      tone: "bad",
+      action: "retry_issuance",
+    });
+    // full refund / dispute: entitlement blocked → no retry offered
+    expect(fulfilmentState({ orderStatus: "refunded", issuanceStatus: "failed", deliveryState: null }).action).toBeNull();
+  });
+  it("issued + email failed → Issued · Email failed with Resend; sent → Issued · Emailed", () => {
+    expect(fulfilmentState({ orderStatus: "paid", issuanceStatus: "issued", deliveryState: "failed" })).toMatchObject({
+      label: "Issued · Email failed",
+      action: "resend",
+    });
+    expect(fulfilmentState({ orderStatus: "paid", issuanceStatus: "issued", deliveryState: "failed", deliveryDead: true }).hint).toMatch(/exhausted/);
+    expect(fulfilmentState({ orderStatus: "paid", issuanceStatus: "issued", deliveryState: "sent" })).toMatchObject({ label: "Issued · Emailed", tone: "ok" });
+    expect(fulfilmentState({ orderStatus: "paid", issuanceStatus: "issued", deliveryState: null }).label).toBe("Issued · Email sending");
+  });
+  it("refund after delivery: still issued, flagged for review (licence keeps working)", () => {
+    const f = fulfilmentState({ orderStatus: "refunded", issuanceStatus: "issued", deliveryState: "sent" });
+    expect(f.label).toBe("Issued · Emailed");
+    expect(f.tone).toBe("warn");
+    expect(f.hint).toMatch(/review.*keeps working/);
+  });
+  it("email key grouping is idempotent (the stored key is already grouped by the signer)", () => {
+    expect(groupKey("abcdefghijkl")).toBe("abcde fghij kl");
+    expect(groupKey("abcde fghij kl")).toBe("abcde fghij kl");
+  });
+  it("not paid / awaiting machine code", () => {
+    expect(fulfilmentState({ orderStatus: "pending", issuanceStatus: null, deliveryState: null }).label).toBe("Not paid");
+    expect(fulfilmentState({ orderStatus: "paid_awaiting_machine_code", issuanceStatus: null, deliveryState: null }).action).toBe("set_machine_code");
   });
 });

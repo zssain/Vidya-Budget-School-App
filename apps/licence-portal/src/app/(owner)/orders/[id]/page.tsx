@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { ActionForm, Badge, inr, Notice, PageHeader, Table, Td, when } from "@/components/ui";
+import { ActionForm, Badge, FulfilmentBadge, inr, Notice, PageHeader, Table, Td, when } from "@/components/ui";
 import { db } from "@/lib/db";
 import { requireOwnerPage } from "@/lib/owner-guard";
 import { orderDetail } from "@/lib/queries";
@@ -18,6 +18,7 @@ export default async function OrderPage({ params, searchParams }: { params: Prom
     <>
       <PageHeader title={`Order ${o.id.slice(0, 8)}`} subtitle={`${o.school_name} · ${o.product_name}`}>
         <Badge value={o.status} />
+        <FulfilmentBadge f={d.fulfilment} />
       </PageHeader>
       <Notice sp={sp} />
       <dl className="mb-6 grid max-w-3xl grid-cols-2 gap-x-6 gap-y-2 text-sm">
@@ -41,17 +42,26 @@ export default async function OrderPage({ params, searchParams }: { params: Prom
       </Table>
 
       <h2 className="mb-2 mt-6 text-base font-semibold">Licences</h2>
-      <Table head={["Generation", "Licence", "Machine", "Issuance", "Commercial"]} empty={d.issuances.length === 0}>
+      <Table head={["Generation", "Licence", "Machine", "Issuance", "Email", "Commercial"]} empty={d.issuances.length === 0}>
         {d.issuances.map((i) => (
           <tr key={i.id}>
             <Td>{i.generation}</Td><Td mono><Link className="underline" href={`/licences/${i.id}`}>{i.licence_id}</Link></Td>
-            <Td mono>{i.machine_code}</Td><Td><Badge value={i.status} /></Td><Td><Badge value={i.commercial_status} /></Td>
+            <Td mono>{i.machine_code}</Td><Td><Badge value={i.status} /></Td>
+            <Td><Badge value={i.delivery_state ?? (i.status === "issued" ? "pending" : "—")} /></Td><Td><Badge value={i.commercial_status} /></Td>
           </tr>
         ))}
       </Table>
 
       <h2 className="mb-2 mt-6 text-base font-semibold">Owner actions</h2>
       <div className="grid max-w-4xl gap-3 md:grid-cols-2">
+        {d.fulfilment.action === "retry_issuance" && d.latestIssuance && d.latestIssuance.commercial_status === "active" ? (
+          <ActionForm action="retry_issuance" returnTo={back} fields={{ issuanceId: d.latestIssuance.id }} label="Retry issuance" danger
+            note={`Signing failed (${d.latestIssuance.last_error ?? "see licence page"}). Re-queues the SAME licence ${d.latestIssuance.licence_id} — no new charge, no new licence. Requires a fresh MFA code.`} />
+        ) : null}
+        {d.fulfilment.action === "resend" && d.latestIssuance ? (
+          <ActionForm action="resend" returnTo={back} fields={{ issuanceId: d.latestIssuance.id }} label="Resend licence"
+            note="Emails the SAME stored .vlic and activation key again. It never issues a new licence." />
+        ) : null}
         {o.provider === "razorpay" && o.provider_order_id ? (
           <ActionForm action="reconcile" returnTo={back} fields={{ orderId: o.id }} needsReason={false} label="Reconcile with Razorpay now"
             note="Asks Razorpay for this order's payments using server credentials. Only a verified capture marks it paid." />

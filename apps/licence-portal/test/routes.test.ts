@@ -39,6 +39,9 @@ import { POST as mfaEnrollPOST } from "@/app/api/auth/mfa/enroll/route";
 import DashboardPage from "@/app/(owner)/dashboard/page";
 import OrdersPage from "@/app/(owner)/orders/page";
 import LicencePage from "@/app/(owner)/licences/[id]/page";
+import OrderPage from "@/app/(owner)/orders/[id]/page";
+import type React from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 
 const OWNER_ORIGIN = "https://owner.portal.test";
 const CHECKOUT_ORIGIN = "https://buy.portal.test";
@@ -194,6 +197,73 @@ describe("owner API routes: only the configured AAL2 owner", () => {
     expect(ok.status).toBe(303);
     expect(ok.headers.get("location")).toMatch(/\/licences\/[0-9a-f-]{36}\?done=transfer$/);
   });
+
+  async function seededFailedLicence() {
+    const portal = tdb.pool("vidya_portal");
+    const o = await createCheckoutOrder(portal, {
+      productId, customerName: "Test Buyer", email: "buyer@example.test", phone: null, schoolName: "Fake Retry School", machineCode: MC, environment: "test",
+    });
+    await tdb.admin.query(`UPDATE billing.orders SET status = 'paid' WHERE id = $1`, [o.orderId]);
+    const ent = await tdb.admin.query(
+      `INSERT INTO billing.entitlements (order_id, modules, machine_code, school_name, source) VALUES ($1, '{core}', $2, 'Fake Retry School', 'verified_payment') RETURNING id`,
+      [o.orderId, MC],
+    );
+    const iss = await tdb.admin.query(
+      `INSERT INTO billing.licence_issuances (entitlement_id, generation, licence_id, machine_code, issued_at, status, last_error)
+       VALUES ($1, 1, 'VID-' || gen_random_uuid(), $2, '2026-10-31T00:00:00Z', 'failed', 'signing key unavailable') RETURNING id, licence_id`,
+      [ent.rows[0].id, MC],
+    );
+    await tdb.admin.query(
+      `INSERT INTO billing.jobs (kind, dedupe_key, payload, state, attempts, last_error)
+       VALUES ('issue_licence', 'issue:' || $1::text, jsonb_build_object('issuance_id', $1::text), 'dead', 8, 'signing key unavailable')`,
+      [iss.rows[0].id],
+    );
+    return { orderId: o.orderId, issuanceId: iss.rows[0].id as string, licenceId: iss.rows[0].licence_id as string };
+  }
+
+  it.each(DENIED)("retry issuance denied for %s (nothing written)", async (k) => {
+    const { issuanceId } = await seededFailedLicence();
+    h.identity = IDENTITIES[k]!;
+    const r = await actionsPOST(form({ action: "retry_issuance", issuanceId, reason: "signer key restored", returnTo: `/licences/${issuanceId}` }));
+    expect([401, 403]).toContain(r.status);
+    const i = await tdb.admin.query(`SELECT status FROM billing.licence_issuances WHERE id = $1`, [issuanceId]);
+    expect(i.rows[0].status).toBe("failed");
+  });
+
+  it("retry issuance: stale MFA → step-up; missing reason → refused; fresh AAL2 owner → same licence re-queued, audited", async () => {
+    const { issuanceId, licenceId } = await seededFailedLicence();
+    h.identity = IDENTITIES.ownerAal2Stale!;
+    const stale = await actionsPOST(form({ action: "retry_issuance", issuanceId, reason: "signer key restored", returnTo: `/licences/${issuanceId}` }));
+    expect(stale.headers.get("location")).toContain("/mfa?step_up=1");
+    h.identity = IDENTITIES.ownerAal2!;
+    const noReason = await actionsPOST(form({ action: "retry_issuance", issuanceId, returnTo: `/licences/${issuanceId}` }));
+    expect(noReason.headers.get("location")).toContain("error=invalid_input");
+    let i = await tdb.admin.query(`SELECT status FROM billing.licence_issuances WHERE id = $1`, [issuanceId]);
+    expect(i.rows[0].status).toBe("failed");
+
+    const ok = await actionsPOST(form({ action: "retry_issuance", issuanceId, reason: "signer key restored", returnTo: `/licences/${issuanceId}` }));
+    expect(ok.status).toBe(303);
+    expect(ok.headers.get("location")).toBe(`${OWNER_ORIGIN}/licences/${issuanceId}?done=retry_issuance`);
+    i = await tdb.admin.query(`SELECT status, licence_id, generation FROM billing.licence_issuances WHERE id = $1`, [issuanceId]);
+    expect(i.rows[0]).toEqual({ status: "pending", licence_id: licenceId, generation: 1 });
+    const n = await tdb.admin.query(
+      `SELECT (SELECT count(*)::int FROM billing.licence_issuances i JOIN billing.entitlements e ON e.id = i.entitlement_id
+                WHERE e.id = (SELECT entitlement_id FROM billing.licence_issuances WHERE id = $1)) AS issuances,
+              (SELECT count(*)::int FROM billing.owner_audit WHERE action = 'licence_issue_retry_requested' AND target = $1::text AND actor = $2) AS audits`,
+      [issuanceId, OWNER_ID],
+    );
+    expect(n.rows[0]).toEqual({ issuances: 1, audits: 1 });
+    // a second click while pending is refused (no second job)
+    const again = await actionsPOST(form({ action: "retry_issuance", issuanceId, reason: "signer key restored", returnTo: `/licences/${issuanceId}` }));
+    expect(again.headers.get("location")).toContain("error=not_failed");
+  });
+
+  it("the removed reissue_failed action no longer exists", async () => {
+    const { issuanceId } = await seededFailedLicence();
+    h.identity = IDENTITIES.ownerAal2!;
+    const r = await actionsPOST(form({ action: "reissue_failed", issuanceId, reason: "old action", returnTo: "/licences" }));
+    expect(r.status).toBe(400);
+  });
 });
 
 describe("owner pages: server components refuse to render owner data", () => {
@@ -227,6 +297,47 @@ describe("owner pages: server components refuse to render owner data", () => {
     expect(await digest(DashboardPage({ searchParams: Promise.resolve({}) }))).toBe("rendered");
     expect(await digest(OrdersPage({ searchParams: Promise.resolve({}) }))).toBe("rendered");
     expect(await digest(LicencePage({ params: Promise.resolve({ id: issuanceId }), searchParams: Promise.resolve({}) }))).toBe("rendered");
+  });
+
+  it("a failed issuance shows Paid · Licence pending + Retry issuance (no new-generation re-issue); email failure shows Resend", async () => {
+    const { issuanceId, orderId } = await (async () => {
+      const portal = tdb.pool("vidya_portal");
+      const o = await createCheckoutOrder(portal, {
+        productId, customerName: "Test Buyer", email: "buyer@example.test", phone: null, schoolName: "Fake Page School", machineCode: MC, environment: "test",
+      });
+      await tdb.admin.query(`UPDATE billing.orders SET status = 'paid' WHERE id = $1`, [o.orderId]);
+      const ent = await tdb.admin.query(
+        `INSERT INTO billing.entitlements (order_id, modules, machine_code, school_name, source) VALUES ($1, '{core}', $2, 'Fake Page School', 'verified_payment') RETURNING id`,
+        [o.orderId, MC],
+      );
+      const iss = await tdb.admin.query(
+        `INSERT INTO billing.licence_issuances (entitlement_id, generation, licence_id, machine_code, issued_at, status, last_error)
+         VALUES ($1, 1, 'VID-' || gen_random_uuid(), $2, '2026-10-31T00:00:00Z', 'failed', 'signing key unavailable') RETURNING id`,
+        [ent.rows[0].id, MC],
+      );
+      return { issuanceId: iss.rows[0].id as string, orderId: o.orderId };
+    })();
+    h.identity = IDENTITIES.ownerAal2!;
+    const lic = renderToStaticMarkup((await LicencePage({ params: Promise.resolve({ id: issuanceId }), searchParams: Promise.resolve({}) })) as React.ReactElement);
+    expect(lic).toContain("Paid · Licence pending");
+    expect(lic).toContain("Retry issuance");
+    expect(lic).toContain('value="retry_issuance"');
+    expect(lic).not.toContain("reissue_failed");
+    const ord = renderToStaticMarkup((await OrderPage({ params: Promise.resolve({ id: orderId }), searchParams: Promise.resolve({}) })) as React.ReactElement);
+    expect(ord).toContain("Paid · Licence pending");
+    expect(ord).toContain('value="retry_issuance"');
+
+    // issued + failed email → Issued · Email failed + Resend licence
+    const { issuanceId: issued, orderId: issuedOrder } = await seededIssuedLicence();
+    await tdb.admin.query(`UPDATE billing.orders SET status = 'paid' WHERE id = $1`, [issuedOrder]);
+    await tdb.admin.query(
+      `INSERT INTO billing.deliveries (issuance_id, channel, idempotency_key, state, attempts, last_error) VALUES ($1::uuid, 'email', 'deliver:' || $1::text, 'failed', 1, 'simulated 503')`,
+      [issued],
+    );
+    const lic2 = renderToStaticMarkup((await LicencePage({ params: Promise.resolve({ id: issued }), searchParams: Promise.resolve({}) })) as React.ReactElement);
+    expect(lic2).toContain("Issued · Email failed");
+    expect(lic2).toContain("Resend licence");
+    expect(lic2).not.toContain('value="retry_issuance"');
   });
 });
 

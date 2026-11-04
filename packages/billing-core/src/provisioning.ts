@@ -257,11 +257,20 @@ export async function applyPaymentObservation(
       );
     }
     if (changed) {
+      // Owner decision 2026-11-05: a refund after delivery is recorded and the
+      // licence is FLAGGED for review — the flag names every already-issued licence
+      // of this purchase. Nothing is revoked: the offline perpetual licence keeps working.
+      const issued = await q.query<{ issuance_id: string; licence_id: string }>(
+        `SELECT i.id AS issuance_id, i.licence_id FROM billing.licence_issuances i
+           JOIN billing.entitlements e ON e.id = i.entitlement_id
+          WHERE e.order_id = $1 AND i.status = 'issued' ORDER BY i.generation`,
+        [order.id],
+      );
       await flagOnce(
         q,
         state === "disputed" ? "review_dispute" : "review_refund",
         obs.providerPaymentId,
-        { order_id: order.id, state, refunded_paise: obs.refundedPaise },
+        { order_id: order.id, state, refunded_paise: obs.refundedPaise, issued_licences: issued.rows },
         state === "disputed"
           ? "dispute recorded — review; an issued offline perpetual licence cannot be remotely disabled"
           : `${state} — review; an issued offline perpetual licence cannot be remotely disabled`,

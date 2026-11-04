@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { CopyButton } from "@/components/client";
-import { ActionForm, Badge, inr, Notice, PageHeader, Table, Td, when } from "@/components/ui";
+import { ActionForm, Badge, FulfilmentBadge, inr, Notice, PageHeader, Table, Td, when } from "@/components/ui";
 import { db } from "@/lib/db";
 import { requireOwnerPage } from "@/lib/owner-guard";
 import { licenceDetail } from "@/lib/queries";
@@ -23,7 +23,9 @@ export default async function LicencePage({ params, searchParams }: { params: Pr
   const isLatest = !l.superseded;
   return (
     <>
-      <PageHeader title={l.licence_id} subtitle={`${l.school_name} · generation ${l.generation}`} />
+      <PageHeader title={l.licence_id} subtitle={`${l.school_name} · generation ${l.generation}`}>
+        <FulfilmentBadge f={d.fulfilment} />
+      </PageHeader>
       <Notice sp={sp} />
       <section className="mb-6 grid max-w-4xl grid-cols-2 gap-3 md:grid-cols-4">
         <div className="rounded-md border bg-white p-3"><div className="label">Commercial status</div><Badge value={l.commercial_status} /></div>
@@ -33,13 +35,13 @@ export default async function LicencePage({ params, searchParams }: { params: Pr
       </section>
       {l.superseded ? (
         <p className="mb-4 max-w-3xl rounded-md bg-amber-50 p-3 text-sm text-amber-900">
-          Superseded by a later generation (transfer or re-issue). This is a commercial record only: an offline PC that already has this
+          Superseded by a later generation (transfer). This is a commercial record only: an offline PC that already has this
           perpetual licence can still verify it. Remote revocation is not part of this licensing model.
         </p>
       ) : null}
       {l.commercial_status !== "active" ? (
         <p className="mb-4 max-w-3xl rounded-md bg-rose-50 p-3 text-sm text-rose-900">
-          This purchase is <b>{l.commercial_status}</b>. Transfers and re-issues are blocked. The issued licence was NOT remotely disabled — that is
+          This purchase is <b>{l.commercial_status}</b>. Transfers and issuance retries are blocked. The issued licence was NOT remotely disabled — that is
           not possible for an offline perpetual licence.
         </p>
       ) : null}
@@ -65,14 +67,22 @@ export default async function LicencePage({ params, searchParams }: { params: Pr
           </div>
         </div>
       ) : (
-        <p className="mb-6 text-sm text-slate-600">{l.status === "failed" ? "The signer could not issue this licence." : "Payment received; preparing licence (the signer has not produced the artefact yet)."}</p>
+        <p className="mb-6 text-sm text-slate-600">
+          {l.status === "failed"
+            ? "Paid · Licence pending — the signer could not issue this licence. Retry issuance below reuses this same licence ID; every failed attempt stays in the history."
+            : "Paid · Licence pending — the signer has not produced the artefact yet."}
+        </p>
       )}
 
       <h2 className="mb-2 text-base font-semibold">Owner actions</h2>
       <div className="mb-6 grid max-w-4xl gap-3 md:grid-cols-2">
         {issued ? (
-          <ActionForm action="resend" returnTo={back} fields={{ issuanceId: l.id }} label="Resend existing licence"
-            note="Emails the SAME stored artefact again. It never issues a new licence." />
+          <ActionForm action="resend" returnTo={back} fields={{ issuanceId: l.id }} label="Resend licence"
+            note="Emails the SAME stored .vlic and activation key again. It never issues a new licence." />
+        ) : null}
+        {l.status === "failed" && isLatest && l.commercial_status === "active" ? (
+          <ActionForm action="retry_issuance" returnTo={back} fields={{ issuanceId: l.id }} label="Retry issuance" danger
+            note={`Re-queues signing for this SAME licence (${l.licence_id}, generation ${l.generation}, machine ${l.machine_code}). No new charge and no new licence. Requires a fresh MFA code.`} />
         ) : null}
         {issued && isLatest && l.commercial_status === "active" ? (
           <ActionForm action="transfer" returnTo={back} fields={{ issuanceId: l.id }} label="Transfer to a new machine" danger
@@ -80,11 +90,15 @@ export default async function LicencePage({ params, searchParams }: { params: Pr
             <div><label className="label" htmlFor="newMachineCode">New machine code</label><input id="newMachineCode" name="newMachineCode" required className="input mono" placeholder="XXXX-XXXX-XXXX-C" /></div>
           </ActionForm>
         ) : null}
-        {l.status === "failed" && isLatest && l.commercial_status === "active" ? (
-          <ActionForm action="reissue_failed" returnTo={back} fields={{ issuanceId: l.id }} label="Re-issue (new generation)"
-            note="Creates generation n+1 with a new licence ID for the same machine. Requires a fresh MFA code." />
-        ) : null}
       </div>
+
+      <h2 className="mb-2 text-base font-semibold">Issuance attempts</h2>
+      <Table head={["Queued", "Job", "State", "Attempts", "Last error", "Completed"]} empty={d.issueJobs.length === 0}>
+        {d.issueJobs.map((j) => (
+          <tr key={j.id}><Td>{when(j.created_at)}</Td><Td mono>{j.dedupe_key.includes(":retry:") ? `owner retry ${j.dedupe_key.split(":retry:")[1]}` : "initial"}</Td><Td><Badge value={j.state} /></Td><Td>{j.attempts}/{j.max_attempts}</Td><Td className="whitespace-normal text-xs">{j.last_error}</Td><Td>{when(j.completed_at)}</Td></tr>
+        ))}
+      </Table>
+      <p className="mb-6 mt-1 text-xs text-slate-500">Each failed signing attempt is also recorded in the audit timeline (licence_issue_attempt_failed).</p>
 
       <h2 className="mb-2 text-base font-semibold">Generations / module history</h2>
       <Table head={["Gen", "Licence", "Machine", "Status", "Signed"]}>

@@ -3,7 +3,7 @@
 // holds none, and licence `payload`/`signature` bytes are never sent to the browser
 // (the licence key / .vlic already encode them).
 import "server-only";
-import { paiseFromDb, REVIEW_ACTIONS, type Queryable } from "@vidya/billing-core";
+import { fulfilmentState, paiseFromDb, REVIEW_ACTIONS, type Queryable } from "@vidya/billing-core";
 
 export const PAGE_SIZE = 50;
 
@@ -142,6 +142,12 @@ export async function listOrders(q: Queryable, p: ListParams, limit = PAGE_SIZE)
   return r.rows;
 }
 
+/** Newest delivery state of issuance `i` and whether any of its delivery jobs dead-lettered. */
+const DELIVERY_SUMMARY_SQL = `
+  (SELECT d.state FROM billing.deliveries d WHERE d.issuance_id = i.id ORDER BY d.updated_at DESC LIMIT 1) AS delivery_state,
+  EXISTS (SELECT 1 FROM billing.jobs j WHERE j.kind = 'deliver_licence' AND j.payload->>'issuance_id' = i.id::text
+            AND j.state = 'dead') AS delivery_dead`;
+
 export async function orderDetail(q: Queryable, id: string) {
   const o = await q.query(
     `SELECT o.*, o.amount_paise::text AS amount_paise, s.school_name, c.name AS customer_name, c.email, c.phone, p.name AS product_name
@@ -157,16 +163,25 @@ export async function orderDetail(q: Queryable, id: string) {
     [id],
   );
   const iss = await q.query(
-    `SELECT i.id, i.licence_id, i.generation, i.status, i.machine_code, e.commercial_status
+    `SELECT i.id, i.licence_id, i.generation, i.status, i.machine_code, i.last_error, e.commercial_status,
+            ${DELIVERY_SUMMARY_SQL}
        FROM billing.licence_issuances i JOIN billing.entitlements e ON e.id = i.entitlement_id
       WHERE e.order_id = $1 ORDER BY i.generation`,
     [id],
   );
   const aud = await q.query(
-    `SELECT id::text, at, actor, action, reason, after_json FROM billing.owner_audit WHERE target = $1 ORDER BY at`,
+    `SELECT id::text, at, actor, action, reason, after_json FROM billing.owner_audit
+      WHERE target = $1 OR after_json->>'order_id' = $1 ORDER BY at`,
     [id],
   );
-  return { order: o.rows[0], payments: pays.rows, issuances: iss.rows, audit: aud.rows };
+  const latest = iss.rows.at(-1);
+  const fulfilment = fulfilmentState({
+    orderStatus: o.rows[0].status,
+    issuanceStatus: latest?.status ?? null,
+    deliveryState: latest?.delivery_state ?? null,
+    deliveryDead: latest?.delivery_dead ?? false,
+  });
+  return { order: o.rows[0], payments: pays.rows, issuances: iss.rows, audit: aud.rows, fulfilment, latestIssuance: latest ?? null };
 }
 
 // ----------------------------------------------------------------- payments ------
@@ -222,7 +237,8 @@ export async function licenceDetail(q: Queryable, id: string) {
             i.signer_key_id, i.licence_key, i.vlic, i.entitlement_id,
             e.school_name, e.modules, e.commercial_status, e.source, e.order_id, e.created_at AS entitled_at,
             o.provider_order_id, o.amount_paise::text, o.currency, o.status AS order_status, c.email, c.phone,
-            EXISTS (SELECT 1 FROM billing.licence_issuances n WHERE n.entitlement_id = i.entitlement_id AND n.generation > i.generation) AS superseded
+            EXISTS (SELECT 1 FROM billing.licence_issuances n WHERE n.entitlement_id = i.entitlement_id AND n.generation > i.generation) AS superseded,
+            ${DELIVERY_SUMMARY_SQL}
        FROM billing.licence_issuances i JOIN billing.entitlements e ON e.id = i.entitlement_id
        JOIN billing.orders o ON o.id = e.order_id JOIN billing.billing_schools s ON s.id = o.school_id
        JOIN billing.billing_customers c ON c.id = s.customer_id
@@ -231,7 +247,13 @@ export async function licenceDetail(q: Queryable, id: string) {
   );
   const lic = r.rows[0];
   if (!lic) return null;
-  const [generations, transfers, deliveries, audit, payments] = await Promise.all([
+  const fulfilment = fulfilmentState({
+    orderStatus: lic.order_status,
+    issuanceStatus: lic.status,
+    deliveryState: lic.delivery_state ?? null,
+    deliveryDead: lic.delivery_dead,
+  });
+  const [generations, transfers, deliveries, audit, payments, issueJobs] = await Promise.all([
     q.query(`SELECT id, generation, licence_id, machine_code, status, issued_ts FROM billing.licence_issuances WHERE entitlement_id = $1 ORDER BY generation`, [lic.entitlement_id]),
     q.query(
       `SELECT t.*, src.generation AS source_generation, rep.generation AS replacement_generation, rep.status AS replacement_status
@@ -243,12 +265,27 @@ export async function licenceDetail(q: Queryable, id: string) {
     q.query(`SELECT idempotency_key, state, attempts, last_error, provider_message_id, updated_at FROM billing.deliveries WHERE issuance_id = $1 ORDER BY created_at`, [id]),
     q.query(
       `SELECT id::text, at, actor, action, target, reason, after_json FROM billing.owner_audit
-        WHERE target = ANY($1::text[]) ORDER BY at`,
-      [[id, lic.order_id]],
+        WHERE target = ANY($1::text[]) OR after_json->>'order_id' = $2 ORDER BY at`,
+      [[id, lic.order_id], lic.order_id],
     ),
     q.query(`SELECT provider_payment_id, amount_paise::text, state, captured_at FROM billing.payments WHERE order_id = $1`, [lic.order_id]),
+    // Issuance attempt history: every issue job (original + owner retries), never rewritten.
+    q.query(
+      `SELECT id, dedupe_key, state, attempts, max_attempts, last_error, created_at, completed_at FROM billing.jobs
+        WHERE kind = 'issue_licence' AND payload->>'issuance_id' = $1 ORDER BY created_at`,
+      [id],
+    ),
   ]);
-  return { lic, generations: generations.rows, transfers: transfers.rows, deliveries: deliveries.rows, audit: audit.rows, payments: payments.rows };
+  return {
+    lic,
+    fulfilment,
+    generations: generations.rows,
+    transfers: transfers.rows,
+    deliveries: deliveries.rows,
+    audit: audit.rows,
+    payments: payments.rows,
+    issueJobs: issueJobs.rows,
+  };
 }
 
 // ------------------------------------------------------------ schools, etc. ------

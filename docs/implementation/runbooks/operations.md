@@ -32,8 +32,10 @@ UPDATE billing.jobs SET state='ready', attempts=0, available_at=now(), last_erro
  WHERE id = '<job id>' AND state = 'dead';
 ```
 Requeueing is safe for every kind (idempotent). For a dead `issue_licence` job the signer
-also marked the issuance `failed`; use the owner action **Re-issue (new generation)** on the
-licence page instead of requeueing.
+also marked the issuance `failed`. Use the owner action **Retry issuance** on the licence (or
+order) page instead of requeueing. It moves the SAME issuance back to `pending` (same licence ID
+and generation), queues a fresh `issue:<id>:retry:<n>` job, keeps the dead job as history and
+writes `licence_issue_retry_requested` to the audit log.
 
 ## Migrations
 

@@ -36,7 +36,7 @@ customer use their status link. It can be set once; later changes are transfers.
 ## Refunds and disputes
 
 Initiate refunds in the Razorpay dashboard. The webhook records them: order
-`partially_refunded` / `refunded`, entitlement `refunded` (full) — transfers and re-issues are
+`partially_refunded` / `refunded`, entitlement `refunded` (full) — transfers and issuance retries are
 then blocked. A dispute sets `disputed`. Each change raises a "Needs review" item. An already
 issued offline perpetual licence keeps working on its PC; nothing is or can be disabled
 remotely. Acknowledge the review item with a note once handled.

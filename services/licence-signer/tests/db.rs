@@ -298,7 +298,11 @@ async fn refund_between_sign_and_commit_is_not_written() {
     assert_eq!(record_failure(&db.signer, &claim, &err).await.unwrap(), Some(true));
     let row = issuance(&db, s.issuance_id).await;
     assert_eq!(row.status, "failed");
-    assert!(row.payload.is_none());
+    // The payload bytes were persisted before signing (so a later owner retry
+    // signs identical bytes), but no artefact was written.
+    let Prepared::Sign(a) = &prepared else { panic!() };
+    assert_eq!(row.payload.as_deref(), Some(a.payload.as_slice()));
+    assert!(row.signature.is_none() && row.licence_key.is_none() && row.vlic.is_none());
     db.drop_db().await;
 }
 

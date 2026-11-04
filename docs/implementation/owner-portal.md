@@ -16,7 +16,7 @@ The signer is a separate component (`services/licence-signer`, documented in
 | `packages/billing-core/` | Shared, **zero-runtime-dependency** TypeScript billing domain: machine-code checksum, money, Razorpay signature checks, webhook ingestion, job queue, provisioning state machine, reconciliation, delivery, audited owner actions, rate limits, CSV, migrations runner, test support. Server-only (uses `node:crypto`). | Not deployed on its own. Imported as TS source by the two below via `file:` dependencies. |
 | `apps/licence-portal/` | Next.js App Router app: owner dashboard + public checkout + API routes. Own `package.json` + `package-lock.json`. | **Twice**: `PORTAL_SURFACE=owner` (owner host) and `PORTAL_SURFACE=checkout` (checkout host). |
 | `services/billing-worker/` | Continuously running Node worker (`npm start` = `tsx src/main.ts`), migration CLI (`npm run migrate`). | A long-lived process (container/VM/systemd). **Not** a serverless function. |
-| `infra/licensing/migrations/` | `0001_billing.sql` (committed earlier, unchanged) + `0002_portal_support.sql` (added). | Applied with `npm run migrate` as the DB owner. |
+| `infra/licensing/migrations/` | `0001_billing.sql` (committed earlier, unchanged) + `0002_portal_support.sql` (added) + `0003_issuance_retry.sql` (2026-11-05: Retry issuance grant + issuance-immutability trigger). | Applied with `npm run migrate` as the DB owner. |
 | `infra/licensing/setup/` | Operator templates: login roles, catalogue. Not migrations. | Run by hand. |
 | `scripts/check-portal-isolation.mjs` | CI check: fails if portal/worker deps or secrets reach the Vidya app. | CI step. |
 
@@ -60,7 +60,7 @@ Owner surface (`PORTAL_SURFACE=owner`, e.g. `owner.<domain>`):
 | `/login` | public form → `POST /api/auth/login` (rate-limited per IP and per email; non-owner accounts are signed out with the same generic error) |
 | `/mfa` | **owner UUID at AAL1 only**: enrol TOTP (needs a password sign-in < 10 min ago and no verified factor yet) or verify; also the step-up page (`?step_up=1`) |
 | `/dashboard`, `/schools`, `/orders`, `/orders/[id]`, `/payments`, `/licences`, `/licences/[id]`, `/transfers`, `/delivery`, `/audit`, `/settings` | `requireOwnerPage()` → owner UUID + AAL2 |
-| `POST /api/owner/actions` | same-origin + owner UUID + AAL2; **fresh TOTP (≤ 5 min)** for `transfer`, `reissue_failed`, `approve_manual_payment`, `create_manual_order`, `set_machine_code` |
+| `POST /api/owner/actions` | same-origin + owner UUID + AAL2; **fresh TOTP (≤ 5 min)** for `transfer`, `retry_issuance`, `approve_manual_payment`, `create_manual_order`, `set_machine_code` |
 | `GET /api/owner/export/[table]` | owner UUID + AAL2; CSV with formula-injection protection |
 | `GET /api/owner/licences/[id]/vlic` | owner UUID + AAL2; exact stored artefact |
 | `POST /api/auth/mfa/enroll`, `/api/auth/mfa/verify`, `/api/auth/logout` | same-origin; enrol/verify owner UUID at AAL1+; logout revokes all sessions (`scope: global`) |
@@ -110,17 +110,25 @@ payload `{"issuance_id": …}`). Insert uses `ON CONFLICT (order_id) DO NOTHING`
 attempt creates nothing. A fully refunded or disputed payment never creates one.
 `commercial_status`: `active` → `refunded` / `disputed` (set by the worker).
 
-**Delivery**: the worker's sweep enqueues one `deliver_licence` (`deliver:<issuance_id>`) per
-`issued` issuance; owner resend enqueues `resend:<issuance_id>:<uuid>`. `deliveries` row per
+**Delivery**: the signer enqueues `deliver_licence` (`deliver:<issuance_id>`) in the same
+transaction that marks the issuance `issued` (no hold), and the worker's sweep enqueues the same
+key for any `issued` issuance that lacks it (safety net); owner resend enqueues `resend:<issuance_id>:<uuid>`. `deliveries` row per
 idempotency key: `pending → sent` or `failed` (retried). The delivery code only reads
 `licence_issuances`, and `vidya_worker` has **no UPDATE** on that table, so a delivery can
 never re-issue or alter a licence (tested).
 
-**Transfer / re-issue** (owner, step-up): new generation `n+1` with a **new**
-`licence_id` (UNIQUE) bound to the new machine code (transfer) or the same machine code
-(re-issue after the signer marked the issuance `failed`), plus its `issue_licence` job;
-transfers also get a `licence_transfers` row. Blocked unless `commercial_status='active'`
-and the source is the latest generation. The older generation keeps `status='issued'` in the
+**Transfer** (owner, step-up), the only action that creates a new issuance: new generation
+`n+1` with a **new** `licence_id` (UNIQUE) bound to the new machine code, plus its
+`issue_licence` job and a `licence_transfers` row. Blocked unless `commercial_status='active'`
+and the source is the latest generation.
+
+**Retry issuance** (owner, step-up, decision 2026-11-05): after the signer marked the
+issuance `failed`, the order shows **Paid · Licence pending**. The retry moves the SAME row
+back to `pending` (same generation, `licence_id`, machine code, `issued_at` and persisted payload
+bytes) and queues `issue:<id>:retry:<n>`. The dead job and every
+`licence_issue_attempt_failed` audit row stay as history. The `0003` trigger forbids any
+other status regression and any change to an artefact once signed. See
+`licence-signer.md` § Retry issuance. The older generation keeps `status='issued'` in the
 database (no role may change another component's rows); the UI derives and shows
 **superseded** and states that the old offline PC can still verify its licence.
 

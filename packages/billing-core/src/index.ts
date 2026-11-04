@@ -4,6 +4,7 @@
 export * from "./csv";
 export * from "./db";
 export * from "./delivery";
+export * from "./fulfilment";
 export * from "./jobs";
 export * from "./machine-code";
 export * from "./money";

@@ -235,33 +235,56 @@ export async function transferLicence(
 }
 
 /**
- * Re-issue after the signer permanently FAILED an issuance (its job dead-lettered).
- * The signer never resets a failed row, so this inserts generation n+1 with a NEW
- * licence_id (licence_id is UNIQUE) and the same machine code, plus its issue job.
+ * RETRY ISSUANCE after the signer FAILED it (its job dead-lettered). Owner decision
+ * 2026-11-05: the order stays "Paid · Licence pending" and the retry reuses the SAME
+ * issuance row — same entitlement, generation, licence_id, machine code and
+ * issued_at (and the payload bytes, if the signer already persisted them). No new
+ * charge, no new licence, no new generation. Only a transfer creates a new issuance.
+ *
+ * Effect (one transaction, serialised on the order row, then the issuance row):
+ *   status failed → pending, last_error cleared (the 0003 trigger allows this only
+ *   while no signature exists); a FRESH issue_licence job `issue:<id>:retry:<n>`.
+ *   The dead job rows are never reused or rewritten, and the owner_audit row
+ *   `licence_issue_retry_requested` records the failed attempts being retried, so
+ *   every failed attempt stays in the history.
+ *
+ * services/licence-signer/tests/common/mod.rs (`portal_retry_issuance`) mirrors
+ * these statements as the vidya_portal role for the signer's end-to-end tests.
  */
-export async function reissueFailedIssuance(pool: PoolLike, actor: Actor, input: { issuanceId: string; reason: string }) {
+export async function retryFailedIssuance(pool: PoolLike, actor: Actor, input: { issuanceId: string; reason: string }) {
   const reason = requireReason(input.reason);
   return withTransaction(pool, async (c) => {
+    const ref = await c.query<{ order_id: string }>(
+      `SELECT e.order_id FROM billing.licence_issuances i JOIN billing.entitlements e ON e.id = i.entitlement_id
+        WHERE i.id = $1`,
+      [input.issuanceId],
+    );
+    if (!ref.rows[0]) throw new OrderActionError("not_found", "issuance not found");
+    // Serialise all changes to this purchase on its order row, then lock the issuance.
+    await lockOrder(c, { id: ref.rows[0].order_id });
     const src = await c.query<{
       id: string;
       entitlement_id: string;
       generation: number;
       status: string;
+      licence_id: string;
       machine_code: string;
-      order_id: string;
+      last_error: string | null;
+      signed: boolean;
       commercial_status: string;
     }>(
-      `SELECT i.id, i.entitlement_id, i.generation, i.status, i.machine_code, e.order_id, e.commercial_status
+      `SELECT i.id, i.entitlement_id, i.generation, i.status, i.licence_id, i.machine_code, i.last_error,
+              i.signature IS NOT NULL AS signed, e.commercial_status
          FROM billing.licence_issuances i JOIN billing.entitlements e ON e.id = i.entitlement_id
-        WHERE i.id = $1`,
+        WHERE i.id = $1 FOR UPDATE OF i`,
       [input.issuanceId],
     );
-    const s = src.rows[0];
-    if (!s) throw new OrderActionError("not_found", "issuance not found");
-    await lockOrder(c, { id: s.order_id });
-    if (s.status !== "failed") throw new OrderActionError("not_failed", "only a failed issuance can be re-issued");
+    const s = src.rows[0]!;
+    if (s.status !== "failed" || s.signed) {
+      throw new OrderActionError("not_failed", "only a failed, unsigned issuance can be retried");
+    }
     if (s.commercial_status !== "active") {
-      throw new OrderActionError("blocked", `re-issue is blocked: purchase is ${s.commercial_status}`);
+      throw new OrderActionError("blocked", `retry is blocked: purchase is ${s.commercial_status}`);
     }
     const latest = await c.query<{ generation: number }>(
       `SELECT max(generation) AS generation FROM billing.licence_issuances WHERE entitlement_id = $1`,
@@ -270,24 +293,38 @@ export async function reissueFailedIssuance(pool: PoolLike, actor: Actor, input:
     if (latest.rows[0]!.generation !== s.generation) {
       throw new OrderActionError("not_latest", "a newer generation already exists");
     }
-    const licenceId = `VID-${randomUUID()}`;
-    const issuedAt = new Date().toISOString().replace(/\.\d{3}Z$/, "Z");
-    const ni = await c.query<{ id: string }>(
-      `INSERT INTO billing.licence_issuances (entitlement_id, generation, licence_id, machine_code, issued_at, status)
-       VALUES ($1, $2, $3, $4, $5, 'pending') RETURNING id`,
-      [s.entitlement_id, s.generation + 1, licenceId, s.machine_code, issuedAt],
+    const history = await c.query<{ id: string; dedupe_key: string; state: string; attempts: number; last_error: string | null }>(
+      `SELECT id, dedupe_key, state, attempts, last_error FROM billing.jobs
+        WHERE kind = 'issue_licence' AND payload->>'issuance_id' = $1 ORDER BY created_at`,
+      [s.id],
     );
-    const newId = ni.rows[0]!.id;
-    await enqueueJob(c, { kind: "issue_licence", dedupeKey: `issue:${newId}`, payload: { issuance_id: newId } });
+    if (history.rows.some((j) => j.state === "ready" || j.state === "running")) {
+      throw new OrderActionError("retry_in_progress", "an issue job for this licence is already queued");
+    }
+    await c.query(
+      `UPDATE billing.licence_issuances SET status = 'pending', last_error = NULL WHERE id = $1 AND status = 'failed'`,
+      [s.id],
+    );
+    const job = await enqueueJob(c, {
+      kind: "issue_licence",
+      dedupeKey: `issue:${s.id}:retry:${history.rows.length}`,
+      payload: { issuance_id: s.id },
+    });
+    if (!job.created) throw new OrderActionError("retry_in_progress", "a retry for this licence is already queued");
     await audit(c, {
       actor: actor.ownerId,
-      action: "licence_reissued_after_failure",
+      action: "licence_issue_retry_requested",
       target: s.id,
-      after: { issuance_id: newId, licence_id: licenceId, generation: s.generation + 1 },
+      before: {
+        status: "failed",
+        last_error: s.last_error,
+        failed_jobs: history.rows.map((j) => ({ job_id: j.id, dedupe_key: j.dedupe_key, state: j.state, attempts: j.attempts, last_error: j.last_error })),
+      },
+      after: { status: "pending", licence_id: s.licence_id, generation: s.generation, machine_code: s.machine_code, job_id: job.id },
       reason,
       requestId: actor.requestId,
     });
-    return { issuanceId: newId, licenceId };
+    return { issuanceId: s.id, licenceId: s.licence_id, jobId: job.id! };
   });
 }
 

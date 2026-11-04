@@ -10,10 +10,12 @@ import {
   requestResend,
   signCheckout,
   transferLicence,
-  reissueFailedIssuance,
+  retryFailedIssuance,
   withTransaction,
   ensureEntitlement,
   lockOrder,
+  fulfilmentState,
+  groupKey,
 } from "@vidya/billing-core";
 import { runOnce, sweep } from "../src/worker";
 import {
@@ -22,7 +24,11 @@ import {
   drain,
   eventBody,
   fakeSigner,
+  GOLDEN_KEY,
   issuanceFor,
+  realSigner,
+  signArtefact,
+  verifyArtefact,
   MC_A,
   MC_B,
   newOrder,
@@ -238,7 +244,7 @@ describe("signer outage + delivery", () => {
   });
 });
 
-describe("transfer + re-issue (new generation, new licence_id)", () => {
+describe("transfer (the only action that creates a new generation / licence_id)", () => {
   it("transfer creates generation 2 bound to the new machine, linked, audited; old one untouched", async () => {
     const o = await newOrder(ctx);
     await postWebhook(ctx, eventBody("payment.captured", paymentEntity({ orderId: o.providerOrderId, amount: o.amountPaise })));
@@ -270,17 +276,184 @@ describe("transfer + re-issue (new generation, new licence_id)", () => {
     await expect(transferLicence(ctx.portal, { ownerId: "owner" }, { issuanceId: g1.id, newMachineCode: MC_B, reason: "after refund" })).rejects.toThrow(/blocked/);
   });
 
-  it("a signer-failed issuance can be re-issued as a new generation (same machine)", async () => {
+});
+
+/** Simulate the signer dead-lettering an issuance (as the real vidya_signer role). */
+async function signerFails(issuanceId: string, error: string) {
+  await ctx.signer.query(
+    `UPDATE billing.jobs SET state = 'dead', attempts = max_attempts, last_error = $2
+      WHERE kind = 'issue_licence' AND payload->>'issuance_id' = $1 AND state IN ('ready', 'running')`,
+    [issuanceId, error],
+  );
+  await ctx.signer.query(`UPDATE billing.licence_issuances SET status = 'failed', last_error = $2 WHERE id = $1 AND status = 'pending'`, [
+    issuanceId,
+    error,
+  ]);
+}
+
+describe("owner decisions 2026-11-05: retry issuance in place, resend the same artefact", () => {
+  const OWNER = { ownerId: "00000000-0000-4000-8000-0000000000aa", requestId: "req-test" };
+
+  it("the test signer reproduces the cross-crate golden vector byte for byte", () => {
+    const a = signArtefact({
+      licence_id: "0193b6c0-0000-7000-8000-000000000001",
+      school_name: "Saraswati Public School",
+      machine_code: "3N0S-10YX-JQCR-T",
+      issued_at: "2026-09-25T00:00:00Z",
+      modules: ["core"],
+    });
+    expect(a.vlic).toBe(GOLDEN_KEY);
+    expect(verifyArtefact(groupKey(GOLDEN_KEY), "3N0S-10YX-JQCR-T").licence_id).toBe("0193b6c0-0000-7000-8000-000000000001");
+    expect(() => verifyArtefact(GOLDEN_KEY, MC_A)).toThrow(/another machine/);
+  });
+
+  it("captured payment → entitlement + issue job immediately (no hold), after verifying amount/order/machine code", async () => {
+    const o = await newOrder(ctx);
+    await postWebhook(ctx, eventBody("payment.captured", paymentEntity({ orderId: o.providerOrderId, amount: o.amountPaise + 1 })));
+    await drain(deps(ctx));
+    expect(await counts(ctx, o.orderId)).toMatchObject({ entitlements: 0, issuances: 0 }); // wrong amount: nothing
+    await postWebhook(ctx, eventBody("payment.captured", paymentEntity({ orderId: o.providerOrderId, amount: o.amountPaise })));
+    await drain(deps(ctx));
+    const [iss] = await issuanceFor(ctx, o.orderId);
+    expect(iss.machine_code).toBe(MC_A);
+    const j = await ctx.admin.query(`SELECT state, available_at <= now() AS now FROM billing.jobs WHERE dedupe_key = $1`, [`issue:${iss.id}`]);
+    expect(j.rows[0]).toEqual({ state: "ready", now: true });
+  });
+
+  it("signing failed → order stays Paid · Licence pending → Retry issuance reuses the SAME licence (no new generation)", async () => {
     const o = await newOrder(ctx);
     await postWebhook(ctx, eventBody("payment.captured", paymentEntity({ orderId: o.providerOrderId, amount: o.amountPaise })));
     await drain(deps(ctx));
     const [g1] = await issuanceFor(ctx, o.orderId);
-    await expect(reissueFailedIssuance(ctx.portal, { ownerId: "owner" }, { issuanceId: g1.id, reason: "not failed yet" })).rejects.toThrow(/only a failed/);
-    await ctx.signer.query(`UPDATE billing.licence_issuances SET status = 'failed', last_error = 'test' WHERE id = $1`, [g1.id]);
-    const r = await reissueFailedIssuance(ctx.portal, { ownerId: "owner" }, { issuanceId: g1.id, reason: "signer key fixed" });
-    const all = await issuanceFor(ctx, o.orderId);
-    expect(all.map((i) => [i.generation, i.status, i.machine_code])).toEqual([[1, "failed", MC_A], [2, "pending", MC_A]]);
-    expect(r.licenceId).not.toBe(g1.licence_id);
+    await expect(retryFailedIssuance(ctx.portal, OWNER, { issuanceId: g1.id, reason: "not failed yet" })).rejects.toThrow(/only a failed/);
+    await expect(retryFailedIssuance(ctx.portal, OWNER, { issuanceId: g1.id, reason: "x" })).rejects.toThrow(/reason/);
+
+    await signerFails(g1.id, "signing key unavailable (simulated)");
+    expect((await orderRow(ctx, o.orderId)).status).toBe("paid");
+    expect(fulfilmentState({ orderStatus: "paid", issuanceStatus: "failed", deliveryState: null })).toMatchObject({
+      label: "Paid · Licence pending",
+      action: "retry_issuance",
+    });
+
+    const r = await retryFailedIssuance(ctx.portal, OWNER, { issuanceId: g1.id, reason: "signer key restored" });
+    expect(r).toMatchObject({ issuanceId: g1.id, licenceId: g1.licence_id });
+    const after = await issuanceFor(ctx, o.orderId);
+    expect(after).toHaveLength(1);
+    expect(after[0]).toMatchObject({ id: g1.id, generation: 1, licence_id: g1.licence_id, machine_code: MC_A, issued_at: g1.issued_at, status: "pending", last_error: null });
+    // double click while pending → refused, nothing extra queued
+    await expect(retryFailedIssuance(ctx.portal, OWNER, { issuanceId: g1.id, reason: "double click" })).rejects.toThrow(/only a failed/);
+
+    // History: the dead job stays dead with its error; one new retry job.
+    const jobs = await ctx.admin.query(
+      `SELECT id, dedupe_key, state, last_error FROM billing.jobs WHERE kind = 'issue_licence' AND payload->>'issuance_id' = $1 ORDER BY created_at`,
+      [g1.id],
+    );
+    expect(jobs.rows.map((j) => [j.dedupe_key, j.state])).toEqual([[`issue:${g1.id}`, "dead"], [`issue:${g1.id}:retry:1`, "ready"]]);
+    expect(jobs.rows[0].last_error).toMatch(/signing key unavailable/);
+    const aud = await ctx.admin.query(`SELECT actor, reason, request_id, before_json, after_json FROM billing.owner_audit WHERE action = 'licence_issue_retry_requested' AND target = $1`, [g1.id]);
+    expect(aud.rows).toHaveLength(1);
+    expect(aud.rows[0]).toMatchObject({ actor: OWNER.ownerId, reason: "signer key restored", request_id: "req-test" });
+    expect(aud.rows[0].before_json.last_error).toMatch(/signing key unavailable/);
+    expect(aud.rows[0].before_json.failed_jobs[0]).toMatchObject({ job_id: jobs.rows[0].id, state: "dead" });
+    expect(aud.rows[0].after_json).toMatchObject({ licence_id: g1.licence_id, generation: 1, job_id: jobs.rows[1].id });
+
+    // The (real-key) signer completes the retry job: issued with the ORIGINAL licence_id.
+    const a = await realSigner(ctx, g1.id);
+    const [done] = await issuanceFor(ctx, o.orderId);
+    expect(done.status).toBe("issued");
+    expect(verifyArtefact(done.vlic, MC_A).licence_id).toBe(g1.licence_id);
+    expect(done.vlic).toBe(a.vlic);
+    expect(await counts(ctx, o.orderId)).toMatchObject({ entitlements: 1, issuances: 1, payments: 1 });
+    // A second failure scenario after issuance is impossible: no reset, no re-issue.
+    await expect(retryFailedIssuance(ctx.portal, OWNER, { issuanceId: g1.id, reason: "once more" })).rejects.toThrow(/only a failed/);
+    await expect(ctx.portal.query(`UPDATE billing.licence_issuances SET status = 'pending' WHERE id = $1`, [g1.id])).rejects.toThrow(/not allowed/);
+    await expect(ctx.portal.query(`UPDATE billing.licence_issuances SET licence_id = 'VID-x' WHERE id = $1`, [g1.id])).rejects.toThrow(/permission denied/);
+  });
+
+  it("retry is blocked for a refunded purchase", async () => {
+    const o = await newOrder(ctx);
+    const p = paymentEntity({ orderId: o.providerOrderId, amount: o.amountPaise });
+    await postWebhook(ctx, eventBody("payment.captured", p));
+    await drain(deps(ctx));
+    const [g1] = await issuanceFor(ctx, o.orderId);
+    await signerFails(g1.id, "entitlement is 'refunded', not active");
+    await postWebhook(ctx, eventBody("refund.processed", { ...p, status: "refunded", amount_refunded: o.amountPaise, refund_status: "full" }));
+    await drain(deps(ctx));
+    await expect(retryFailedIssuance(ctx.portal, OWNER, { issuanceId: g1.id, reason: "after refund" })).rejects.toThrow(/blocked/);
+  });
+
+  it("issued, email failed → Issued · Email failed → Resend licence sends the IDENTICAL .vlic + key; still one licence", async () => {
+    const o = await newOrder(ctx);
+    await postWebhook(ctx, eventBody("payment.captured", paymentEntity({ orderId: o.providerOrderId, amount: o.amountPaise })));
+    const d = deps(ctx);
+    await drain(d);
+    await sweep(d); // flush deliveries of issuances from earlier tests (shared database)
+    await drain(d);
+    d.mailer.sent = [];
+    const [iss] = await issuanceFor(ctx, o.orderId);
+    const a = await realSigner(ctx, iss.id);
+    const stored = (await issuanceFor(ctx, o.orderId))[0];
+
+    d.mailer.failuresLeft = 1;
+    await sweep(d); // schedules deliver:<issuance_id>
+    await drain(d);
+    const del = await ctx.admin.query(`SELECT state FROM billing.deliveries WHERE issuance_id = $1`, [iss.id]);
+    expect(del.rows).toEqual([{ state: "failed" }]);
+    expect(d.mailer.sent).toHaveLength(0);
+    expect(fulfilmentState({ orderStatus: "paid", issuanceStatus: "issued", deliveryState: "failed" })).toMatchObject({
+      label: "Issued · Email failed",
+      action: "resend",
+    });
+
+    await requestResend(ctx.portal, OWNER, { issuanceId: iss.id, reason: "customer asked again" });
+    // run only the resend (the automatic retry is still in backoff)
+    await drain(d);
+    expect(d.mailer.sent).toHaveLength(1);
+    const mail = d.mailer.sent[0]!;
+    expect(mail.idempotencyKey).toMatch(/^resend:/);
+    expect(mail.attachments).toEqual([{ filename: "vidya-licence.vlic", content: stored.vlic }]);
+    expect(mail.attachments[0]!.content).toBe(a.vlic);
+    expect(mail.text).toContain(stored.licence_key); // the exact stored activation key
+    const lic = verifyArtefact(mail.attachments[0]!.content, MC_A);
+    expect(lic.licence_id).toBe(iss.licence_id);
+    expect(verifyArtefact(stored.licence_key, MC_A)).toEqual(lic);
+
+    // The automatic retry of the original delivery also sends the same artefact.
+    await ctx.admin.query(`UPDATE billing.jobs SET available_at = now() WHERE dedupe_key = $1 AND state = 'ready'`, [`deliver:${iss.id}`]);
+    await drain(d);
+    expect(d.mailer.sent).toHaveLength(2);
+    expect(d.mailer.sent[1]!.attachments[0]!.content).toBe(stored.vlic);
+    const now = await issuanceFor(ctx, o.orderId);
+    expect(now).toHaveLength(1);
+    expect(now[0].vlic).toBe(stored.vlic);
+    expect(now[0].licence_key).toBe(stored.licence_key);
+    expect(await counts(ctx, o.orderId)).toMatchObject({ entitlements: 1, issuances: 1, issueJobs: 1 });
+  });
+
+  it("refund after delivery → recorded, licence flagged for review, licence untouched (no remote disable)", async () => {
+    const o = await newOrder(ctx);
+    const p = paymentEntity({ orderId: o.providerOrderId, amount: o.amountPaise });
+    await postWebhook(ctx, eventBody("payment.captured", p));
+    const d = deps(ctx);
+    await drain(d);
+    const [iss] = await issuanceFor(ctx, o.orderId);
+    const a = await realSigner(ctx, iss.id);
+    await sweep(d);
+    await drain(d);
+    expect(d.mailer.sent.filter((m) => m.attachments[0]?.content === a.vlic)).toHaveLength(1); // delivered
+    const before = (await issuanceFor(ctx, o.orderId))[0];
+    await postWebhook(ctx, eventBody("refund.processed", { ...p, status: "refunded", amount_refunded: o.amountPaise, refund_status: "full" }));
+    await drain(d);
+    expect((await orderRow(ctx, o.orderId)).status).toBe("refunded");
+    const ent = await ctx.admin.query(`SELECT commercial_status FROM billing.entitlements WHERE order_id = $1`, [o.orderId]);
+    expect(ent.rows[0].commercial_status).toBe("refunded");
+    const flag = await ctx.admin.query(`SELECT reason, after_json FROM billing.owner_audit WHERE action = 'review_refund' AND after_json->>'order_id' = $1`, [o.orderId]);
+    expect(flag.rows).toHaveLength(1);
+    expect(flag.rows[0].reason).toMatch(/cannot be remotely disabled/);
+    expect(flag.rows[0].after_json.issued_licences).toEqual([{ issuance_id: iss.id, licence_id: iss.licence_id }]);
+    const after = (await issuanceFor(ctx, o.orderId))[0];
+    expect(after).toEqual(before); // same status, same artefact: the offline licence keeps working
+    expect(verifyArtefact(after.vlic, MC_A).licence_id).toBe(iss.licence_id);
   });
 });
 

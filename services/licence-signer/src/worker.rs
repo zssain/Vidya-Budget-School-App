@@ -5,23 +5,33 @@
 //!    set `state='running'`, `attempts+1`, `locked_by`, `lease_until = now()+60s`;
 //!    commit. (Attempts are counted at claim time so a job that crashes the
 //!    signer still exhausts `max_attempts` instead of looping forever.)
-//! 2. **prepare** (read-only) — load issuance + entitlement, revalidate, build the
-//!    payload, sign, verify with `vidya_core::licence::verify_v2`.
+//! 2. **prepare** — load issuance + entitlement, revalidate, build the payload
+//!    bytes and **persist them before signing** (`payload` is written once, while
+//!    `pending` and still NULL; if already stored, the rebuilt bytes must be
+//!    identical), then sign and verify with `vidya_core::licence::verify_v2`.
 //! 3. **commit** — lock the job row and require we still own it; lock the
 //!    issuance row and require it is still `pending` and the entitlement still
-//!    `active`; write the artefact, mark the job done, append `owner_audit`.
+//!    `active`; write the artefact, mark the job done, append `owner_audit`, and
+//!    enqueue the `deliver:<issuance_id>` email job in the same transaction.
 //!
 //! Because `licence_id` and `issued_at` are persisted by the billing worker before
-//! the job exists, and ed25519 is deterministic, every retry re-signs the same
-//! bytes. The `status='pending'` guard under a row lock means at most ONE artefact
-//! is ever written per issuance, however many signers or duplicate jobs race.
+//! the job exists, the payload bytes are persisted before signing, and ed25519 is
+//! deterministic, every retry — after a crash, a backoff, or an owner "Retry
+//! issuance" of a `failed` row — re-signs the same bytes for the same licence_id.
+//! The `status='pending'` guard under a row lock (plus the 0003 trigger that makes
+//! the artefact immutable once signed) means at most ONE artefact is ever written
+//! per issuance, however many signers or duplicate jobs race.
+//!
+//! Every failed attempt appends `licence_issue_attempt_failed` to `owner_audit`
+//! (the job row only keeps its latest error); a dead job additionally moves a
+//! still-pending issuance to `failed` (`licence_issue_failed`).
 //!
 //! Only columns `vidya_signer` is granted are written.
 
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
-use crate::artefact::{sign_licence, Artefact, LicenceInputs};
+use crate::artefact::{build_payload, sign_payload, Artefact, LicenceInputs};
 use crate::key::Signer;
 
 /// Lease length for a claimed job.
@@ -156,13 +166,15 @@ pub enum Prepared {
     AlreadyIssued,
 }
 
-/// Load + revalidate + sign + verify (transaction-free, read-only).
+/// Load + revalidate + persist payload + sign + verify. The only write is the
+/// one-time `payload` fill of a still-`pending` row (no transaction needed: it is
+/// a single conditional statement, and the bytes are deterministic).
 pub async fn prepare(pool: &PgPool, job: &ClaimedJob, signer: &Signer) -> Result<Prepared, JobError> {
     let issuance_id = job
         .issuance_id
         .ok_or_else(|| JobError::Permanent("job payload has no valid issuance_id".into()))?;
     let row = sqlx::query(
-        "SELECT i.licence_id, i.machine_code, i.issued_at, i.status, \
+        "SELECT i.licence_id, i.machine_code, i.issued_at, i.status, i.payload, \
                 e.school_name, e.modules, e.commercial_status \
          FROM billing.licence_issuances i \
          JOIN billing.entitlements e ON e.id = i.entitlement_id \
@@ -196,8 +208,58 @@ pub async fn prepare(pool: &PgPool, job: &ClaimedJob, signer: &Signer) -> Result
         issued_at: row.try_get("issued_at")?,
         modules: row.try_get("modules")?,
     };
-    let artefact = sign_licence(&inputs, signer).map_err(JobError::Permanent)?;
+    let stored: Option<Vec<u8>> = row.try_get("payload")?;
+    let (licence, payload) = build_payload(&inputs).map_err(JobError::Permanent)?;
+    let stored = match stored {
+        Some(s) => Some(s),
+        None => {
+            // Persist the exact bytes BEFORE signing. Conditional on still-NULL and
+            // still-pending, so racing signers converge on the first write.
+            let res = sqlx::query(
+                "UPDATE billing.licence_issuances SET payload = $2 \
+                 WHERE id = $1 AND status = 'pending' AND payload IS NULL",
+            )
+            .bind(issuance_id)
+            .bind(&payload)
+            .execute(pool)
+            .await?;
+            if res.rows_affected() == 1 {
+                Some(payload.clone())
+            } else {
+                sqlx::query("SELECT payload FROM billing.licence_issuances WHERE id = $1")
+                    .bind(issuance_id)
+                    .fetch_optional(pool)
+                    .await?
+                    .map(|r| r.try_get::<Option<Vec<u8>>, _>("payload"))
+                    .transpose()?
+                    .flatten()
+            }
+        }
+    };
+    if let Some(s) = &stored {
+        if *s != payload {
+            return Err(JobError::Permanent(
+                "stored payload differs from the payload rebuilt from the issuance; refusing to sign different bytes"
+                    .into(),
+            ));
+        }
+    }
+    let artefact = sign_payload(licence, payload, signer).map_err(JobError::Permanent)?;
     Ok(Prepared::Sign(Box::new(artefact)))
+}
+
+/// Enqueue the initial email for an issued licence (idempotent: the billing
+/// worker's sweep uses the same dedupe key as a safety net).
+async fn enqueue_delivery(tx: &mut sqlx::PgConnection, issuance_id: Uuid) -> Result<(), JobError> {
+    sqlx::query(
+        "INSERT INTO billing.jobs (kind, dedupe_key, payload) \
+         VALUES ('deliver_licence', 'deliver:' || $1::text, jsonb_build_object('issuance_id', $1::text)) \
+         ON CONFLICT (dedupe_key) DO NOTHING",
+    )
+    .bind(issuance_id.to_string())
+    .execute(&mut *tx)
+    .await?;
+    Ok(())
 }
 
 /// Lock the job row and confirm this worker still owns it.
@@ -272,6 +334,7 @@ pub async fn commit(
             }
         }
         mark_done(&mut tx, job).await?;
+        enqueue_delivery(&mut tx, issuance_id).await?;
         tx.commit().await?;
         return Ok(Outcome::AlreadyIssued { issuance_id });
     }
@@ -324,6 +387,8 @@ pub async fn commit(
     .bind(job.job_id.to_string())
     .execute(&mut *tx)
     .await?;
+    // Email immediately after issuance (owner decision 2026-11-05: no hold).
+    enqueue_delivery(&mut tx, issuance_id).await?;
     tx.commit().await?;
     Ok(Outcome::Issued {
         issuance_id,
@@ -356,6 +421,7 @@ pub async fn record_failure(pool: &PgPool, job: &ClaimedJob, error: &JobError) -
     .bind(&msg)
     .execute(&mut *tx)
     .await?;
+    audit_attempt_failed(&mut tx, job.issuance_id, job.job_id, job.attempts, dead, &msg).await?;
     if dead {
         if let Some(iid) = job.issuance_id {
             fail_issuance(&mut tx, iid, job.job_id, &msg).await?;
@@ -363,6 +429,32 @@ pub async fn record_failure(pool: &PgPool, job: &ClaimedJob, error: &JobError) -
     }
     tx.commit().await?;
     Ok(Some(dead))
+}
+
+/// One `owner_audit` row per failed attempt, so the attempt history survives
+/// even though `jobs.last_error` only keeps the latest error.
+async fn audit_attempt_failed(
+    tx: &mut sqlx::PgConnection,
+    issuance_id: Option<Uuid>,
+    job_id: Uuid,
+    attempt: i32,
+    dead: bool,
+    msg: &str,
+) -> Result<(), JobError> {
+    let target = issuance_id.map(|u| u.to_string()).unwrap_or_else(|| job_id.to_string());
+    sqlx::query(
+        "INSERT INTO billing.owner_audit (actor, action, target, after_json) \
+         VALUES ('signer', 'licence_issue_attempt_failed', $1, jsonb_build_object( \
+           'job_id', $2::text, 'attempt', $3::int, 'dead', $4::boolean, 'error', $5::text))",
+    )
+    .bind(target)
+    .bind(job_id.to_string())
+    .bind(attempt)
+    .bind(dead)
+    .bind(msg)
+    .execute(&mut *tx)
+    .await?;
+    Ok(())
 }
 
 async fn fail_issuance(
@@ -404,16 +496,28 @@ pub async fn recover_expired_leases(pool: &PgPool) -> Result<u64, JobError> {
              locked_by = NULL, lease_until = NULL, available_at = now(), \
              last_error = 'lease expired: signer crashed or stalled' \
          WHERE kind = 'issue_licence' AND state = 'running' AND lease_until < now() \
-         RETURNING id, state, payload->>'issuance_id' AS issuance_id",
+         RETURNING id, state, attempts, payload->>'issuance_id' AS issuance_id",
     )
     .fetch_all(&mut *tx)
     .await?;
     for r in &rows {
         let state: String = r.try_get("state")?;
-        if state == "dead" {
-            let job_id: Uuid = r.try_get("id")?;
-            let iid: Option<String> = r.try_get("issuance_id")?;
-            if let Some(iid) = iid.and_then(|s| Uuid::parse_str(&s).ok()) {
+        let job_id: Uuid = r.try_get("id")?;
+        let attempts: i32 = r.try_get("attempts")?;
+        let iid: Option<String> = r.try_get("issuance_id")?;
+        let iid = iid.and_then(|s| Uuid::parse_str(&s).ok());
+        let dead = state == "dead";
+        audit_attempt_failed(
+            &mut tx,
+            iid,
+            job_id,
+            attempts,
+            dead,
+            "lease expired: signer crashed or stalled",
+        )
+        .await?;
+        if dead {
+            if let Some(iid) = iid {
                 fail_issuance(&mut tx, iid, job_id, "lease expired after max attempts").await?;
             }
         }

@@ -8,9 +8,9 @@ import {
   completeMachineCode,
   createManualOrder,
   OrderActionError,
-  reissueFailedIssuance,
   requestReconcile,
   requestResend,
+  retryFailedIssuance,
   safeOwnerRedirect,
   transferLicence,
 } from "@vidya/billing-core";
@@ -48,7 +48,8 @@ const ACTIONS = {
     }),
   },
   transfer: { sensitive: true, schema: z.object({ issuanceId: id, newMachineCode: z.string().max(40), reason }) },
-  reissue_failed: { sensitive: true, schema: z.object({ issuanceId: id, reason }) },
+  // Retry a FAILED issuance in place (same licence_id, same generation, no new licence).
+  retry_issuance: { sensitive: true, schema: z.object({ issuanceId: id, reason }) },
 } as const;
 
 type ActionName = keyof typeof ACTIONS;
@@ -110,8 +111,8 @@ export async function POST(req: Request) {
         target = `/licences/${t.issuanceId}`;
         break;
       }
-      case "reissue_failed": {
-        const r = await reissueFailedIssuance(pool, actor, v);
+      case "retry_issuance": {
+        const r = await retryFailedIssuance(pool, actor, v);
         target = `/licences/${r.issuanceId}`;
         break;
       }

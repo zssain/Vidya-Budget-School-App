@@ -121,11 +121,29 @@ pub fn build_licence(inputs: &LicenceInputs) -> Result<LicenceV2, String> {
     })
 }
 
+/// Validate inputs and produce the exact payload bytes to sign (no key needed).
+/// The worker persists these bytes BEFORE signing, so every retry signs the same
+/// bytes even if a crash happens between persisting and signing.
+pub fn build_payload(inputs: &LicenceInputs) -> Result<(LicenceV2, Vec<u8>), String> {
+    let licence = build_licence(inputs)?;
+    let payload = serde_json::to_vec(&licence).map_err(|_| "payload serialisation failed".to_string())?;
+    Ok((licence, payload))
+}
+
 /// Build, sign and **verify** a licence. Fails (nothing to persist) if the app's
 /// verifier does not accept the result with the signer's own public key.
 pub fn sign_licence(inputs: &LicenceInputs, signer: &Signer) -> Result<Artefact, String> {
-    let licence = build_licence(inputs)?;
-    let payload = serde_json::to_vec(&licence).map_err(|_| "payload serialisation failed".to_string())?;
+    let (licence, payload) = build_payload(inputs)?;
+    sign_payload(licence, payload, signer)
+}
+
+/// Sign already-built payload bytes and self-verify them through the app's
+/// verifier. `payload` must equal `serde_json::to_vec(&licence)` (checked).
+pub fn sign_payload(licence: LicenceV2, payload: Vec<u8>, signer: &Signer) -> Result<Artefact, String> {
+    let rebuilt = serde_json::to_vec(&licence).map_err(|_| "payload serialisation failed".to_string())?;
+    if rebuilt != payload {
+        return Err("payload bytes do not match the licence fields".into());
+    }
     let signature = signer.sign(&payload).to_vec();
     let compact = encode_licence_key(&payload, &signature);
 

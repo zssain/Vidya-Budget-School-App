@@ -34,7 +34,7 @@ The signer then runs three short transactions per job:
    `locked_by=<worker id>`, `lease_until=now()+60s`. Commit. Attempts are
    counted when the job is claimed, so a job that crashes the signer every time
    still runs out of attempts instead of looping forever.
-2. **Prepare** (read-only). Load the issuance and its entitlement and check them
+2. **Prepare.** Load the issuance and its entitlement and check them
    again:
    - the issuance is `pending` (if it is already `issued`, the job just closes);
    - `entitlements.commercial_status = 'active'`, so refunded, disputed or
@@ -48,9 +48,14 @@ The signer then runs three short transactions per job:
    - `licence_id` is 1–128 printable ASCII characters, `school_name` is 1–200
      characters with no control characters, and `issued_at` parses as RFC 3339.
 
-   Next, build the payload, sign it, and **verify** it: parse the key back and
-   run `vidya_core::licence::verify_v2` with the signer's own public key and the
-   licence's machine code. If verification fails, nothing is written.
+   Next, build the payload bytes and **persist them before signing**: one
+   conditional `UPDATE … SET payload = … WHERE status='pending' AND payload IS NULL`.
+   If a payload is already stored (an earlier attempt that crashed or failed, or
+   an owner retry), the rebuilt bytes must equal it exactly; otherwise the job
+   fails permanently with "stored payload differs" and nothing is signed. Then
+   sign those bytes and **verify** them: parse the key back and run
+   `vidya_core::licence::verify_v2` with the signer's own public key and the
+   licence's machine code. If verification fails, no artefact is written.
 3. **Commit.** Lock the job row and check that this worker still owns it
    (`state='running'` and `locked_by` = this worker). If not, it is a zombie
    after its lease expired, and it writes nothing. Then lock the issuance row
@@ -59,15 +64,23 @@ The signer then runs three short transactions per job:
    `status='issued'`, `issued_ts=now()` and `signer_key_id`. Mark the job `done`
    and append an `owner_audit` row (`actor='signer'`, `action='licence_issued'`,
    `target=<issuance id>`, `after_json` = licence id, machine code, modules, key
-   id, key fingerprint and job id). If the issuance is already `issued`, the
-   stored bytes must match the new artefact exactly. In that case the job is
-   closed with no second audit row. If they differ, it is a permanent error.
+   id, key fingerprint and job id). In the same transaction it enqueues the
+   email job `deliver_licence` / `deliver:<issuance_id>` (`ON CONFLICT DO
+   NOTHING`; the billing worker's sweep uses the same key as a safety net), so
+   the licence is emailed right after it is signed. If the issuance is already
+   `issued`, the stored bytes must match the new artefact exactly. In that case
+   the job is closed with no second audit row. If they differ, it is a
+   permanent error.
 
-The billing worker stores `licence_id` and `issued_at` before the job exists, and
-ed25519 signing is deterministic (RFC 8032). So **a retry always produces exactly
-the same bytes**. The `status='pending'` guard runs under a row lock, so **only
+The billing worker stores `licence_id` and `issued_at` before the job exists, the
+signer stores the payload bytes before it signs, and ed25519 signing is
+deterministic (RFC 8032). So **a retry always produces exactly the same bytes for
+the same `licence_id`**, whether it follows a crash, a backoff, or an owner
+**Retry issuance**. The `status='pending'` guard runs under a row lock, so **only
 one artefact is ever written per issuance**, even if several signers or several
-jobs for the same issuance race each other.
+jobs for the same issuance race each other. Migration
+`0003_issuance_retry.sql` adds a trigger that enforces this in the database for
+every role, superusers included (see below).
 
 ### Failures, retries, leases
 
@@ -77,14 +90,59 @@ jobs for the same issuance race each other.
 | Transient (database errors) | Job → `ready`, `available_at = now() + min(30s·2^(attempt-1), 1h)`, `last_error` set. Once `attempts >= max_attempts` it goes to `dead`, and the issuance → `failed`. |
 | Signer crash or stall | At the start of every poll, any `running` job with `lease_until < now()` goes back to `ready`, or to `dead` (issuance → `failed`) if all its attempts are used. |
 
+Every failed attempt (permanent, transient, or an expired lease) also appends
+an `owner_audit` row `licence_issue_attempt_failed` (`actor='signer'`,
+`target=<issuance id>`, `after_json` = job id, attempt number, `dead`, error).
+`jobs.last_error` keeps only the latest error, so the audit rows are the attempt
+history.
+
 `last_error` holds operational text only, at most 500 characters. It never
 contains key material, and a database error is reduced to the server message and
 SQLSTATE.
 
-The issuance moves to `failed` only when its job is **dead**. A `failed` issuance
-cannot be set back to `pending` by any role (the portal can only `INSERT`
-issuances). To re-issue after fixing the data (for example, after a dispute is
-resolved), the portal or worker creates a new generation.
+### Retry issuance (owner decision 2026-11-05)
+
+The issuance moves to `failed` only when its job is **dead**. The order stays
+`paid`; the owner dashboard shows it as **Paid · Licence pending** with a
+**Retry issuance** action (`retry_issuance`: owner UUID + AAL2 + fresh TOTP
+step-up, reason required, same-origin; `retryFailedIssuance` in
+`packages/billing-core/src/owner-actions.ts`). In one transaction, serialised on
+the order row and then the issuance row, it:
+
+- requires `status='failed'`, no signature, `commercial_status='active'`, the
+  latest generation, and no `ready`/`running` issue job for this issuance;
+- sets the **same row** back to `status='pending'` and clears `last_error`.
+  The entitlement, generation, `licence_id`, machine code, `issued_at` and any
+  persisted payload bytes are unchanged, so there is no second charge, no new
+  licence and no new generation;
+- enqueues a **new** job `issue:<issuance_id>:retry:<n>`. The dead job rows are
+  never reused or rewritten;
+- appends `licence_issue_retry_requested` (owner actor, reason, request id,
+  `before_json` = the error and the failed jobs, `after_json` = licence id,
+  generation, new job id).
+
+The signer then processes the new job like any other. Only a **transfer** (a new
+machine code) creates a new issuance.
+
+`0003_issuance_retry.sql` grants `vidya_portal` `UPDATE (status, last_error)`
+on `licence_issuances` for this, and adds the `licence_issuance_guard` trigger:
+
+- identity columns (`entitlement_id`, `generation`, `licence_id`,
+  `machine_code`, `issued_at`) can never change;
+- once `payload` is written it can never change;
+- once `signature` is written, `signature`, `licence_key`, `vlic` and
+  `signer_key_id` can never change;
+- status can only move `pending → issued | failed | superseded`,
+  `failed → pending` (only while unsigned), or `issued → superseded`;
+- `issued` requires a complete artefact.
+
+### Email and resend
+
+`Resend licence` (`requestResend`) enqueues a `deliver_licence` job with a new
+idempotency key. `deliverLicence` only **reads** `licence_issuances` (and
+`vidya_worker` has no `UPDATE` on it), so it attaches the exact stored `vlic` as
+`vidya-licence.vlic` and prints the exact stored `licence_key`. A failed email
+appears as **Issued · Email failed** and never re-signs or re-issues anything.
 
 ### Database privileges
 
@@ -93,15 +151,16 @@ The signer runs as a login role that is a member of `vidya_signer`, for example
 statement uses schema-qualified names (`billing.*`) and writes only the columns
 that `vidya_signer` is granted: issuance `payload/signature/licence_key/vlic/status/last_error/issued_ts/signer_key_id`,
 job `state/attempts/available_at/locked_by/lease_until/last_error/completed_at`,
-plus `INSERT` into `owner_audit`. It never locks `entitlements` (it has no
+plus `INSERT` into `owner_audit` and `jobs` (the delivery job). It never locks `entitlements` (it has no
 `UPDATE` on that table, so it cannot use `FOR SHARE`). Instead it re-reads
 `commercial_status` inside the commit transaction. A refund committed after that
 read can still race a commit by a few milliseconds. The licence is perpetual and
 offline either way, so any refund handling happens on the commercial side. The
 tests run every signer statement as `vidya_signer` (`SET ROLE`), and they check
 that this role **cannot** insert entitlements, change an issuance's machine code,
-or update entitlements. **No schema change was needed**: `0002_signer.sql` was
-not added.
+or update entitlements. The signer's grants are unchanged by
+`0003_issuance_retry.sql`. That migration only adds the `licence_issuance_guard`
+trigger and the portal's `UPDATE (status, last_error)` for Retry issuance.
 
 ## Byte compatibility with `tools/licence-maker`
 
@@ -216,7 +275,10 @@ check proves nothing.
 
 ## Transfer semantics
 
-A transfer is a new issuance with `generation = n+1` and the new machine code. The
+A transfer is the **only** action that creates a new issuance (owner decision
+2026-11-05). A failed signing is retried in place, and a lost email is resent
+from the stored artefact. A transfer is a new issuance with `generation = n+1`
+and the new machine code. The
 billing worker creates it (and the `licence_transfers` row), and the signer signs
 it like any other issuance. The signer **never modifies or revokes** an earlier
 generation. The old licence is perpetual, offline and bound to the old PC, so
@@ -252,8 +314,10 @@ no inbound network access and egress only to Postgres.
 Tests need a local Postgres. The default is
 `postgres://postgres@localhost:55432/postgres`; override it with
 `SIGNER_TEST_ADMIN_URL`. Each test creates a throw-away database
-`signer_test_<uuid>`, applies the real `0001_billing.sql`, and drops the database
-afterwards (a panicking test leaves it behind).
+`signer_test_<uuid>`, applies the real migrations (`0001`–`0003`, in order), and
+drops the database afterwards (a panicking test leaves it behind). With Homebrew
+Postgres 16 a throw-away cluster is enough:
+`initdb -D <dir> -U postgres --auth=trust && pg_ctl -D <dir> -o "-p 55432 -k ''" start`.
 
 ```sh
 cd services/licence-signer && cargo test && cargo clippy --all-targets -- -D warnings
@@ -261,9 +325,29 @@ cd services/licence-signer && cargo test && cargo clippy --all-targets -- -D war
 
 ## What was and was not verified
 
-Verified by automated tests against real Postgres 16 on localhost (`cargo test`:
-32 tests: 10 unit, 12 DB, 1 binary end-to-end, 4 golden/compat, 5 binary
-startup). The DB and e2e suites passed 5 repeated runs with no flakes:
+Verified by automated tests against real Postgres 16 on localhost (`cargo test`,
+2026-11-05: 37 tests: 10 unit, 12 DB, 5 retry/resend (`tests/retry.rs`), 1
+binary end-to-end, 4 golden/compat, 5 binary startup). The original DB and e2e
+suites passed 5 repeated runs with no flakes when first written (2026-10-31):
+- (a) a crash after signing, inside the commit transaction (artefact written,
+  job not completed, no COMMIT), followed by lease recovery and a retry: one
+  paid order, one issuance, one issued licence, one downloadable key, the same
+  `licence_id` and byte-identical payload and signature. `verify_v2` accepts it,
+  and one `deliver:` job is queued;
+- (b) a signer failure (simulated "signing key unavailable"; the payload was
+  already persisted) until the job is dead: the issuance is `failed` and the order
+  still `paid`. Then the owner retry (run as `vidya_portal`, mirroring
+  `retryFailedIssuance`) leads to `issued` with the **original** `licence_id`,
+  the same generation and byte-identical payload. The dead job is kept, both
+  failed attempts and the retry are audited, a second retry is refused, and an
+  issued row cannot be reset even by a superuser. Retry is refused for a refunded
+  purchase, and a stored payload that no longer matches the entitlement is never
+  signed;
+- (c) a failed email, followed by a resend: the bytes the worker reads for the
+  email (`licence_id`, `licence_key`, `vlic`) are identical before and after,
+  `verify_v2` accepts them, and a stray duplicate issue job only closes
+  (`AlreadyIssued`). The artefact columns are immutable for every role, and there
+  is still one licence;
 - the real binary, end to end: it loads a key file, connects with
   `role=vidya_signer`, signs a seeded job (`verify_v2` accepts the stored
   artefact), exits 0 on SIGTERM, and prints no key material in its logs;
@@ -286,8 +370,12 @@ startup). The DB and e2e suites passed 5 repeated runs with no flakes:
   inline key in the environment, with no key material in the output.
 
 Not verified:
-- the end-to-end contract with the real billing worker, which was being built
-  in parallel. The tests insert rows the way the contract above describes;
+- one process chain through both languages. The Rust tests mirror the portal's
+  retry SQL and the worker's delivery reads instead of running the TypeScript.
+  The TypeScript suites (`services/billing-worker/test/durability.test.ts`) test
+  `retryFailedIssuance`, `requestResend` and `deliverLicence` themselves, with a
+  node:crypto ed25519 test signer pinned to the same golden vector, rather than
+  this binary;
 - TLS to a managed Postgres (only plaintext localhost was exercised; the build
   uses sqlx `tls-rustls-ring`, which has no native-tls or OpenSSL dependency);
 - real deployment: no container image, secret mounting or supervisor setup is

@@ -14,7 +14,12 @@ use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 use sqlx::{AssertSqlSafe, ConnectOptions, Connection, Executor, PgPool, Row};
 use uuid::Uuid;
 
-const MIGRATION: &str = include_str!("../../../../infra/licensing/migrations/0001_billing.sql");
+/// Every billing migration, in order (the same files the billing worker's runner applies).
+const MIGRATIONS: &[&str] = &[
+    include_str!("../../../../infra/licensing/migrations/0001_billing.sql"),
+    include_str!("../../../../infra/licensing/migrations/0002_portal_support.sql"),
+    include_str!("../../../../infra/licensing/migrations/0003_issuance_retry.sql"),
+];
 
 /// Serialises migration application inside one test binary (the migration's
 /// idempotent `CREATE ROLE` blocks are cluster-global and can race).
@@ -50,7 +55,14 @@ impl TestDb {
             let mut last_err = None;
             for _ in 0..5 {
                 let mut c = db_opts.connect().await.expect("connect to test db");
-                match sqlx::raw_sql(MIGRATION).execute(&mut c).await {
+                let mut applied = Ok(());
+                for m in MIGRATIONS {
+                    if let Err(e) = sqlx::raw_sql(*m).execute(&mut c).await {
+                        applied = Err(e);
+                        break;
+                    }
+                }
+                match applied {
                     Ok(_) => {
                         last_err = None;
                         c.close().await.ok();
@@ -91,12 +103,26 @@ impl TestDb {
 
     /// Another `vidya_signer` pool (a second signer process).
     pub async fn another_signer_pool(&self) -> PgPool {
+        self.role_pool("SET ROLE vidya_signer").await
+    }
+
+    /// A pool acting as the owner portal (`vidya_portal`, production grants).
+    pub async fn portal_pool(&self) -> PgPool {
+        self.role_pool("SET ROLE vidya_portal").await
+    }
+
+    /// A pool acting as the billing worker (`vidya_worker`: sends the emails).
+    pub async fn worker_pool(&self) -> PgPool {
+        self.role_pool("SET ROLE vidya_worker").await
+    }
+
+    async fn role_pool(&self, set_role: &'static str) -> PgPool {
         let opts: PgConnectOptions = admin_url().parse::<PgConnectOptions>().unwrap().database(&self.name);
         PgPoolOptions::new()
             .max_connections(4)
-            .after_connect(|conn, _meta| {
+            .after_connect(move |conn, _meta| {
                 Box::pin(async move {
-                    conn.execute("SET ROLE vidya_signer").await?;
+                    conn.execute(set_role).await?;
                     Ok(())
                 })
             })
@@ -340,4 +366,143 @@ pub async fn expire_lease(db: &TestDb, job_id: Uuid) {
         .execute(&db.seed)
         .await
         .unwrap();
+}
+
+/// The owner portal's "Retry issuance": the same statements and state transitions as
+/// `retryFailedIssuance` in packages/billing-core/src/owner-actions.ts (the TS
+/// action itself is tested in services/billing-worker/test; this audit JSON is
+/// abbreviated). Runs as `vidya_portal`, so the 0003 grant and trigger are
+/// exercised. Returns the new job id, or the refusal code.
+pub async fn portal_retry_issuance(
+    portal: &PgPool,
+    issuance_id: Uuid,
+    owner: &str,
+    reason: &str,
+) -> Result<Uuid, String> {
+    let mut tx = portal.begin().await.unwrap();
+    let order_id: Uuid = match sqlx::query(
+        "SELECT e.order_id FROM billing.licence_issuances i JOIN billing.entitlements e ON e.id = i.entitlement_id \
+         WHERE i.id = $1",
+    )
+    .bind(issuance_id)
+    .fetch_optional(&mut *tx)
+    .await
+    .unwrap()
+    {
+        Some(r) => r.get(0),
+        None => return Err("not_found".into()),
+    };
+    sqlx::query("SELECT * FROM billing.orders WHERE id = $1 FOR UPDATE")
+        .bind(order_id)
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    let s = sqlx::query(
+        "SELECT i.entitlement_id, i.generation, i.status, i.licence_id, i.machine_code, i.last_error, \
+                i.signature IS NOT NULL AS signed, e.commercial_status \
+         FROM billing.licence_issuances i JOIN billing.entitlements e ON e.id = i.entitlement_id \
+         WHERE i.id = $1 FOR UPDATE OF i",
+    )
+    .bind(issuance_id)
+    .fetch_one(&mut *tx)
+    .await
+    .unwrap();
+    let status: String = s.get("status");
+    let signed: bool = s.get("signed");
+    if status != "failed" || signed {
+        return Err("not_failed".into());
+    }
+    let commercial: String = s.get("commercial_status");
+    if commercial != "active" {
+        return Err("blocked".into());
+    }
+    let generation: i32 = s.get("generation");
+    let latest: i32 = sqlx::query("SELECT max(generation) FROM billing.licence_issuances WHERE entitlement_id = $1")
+        .bind(s.get::<Uuid, _>("entitlement_id"))
+        .fetch_one(&mut *tx)
+        .await
+        .unwrap()
+        .get(0);
+    if latest != generation {
+        return Err("not_latest".into());
+    }
+    let history = sqlx::query(
+        "SELECT id, dedupe_key, state, attempts, last_error FROM billing.jobs \
+         WHERE kind = 'issue_licence' AND payload->>'issuance_id' = $1 ORDER BY created_at",
+    )
+    .bind(issuance_id.to_string())
+    .fetch_all(&mut *tx)
+    .await
+    .unwrap();
+    if history
+        .iter()
+        .any(|r| matches!(r.get::<String, _>("state").as_str(), "ready" | "running"))
+    {
+        return Err("retry_in_progress".into());
+    }
+    sqlx::query(
+        "UPDATE billing.licence_issuances SET status = 'pending', last_error = NULL WHERE id = $1 AND status = 'failed'",
+    )
+    .bind(issuance_id)
+    .execute(&mut *tx)
+    .await
+    .unwrap();
+    let job_id: Uuid = sqlx::query(
+        "INSERT INTO billing.jobs (kind, dedupe_key, payload) \
+         VALUES ('issue_licence', $1, jsonb_build_object('issuance_id', $2::text)) RETURNING id",
+    )
+    .bind(format!("issue:{issuance_id}:retry:{}", history.len()))
+    .bind(issuance_id.to_string())
+    .fetch_one(&mut *tx)
+    .await
+    .unwrap()
+    .get(0);
+    let failed_jobs: Vec<String> = history.iter().map(|r| r.get::<Uuid, _>("id").to_string()).collect();
+    sqlx::query(
+        "INSERT INTO billing.owner_audit (actor, action, target, before_json, after_json, reason) \
+         VALUES ($1, 'licence_issue_retry_requested', $2, \
+                 jsonb_build_object('status', 'failed', 'last_error', $3::text, 'failed_jobs', $4::text[]), \
+                 jsonb_build_object('status', 'pending', 'licence_id', $5::text, 'generation', $6::int, 'job_id', $7::text), $8)",
+    )
+    .bind(owner)
+    .bind(issuance_id.to_string())
+    .bind(s.get::<Option<String>, _>("last_error"))
+    .bind(&failed_jobs)
+    .bind(s.get::<String, _>("licence_id"))
+    .bind(generation)
+    .bind(job_id.to_string())
+    .bind(reason)
+    .execute(&mut *tx)
+    .await
+    .unwrap();
+    tx.commit().await.unwrap();
+    Ok(job_id)
+}
+
+/// Any-actor audit count for (action, target).
+pub async fn audit_count_any(db: &TestDb, action: &str, target: Uuid) -> i64 {
+    sqlx::query("SELECT count(*) FROM billing.owner_audit WHERE action = $1 AND target = $2")
+        .bind(action)
+        .bind(target.to_string())
+        .fetch_one(&db.seed)
+        .await
+        .unwrap()
+        .get(0)
+}
+
+/// (orders paid, issuances, issued issuances, downloadable keys) for one entitlement's order.
+pub async fn order_summary(db: &TestDb, entitlement_id: Uuid) -> (i64, i64, i64, i64) {
+    let r = sqlx::query(
+        "SELECT \
+           (SELECT count(*) FROM billing.orders o JOIN billing.entitlements e ON e.order_id = o.id \
+             WHERE e.id = $1 AND o.status = 'paid') AS paid, \
+           (SELECT count(*) FROM billing.licence_issuances WHERE entitlement_id = $1) AS iss, \
+           (SELECT count(*) FROM billing.licence_issuances WHERE entitlement_id = $1 AND status = 'issued') AS issued, \
+           (SELECT count(*) FROM billing.licence_issuances WHERE entitlement_id = $1 AND vlic IS NOT NULL) AS keys",
+    )
+    .bind(entitlement_id)
+    .fetch_one(&db.seed)
+    .await
+    .unwrap();
+    (r.get("paid"), r.get("iss"), r.get("issued"), r.get("keys"))
 }

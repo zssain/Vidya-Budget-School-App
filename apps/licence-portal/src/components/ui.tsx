@@ -1,5 +1,5 @@
 // Server-renderable UI primitives (no client JS).
-import { formatInr } from "@vidya/billing-core";
+import { formatInr, type Fulfilment } from "@vidya/billing-core";
 import Link from "next/link";
 
 export function inr(paise: string | number | null | undefined): string {
@@ -40,6 +40,23 @@ export function Badge({ value }: { value: string | null | undefined }) {
   return (
     <span className={`inline-block rounded px-1.5 py-0.5 text-xs font-medium ${TONES[v] ?? "bg-slate-100 text-slate-700"}`}>
       {v.replace(/_/g, " ")}
+    </span>
+  );
+}
+
+const FULFILMENT_TONES: Record<Fulfilment["tone"], string> = {
+  ok: "bg-emerald-100 text-emerald-800",
+  warn: "bg-amber-100 text-amber-800",
+  bad: "bg-rose-100 text-rose-800",
+  neutral: "bg-slate-100 text-slate-700",
+};
+
+/** Combined payment · issuance · delivery state, e.g. "Paid · Licence pending". */
+export function FulfilmentBadge({ f }: { f: Fulfilment }) {
+  return (
+    <span className="inline-flex flex-col items-end gap-0.5">
+      <span className={`inline-block rounded px-2 py-0.5 text-sm font-medium ${FULFILMENT_TONES[f.tone]}`}>{f.label}</span>
+      {f.hint ? <span className="text-xs text-slate-500">{f.hint}</span> : null}
     </span>
   );
 }

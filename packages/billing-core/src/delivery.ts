@@ -49,9 +49,13 @@ async function loadSource(q: Queryable, issuanceId: string): Promise<DeliverySou
   return r.rows[0] ?? null;
 }
 
-/** Group a licence key in blocks of 5 for pasting (the app ignores whitespace). */
+/**
+ * Group a licence key in blocks of 5 for pasting (the app ignores whitespace).
+ * Idempotent: the signer already stores `licence_key` grouped (licence-maker's
+ * group5), so re-grouping must reproduce it exactly, not regroup the spaces.
+ */
 export function groupKey(key: string): string {
-  return key.replace(/(.{5})/g, "$1 ").trim();
+  return key.replace(/\s+/g, "").replace(/(.{5})/g, "$1 ").trim();
 }
 
 export function licenceEmail(src: DeliverySource): { subject: string; text: string } {

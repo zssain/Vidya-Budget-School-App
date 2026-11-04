@@ -45,10 +45,19 @@ into a chat or a commit.
 - [ ] Switch Razorpay to live, set the live price, make a ₹1-style real purchase, refund it.
 - [ ] Publish the first signed release (drafts only so far).
 
-## Open owner questions (answer any time)
+## Decided (2026-11-05)
 
-- Licence signer: a failed issuance cannot be "reset" — only a new generation is issued. OK?
-- Refunds/disputes: the worker marks the entitlement `refunded`/`disputed` and raises a
-  review flag in your dashboard, but an already-issued offline perpetual licence **cannot be
-  remotely disabled**. A refund that lands while a licence is being signed may still see it
-  emailed. OK, or hold emailing for a delay after capture?
+1. **Paid, signing failed** → the order stays **Paid · Licence pending**. Use **Retry issuance**
+   on the licence or order page (fresh MFA code, reason required, audited). It re-queues the
+   SAME purchase, machine code and licence ID (same generation): no second charge, no new
+   licence. Every failed attempt stays in the audit log and the licence page's attempt history.
+2. **Signed, email failed** → **Issued · Email failed**. **Resend licence** emails the exact
+   stored `.vlic` and activation key again. It never signs or issues anything new.
+3. **New machine code for an issued licence** → **Transfer**: an audited replacement linked to
+   the original. It is the only action that creates a new issuance (new licence ID). The old
+   PC's offline licence keeps working.
+4. **Captured payment** → the licence is issued and emailed straight away, once the payment,
+   amount, currency, order and machine code have been verified. There is no hold or delay.
+5. **Refund after delivery** → the refund is recorded and the licence is flagged for your
+   review (the dashboard flag names the issued licence). The offline perpetual licence keeps
+   working: there is no remote disable.
