@@ -217,6 +217,21 @@ fn ids_of(conn: &Connection, sql: &str, args: &[&dyn rusqlite::ToSql]) -> rusqli
 
 /// Is a single (table, record_id) visible to this actor, and if so its filtered
 /// row? Used by `/sync/pull` to scope incremental changes (docs §8.8).
+/// Strip school-PC-only secrets from the `school` row before it leaves the school
+/// PC: the automatic-WhatsApp access token (`settings_json.wa_auto.token`). Only
+/// the school PC sends WhatsApp messages, so no device ever needs it.
+pub fn redact_school(row: &mut serde_json::Value) {
+    let Some(raw) = row.get("settings_json").and_then(|v| v.as_str()) else { return };
+    let Ok(mut settings) = serde_json::from_str::<serde_json::Value>(raw) else { return };
+    let Some(wa) = settings.get_mut("wa_auto").and_then(|w| w.as_object_mut()) else { return };
+    if wa.remove("token").is_none() {
+        return;
+    }
+    if let Some(o) = row.as_object_mut() {
+        o.insert("settings_json".into(), serde_json::Value::String(settings.to_string()));
+    }
+}
+
 pub fn visible_row(conn: &Connection, actor: &Actor, table: &str, id: &str) -> rusqlite::Result<Option<Change>> {
     if !can_see_table(actor.role, table) {
         return Ok(None);
@@ -225,10 +240,13 @@ pub fn visible_row(conn: &Connection, actor: &Actor, table: &str, id: &str) -> r
     if !table_in_scope(&crate::modules::enabled_set(conn)?, table) {
         return Ok(None);
     }
-    let row = match read_row_json(conn, table, id)? {
+    let mut row = match read_row_json(conn, table, id)? {
         Some(r) => r,
         None => return Ok(None),
     };
+    if table == "school" {
+        redact_school(&mut row);
+    }
     let mk = |mut payload: serde_json::Value, filter: Option<&dyn Fn(&mut serde_json::Value)>| {
         if let Some(f) = filter {
             f(&mut payload);
@@ -471,7 +489,7 @@ pub fn snapshot(conn: &Connection, actor: &Actor) -> rusqlite::Result<Vec<Change
     };
 
     // Everyone: school, sessions, terms, subjects, calendar (P13).
-    for id in ids_of(conn, "SELECT id FROM school", &[])? { push(conn, "school", &id, None)?; }
+    for id in ids_of(conn, "SELECT id FROM school", &[])? { push(conn, "school", &id, Some(&redact_school))?; }
     for id in ids_of(conn, "SELECT id FROM academic_session", &[])? { push(conn, "academic_session", &id, None)?; }
     for id in ids_of(conn, "SELECT id FROM term", &[])? { push(conn, "term", &id, None)?; }
     for id in ids_of(conn, "SELECT id FROM subject", &[])? { push(conn, "subject", &id, None)?; }
@@ -880,5 +898,27 @@ mod tests {
         // Principal staff rows keep secrets (full row).
         let staff: Vec<&Change> = snap.iter().filter(|c| c.table == "staff").collect();
         assert!(staff.iter().any(|s| s.payload.get("pin_hash").is_some()));
+    }
+
+    #[test]
+    fn the_whatsapp_token_never_leaves_the_school_pc() {
+        let mut c = crate::db::open_in_memory("0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef").unwrap();
+        crate::db::run_migrations(&mut c).unwrap();
+        crate::seed::seed_demo_school(&mut c, time::OffsetDateTime::now_utc()).unwrap();
+        c.execute(
+            "UPDATE school SET settings_json=json_set(COALESCE(settings_json,'{}'),'$.wa_auto',json('{\"phone_number_id\":\"123\",\"token\":\"SECRET-TOKEN\"}'))",
+            [],
+        )
+        .unwrap();
+        for staff in ["stf-meena", "stf-priya", "stf-suresh"] {
+            let Some(actor) = crate::sync::apply::load_actor(&c, staff).unwrap() else { continue };
+            let snap = snapshot(&c, &actor).unwrap();
+            let school = snap.iter().find(|ch| ch.table == "school").expect("school row");
+            assert!(!school.payload.to_string().contains("SECRET-TOKEN"), "{staff}: token in snapshot");
+            assert!(school.payload.to_string().contains("phone_number_id"), "the rest of the settings still syncs");
+            let id = school.record_id.clone();
+            let row = visible_row(&c, &actor, "school", &id).unwrap().unwrap();
+            assert!(!row.payload.to_string().contains("SECRET-TOKEN"), "{staff}: token in pull");
+        }
     }
 }
