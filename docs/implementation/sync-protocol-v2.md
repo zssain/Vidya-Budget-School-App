@@ -53,19 +53,97 @@ function** as the author in Server mode, so every rule is enforced in one place:
 | `attendance_sheet` | `{class_id, date, submit, marks[]}` | `logic::attendance_write` |
 | `marks_sheet` | `{exam_subject_id, submit, entries[]}` | `logic::upsert_marks` |
 | `request` | `RequestCmd {create\|leave\|cancel, id, …}` | `logic::request_command` |
+| `request` | `RequestCmd {decide, id, decision, note}` (W1) | `logic::decide_request_with` (`from_device = true`) — see §2a |
 | `staff_attendance` | `{cmd: check_in\|check_out, …}` | `staff_check_in/out_logic` (route = transport: LAN push → `lan`, Drive import → `drive`) |
-| `message`, `circular_read`, `homework_note`, `report_remark`, `student`, `expense` | `ClientCmd {record_message\|mark_circular_read\|delete_homework_note\|save_report_remark\|create_student\|record_expense, …}` | `logic::run_client_cmd` |
+| `staff_attendance` | `{cmd: accept_away_checkin\|reject_away_checkin, id}` (W1) | `accept/reject_away_checkin_logic` — see §2a |
+| `message`, `circular_read`, `homework_note`, `report_remark`, `student`, `expense`, `store_sale` | `ClientCmd {record_message\|mark_circular_read\|delete_homework_note\|save_report_remark\|create_student\|record_expense\|record_store_sale, …}` | `logic::run_client_cmd` (store sale → `record_store_sale_with`, §2b) |
 | `payment` (`insert`) | complete payment row | `apply_payment` (always accepted §8.6; re-allocated; voucher posted in the same tx) |
 
 Rows a device creates use ids both sides agree on (device-chosen or deterministic:
 `sheet-<class>-<date>`, `msheet-<exam_subject>`, `sat-<staff>-<date>`,
 `crd-<circular>-<staff>`, `rmk-<exam>-<student>`, `enr-<student>-<session>`, …).
 
+Rows a decision or sale touches keep ids both sides agree on: the request id, the
+`staff_attendance` row id, the device-chosen `sale-<uuid>` and its stock moves
+`mv-<sale>-<line>`.
+
+### 2a. Principal decisions from a joined device (W1)
+
+`decide_request` (approve / reject / return) and `accept_away_checkin` /
+`reject_away_checkin` run on a joined PC/phone signed in as the Principal:
+
+* **On the device:** the usual checks (ApproveRequest / ManageStaffHr, `hr` module,
+  still pending locally, off-server policy below), then ONE transaction: the local
+  row takes the decision (`request.sync_state='on_device'`), an audit row, and ONE
+  `action` op carrying the command. The **effects** (leave record + leave days,
+  corrected attendance mark, notification) are NOT written locally — only the school
+  PC writes them, and they arrive by pull; nothing shows as "applied" before it is.
+* **On the school PC:** `apply_client_op` binds the op to the authenticated, live
+  (unrevoked) device and its staff; `apply_op` refuses a suspended/removed author
+  (`flagged revoked_author`); the replay then runs the SAME function as the author
+  with the author's CURRENT role from the staff table (a teacher / accountant →
+  `FORBIDDEN`). The decision UPDATE is guarded `WHERE status='pending'`
+  (`'away_pending'` for check-ins) **inside** the decision transaction, before any
+  effect: a request decided meanwhile (on the school PC or another device) →
+  `ALREADY_DECIDED`, the transaction rolls back, nothing is applied twice. The
+  device gets the rejection as an Inbox item (`error.ALREADY_DECIDED`) and the pull
+  replaces its optimistic local decision with the canonical one. Audit rows carry
+  the Principal and the device (`approve_request` / `reject_request` /
+  `return_request` / `accept_away_checkin` / `reject_away_checkin`).
+* **Idempotency:** a re-delivered op (LAN retry, Drive copy) returns its stored
+  result; a *different* op deciding the same request is `ALREADY_DECIDED`.
+* **Off-server policy** (`logic::decision_allowed_off_server`, enforced on the device
+  AND on replay): every reject / return syncs; **approving** a `payment_reversal`
+  (a money correction that posts a reversal voucher), an `access_change` (staff
+  permissions) or a `device_replacement` (device registry) stays on the school PC
+  → `SERVER_ONLY`.
+
+### 2b. Store sales from a joined device (W1)
+
+Store is an optional module, **off by default**. Module switches live in
+`module_setting`, which is not a synced table, so the school PC publishes them into
+`school.settings_json.modules` (`{key: bool}`; on every `set_module` and at
+startup, written only when changed — `modules::publish_to_school`); a joined device
+gates its commands on that published set (`modules::enabled_set` / `is_enabled`
+read it on a client; a school row without it → the local defaults).
+
+* **On the device:** `record_store_sale` (accountant / Principal, store on as last
+  published) checks the cart against the device's copy of the stock (a sale beyond
+  it is blocked before any money is taken), takes a receipt number from the
+  device's OWN series (`S-<series>-NNNN`), writes the sale and its stock moves
+  `on_device` (no voucher) and queues ONE `store_sale` / `action` op:
+  `ClientCmd::RecordStoreSale {id, today, receipt_no, input}` where every line
+  carries the `price_paise` actually charged.
+* **On the school PC (`record_store_sale_with`, replay):** module gate (store off →
+  `MODULE_OFF`, nothing written) and RecordStoreSale permission first. Then, because
+  the money was already taken (§8.6), the sale is **always** recorded — exactly once:
+  * idempotent by the device-chosen id: a re-delivered op returns its stored result;
+    a different op carrying an already-recorded sale id returns that sale and writes
+    nothing (one sale, one voucher, one stock decrement);
+  * recorded at the device's prices (`vidya_core::store::replay_sale` checks only the
+    shape: lines, `qty > 0`, `price ≥ 0`, total > 0); the Store-income voucher is
+    posted in the same transaction;
+  * stock is decremented and **may go negative**; any line that took an item below
+    zero raises a `store_oversold` review flag (`{items: [{item_id, stock_after}]}`)
+    for the Principal — never a refusal;
+  * a price that differs from the school PC's, a since-deactivated item, or a
+    receipt number already used (then a fresh number from the same series is
+    assigned) raises a `store_sale_review` flag (migration 0035 widens
+    `review_flag.kind`);
+  * an op whose `record_id` is not the sale id → `MALFORMED`; an unknown item →
+    refused (`NOT_FOUND`: no such stock exists).
+* `stock_adjust` (Principal) accepts any **increase** even if the result is still
+  negative, so a purchase that only partly covers an oversell can be recorded.
+
 ### School-PC-only commands
 
-69 commands return `SERVER_ONLY` on a joined device (settings, structure, approvals,
-staff/devices, money corrections, timetable, exams, calendar, circulars, custom
-fields, privacy actions, backups, bulk import, transfers, guardian edits, store sales).
+66 command gates return `SERVER_ONLY` on a joined device (settings, structure,
+staff/devices, money corrections — direct reversal, attendance correction, and
+approving a payment reversal from a device —, timetable, exams, calendar,
+circulars, custom fields, privacy actions, backups, bulk import, transfers,
+guardian edits, store catalogue + stock adjustments, the Principal's manual
+staff-attendance entry, and conflict / review-flag resolution, whose tables exist
+only on the school PC).
 
 ## 3. School PC → devices
 

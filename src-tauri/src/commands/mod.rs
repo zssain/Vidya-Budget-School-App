@@ -713,9 +713,9 @@ pub fn save_store_item(state: State<RtCtx>, input: StoreItemInput) -> CmdResult<
 
 #[tauri::command]
 pub fn record_store_sale(state: State<RtCtx>, input: StoreSaleInput) -> CmdResult<StoreSaleDto> {
-    // Store sales stay on the school PC for now: replaying one after stock changed
-    // could mean refusing money already taken (§8.6). Module `store` is off by default.
-    state.require_server_device()?;
+    // Syncs from a joined PC (W1): queued as one store_sale action; the school PC
+    // always records it (money already taken, §8.6) — an oversell is flagged, never
+    // refused. Module `store` is off by default (gated here and on the school PC).
     let actor = state.require_session()?;
     let device_id = state.device_id.lock().map_err(|_| crate::error::CmdError::internal("lock"))?.clone();
     let mode = state.device_mode;
@@ -1049,7 +1049,7 @@ pub fn staff_attendance_month(state: State<RtCtx>, month: String) -> CmdResult<S
 
 #[tauri::command]
 pub fn accept_away_checkin(state: State<RtCtx>, id: String) -> CmdResult<()> {
-    state.require_server_device()?;
+    // Syncs from a joined device (W1): replayed on the school PC as the Principal.
     let actor = state.require_session()?;
     let device_id = state.device_id.lock().map_err(|_| crate::error::CmdError::internal("lock"))?.clone();
     let mode = state.device_mode;
@@ -1058,7 +1058,7 @@ pub fn accept_away_checkin(state: State<RtCtx>, id: String) -> CmdResult<()> {
 
 #[tauri::command]
 pub fn reject_away_checkin(state: State<RtCtx>, id: String) -> CmdResult<()> {
-    state.require_server_device()?;
+    // Syncs from a joined device (W1): replayed on the school PC as the Principal.
     let actor = state.require_session()?;
     let device_id = state.device_id.lock().map_err(|_| crate::error::CmdError::internal("lock"))?.clone();
     let mode = state.device_mode;
@@ -1575,10 +1575,14 @@ pub fn get_request(state: State<RtCtx>, id: String) -> CmdResult<RequestDto> {
 
 #[tauri::command]
 pub fn decide_request(state: State<RtCtx>, id: String, decision: String, note: Option<String>) -> CmdResult<RequestDto> {
-    state.require_server_device()?;
+    // Syncs from a joined device (W1): one request/action op, replayed on the school PC
+    // as the Principal (role, pending state and the off-server policy re-checked there).
     let actor = state.require_session()?;
+    let device_id = state.device_id.lock().map_err(|_| crate::error::CmdError::internal("lock"))?.clone();
     let mode = state.device_mode;
-    state.with_db(|conn| decide_request_logic(conn, &actor, mode, &id, &decision, note.as_deref()))
+    let cmd = RequestCmd::Decide { id: id.clone(), decision: decision.clone(), note: note.clone() };
+    state.with_db(|conn| request_command(conn, &actor, device_id.as_deref(), mode, &cmd))
+        .map(|d| d.expect("a decision returns the request"))
 }
 
 // ----------------------------------------------------------- dashboards ------

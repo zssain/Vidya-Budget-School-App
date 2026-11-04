@@ -40,6 +40,17 @@ impl CmdError {
         Self::new("NOT_FOUND", "error.NOT_FOUND", serde_json::Value::Null)
     }
 
+    /// Refused on a joined device: only the school PC may do this (§3 rule 13).
+    pub fn server_only() -> Self {
+        Self::new("SERVER_ONLY", "error.SERVER_ONLY", serde_json::Value::Null)
+    }
+
+    /// The request / away check-in was already decided (here or on another
+    /// computer) — a second decision is refused, never applied twice (W1).
+    pub fn already_decided() -> Self {
+        Self::new("ALREADY_DECIDED", "error.ALREADY_DECIDED", serde_json::Value::Null)
+    }
+
     /// A validation error for a field.
     pub fn validation(field: impl Into<String>, rule: impl Into<String>) -> Self {
         Self::new(

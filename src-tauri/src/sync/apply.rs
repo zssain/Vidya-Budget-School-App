@@ -709,7 +709,7 @@ fn apply_op_routed(conn: &mut Connection, op: &Op, route: &str) -> rusqlite::Res
 }
 
 /// Tables whose `action` ops carry a commands::logic::ClientCmd.
-const CLIENT_CMD_TABLES: &[&str] = &["message", "circular_read", "homework_note", "report_remark", "student", "expense"];
+const CLIENT_CMD_TABLES: &[&str] = &["message", "circular_read", "homework_note", "report_remark", "student", "expense", "store_sale"];
 
 /// Replay a device's ClientCmd on the school PC as its author.
 fn apply_client_cmd(conn: &mut Connection, op: &Op) -> rusqlite::Result<OpResult> {
@@ -725,7 +725,16 @@ fn apply_client_cmd(conn: &mut Connection, op: &Op) -> rusqlite::Result<OpResult
             | (crate::commands::logic::ClientCmd::SaveReportRemark { .. }, "report_remark")
             | (crate::commands::logic::ClientCmd::CreateStudent { .. }, "student")
             | (crate::commands::logic::ClientCmd::RecordExpense { .. }, "expense")
+            | (crate::commands::logic::ClientCmd::RecordStoreSale { .. }, "store_sale")
     );
+    // A store sale's id is the op's record (the idempotency key, W1).
+    let id_ok = match &cmd {
+        crate::commands::logic::ClientCmd::RecordStoreSale { id, .. } => *id == op.record_id,
+        _ => true,
+    };
+    if !id_ok {
+        return finalize(conn, op, rejected(&op.op_id, codes::MALFORMED));
+    }
     if !table_ok {
         return finalize(conn, op, rejected(&op.op_id, codes::MALFORMED));
     }
@@ -772,6 +781,19 @@ fn apply_staff_attendance_action(conn: &mut Connection, op: &Op, route: &str) ->
             let minute = op.payload.get("minute").and_then(|v| v.as_i64()).unwrap_or(-1);
             crate::commands::logic::staff_check_out_logic(conn, &author, Some(&op.device_id), mode, &date, minute)
         }
+        // A Principal's decision on an away check-in made on a joined device (W1):
+        // replayed as the author (ManageStaffHr re-checked above and in the logic; the
+        // row must still be away_pending → otherwise ALREADY_DECIDED, nothing written).
+        Some(cmd @ ("accept_away_checkin" | "reject_away_checkin")) => {
+            if op.payload.get("id").and_then(|v| v.as_str()) != Some(op.record_id.as_str()) {
+                return finalize(conn, op, rejected(&op.op_id, codes::MALFORMED));
+            }
+            if cmd == "accept_away_checkin" {
+                crate::commands::logic::accept_away_checkin_logic(conn, &author, Some(&op.device_id), mode, &op.record_id)
+            } else {
+                crate::commands::logic::reject_away_checkin_logic(conn, &author, Some(&op.device_id), mode, &op.record_id)
+            }
+        }
         _ => return finalize(conn, op, rejected(&op.op_id, codes::MALFORMED)),
     };
     match res {
@@ -792,7 +814,8 @@ fn apply_request_action(conn: &mut Connection, op: &Op) -> rusqlite::Result<OpRe
     let id_matches = match &cmd {
         crate::commands::logic::RequestCmd::Create { id, .. }
         | crate::commands::logic::RequestCmd::Leave { id, .. }
-        | crate::commands::logic::RequestCmd::Cancel { id } => *id == op.record_id,
+        | crate::commands::logic::RequestCmd::Cancel { id }
+        | crate::commands::logic::RequestCmd::Decide { id, .. } => *id == op.record_id,
     };
     if !id_matches {
         return finalize(conn, op, rejected(&op.op_id, codes::MALFORMED));
@@ -804,7 +827,18 @@ fn apply_request_action(conn: &mut Connection, op: &Op) -> rusqlite::Result<OpRe
         return finalize(conn, op, rejected(&op.op_id, codes::DEVICE_REVOKED_OR_UNKNOWN));
     };
     let author = crate::state::SessionStaff { id: op.staff_id.clone(), name, role };
-    match crate::commands::logic::request_command(conn, &author, Some(&op.device_id), crate::write::DeviceMode::Server, &cmd) {
+    let res = match &cmd {
+        // A Principal's decision from a joined device (W1): the same decide function,
+        // marked as coming from a device so the off-server policy applies; it re-checks
+        // the author's CURRENT role (ApproveRequest) and that the request is still
+        // pending (decided meanwhile → ALREADY_DECIDED, never a second decision).
+        crate::commands::logic::RequestCmd::Decide { id, decision, note } => crate::commands::logic::decide_request_with(
+            conn, &author, Some(&op.device_id), crate::write::DeviceMode::Server, true, id, decision, note.as_deref(),
+        )
+        .map(Some),
+        _ => crate::commands::logic::request_command(conn, &author, Some(&op.device_id), crate::write::DeviceMode::Server, &cmd),
+    };
+    match res {
         Ok(_) => {
             let seq: i64 = conn.query_row("SELECT COALESCE(MAX(server_seq),0) FROM op_log", [], |r| r.get(0))?;
             finalize(conn, op, confirmed(&op.op_id, seq, None))

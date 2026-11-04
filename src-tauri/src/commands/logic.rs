@@ -3059,13 +3059,18 @@ pub fn save_store_item_logic(conn: &mut Connection, actor_s: &SessionStaff, inpu
     list_store_items_logic(conn, actor_s, true)?.into_iter().find(|i| i.id == id).ok_or_else(CmdError::not_found)
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SaleItemInput {
     pub item_id: String,
     pub qty: i64,
+    /// The price (paise) the selling device charged. Ignored for a sale made here
+    /// (the current item price is used); set by a joined device in the queued
+    /// command so the school PC records the money actually taken (§8.6).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub price_paise: Option<i64>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StoreSaleInput {
     pub student_id: Option<String>,
     pub guardian_id: Option<String>,
@@ -3083,7 +3088,8 @@ pub struct StoreSaleDto {
 
 /// Record a store sale (Accountant + Principal): validates stock, snapshots
 /// prices, decrements stock (stock_move), posts a Store-income voucher and an
-/// S-… receipt. Stock can never go negative (a bigger sale is blocked).
+/// S-… receipt. Stock can never go negative for a sale made HERE (a bigger sale is
+/// blocked before any money is taken).
 pub fn record_store_sale_logic(
     conn: &mut Connection,
     actor_s: &SessionStaff,
@@ -3092,28 +3098,97 @@ pub fn record_store_sale_logic(
     today: &str,
     input: &StoreSaleInput,
 ) -> CmdResult<StoreSaleDto> {
+    record_store_sale_with(conn, actor_s, device_id, device_mode, today, input, None)
+}
+
+/// A store sale made on a joined device, as the school PC replays it (W1).
+#[derive(Debug, Clone, Copy)]
+pub struct StoreSaleReplay<'a> {
+    /// The device-chosen sale id (idempotency key: one sale, one voucher).
+    pub id: &'a str,
+    /// The receipt number the device printed (its own series).
+    pub receipt_no: &'a str,
+}
+
+/// Record a store sale. Three cases:
+/// * **here, school PC** (`Server`, no replay): stock-checked, voucher posted.
+/// * **joined device** (`Client`): stock-checked against the device's copy; the
+///   sale + stock moves are written `on_device` (no voucher) and ONE
+///   `store_sale`/`action` op carries [`ClientCmd::RecordStoreSale`] (device-chosen
+///   id, the printed receipt no., the prices charged).
+/// * **replay on the school PC** (`replay = Some`): the money was already taken, so
+///   the sale is ALWAYS recorded exactly once (an id already recorded → returns it,
+///   nothing written) with its voucher; stock is decremented and may go negative.
+///   An oversell raises a `store_oversold` review flag; a price that differs from
+///   the school PC's (or a deactivated item, or a receipt number already used —
+///   renumbered) raises `store_sale_review`. Never a refusal for stock or price.
+pub fn record_store_sale_with(
+    conn: &mut Connection,
+    actor_s: &SessionStaff,
+    device_id: Option<&str>,
+    device_mode: DeviceMode,
+    today: &str,
+    input: &StoreSaleInput,
+    replay: Option<StoreSaleReplay>,
+) -> CmdResult<StoreSaleDto> {
     let actor = actor_from(conn, actor_s)?;
     require_allow(&actor, Action::RecordStoreSale, &Target::of(TargetKind::Fee))?;
     require_module_enabled(conn, vidya_core::modules::Module::Store)?;
     let mode = payment_mode_from(&input.mode)?;
+    let confirmed = device_mode == DeviceMode::Server;
 
-    // Load each item's current price + stock + name; build the sale lines.
+    // Replay idempotency by the device-chosen id: already recorded → that sale.
+    if let Some(r) = replay {
+        let existing: Option<(String, i64)> = conn
+            .query_row("SELECT receipt_no, total_paise FROM store_sale WHERE id=?1", params![r.id], |row| Ok((row.get(0)?, row.get(1)?)))
+            .optional()?;
+        if let Some((receipt_no, total_paise)) = existing {
+            return Ok(StoreSaleDto { id: r.id.to_string(), receipt_no, total_paise, confirmed: true });
+        }
+        if r.receipt_no.trim().is_empty() {
+            return Err(CmdError::validation("receipt_no", "required"));
+        }
+    }
+
+    // Load each item; build the sale lines with the price charged.
     let mut lines = Vec::new();
     let mut snapshot = Vec::new(); // items_json entries
+    let mut charged = Vec::new(); // the input with prices filled (the queued command)
+    let mut price_review = Vec::new();
     for it in &input.items {
-        let (name, price, stock): (String, i64, i64) = conn
-            .query_row("SELECT name, price_paise, stock FROM store_item WHERE id=?1 AND active=1", params![it.item_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+        let (name, cur_price, stock, active): (String, i64, i64, bool) = conn
+            .query_row("SELECT name, price_paise, stock, active FROM store_item WHERE id=?1", params![it.item_id], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get::<_, i64>(3)? != 0))
+            })
             .optional()?
             .ok_or_else(CmdError::not_found)?;
+        let price = if replay.is_some() {
+            let p = it.price_paise.ok_or_else(|| CmdError::validation("price", "required"))?;
+            if p != cur_price || !active {
+                price_review.push(serde_json::json!({ "item_id": it.item_id, "device_price_paise": p, "school_price_paise": cur_price, "active": active }));
+            }
+            p
+        } else {
+            if !active {
+                return Err(CmdError::not_found());
+            }
+            cur_price
+        };
         lines.push(vidya_core::store::SaleLine { item_id: it.item_id.clone(), qty: it.qty, price_paise: price, stock });
         snapshot.push(serde_json::json!({ "item_id": it.item_id, "name": name, "qty": it.qty, "price_paise": price }));
+        charged.push(SaleItemInput { item_id: it.item_id.clone(), qty: it.qty, price_paise: Some(price) });
     }
-    let total = vidya_core::store::validate_sale(&lines)?;
+    let (total, oversold) = if replay.is_some() {
+        let r = vidya_core::store::replay_sale(&lines)?;
+        (r.total_paise, r.oversold)
+    } else {
+        (vidya_core::store::validate_sale(&lines)?, Vec::new())
+    };
 
     let now = now_iso();
     let date = today[..today.len().min(10)].to_string();
-    let sale_id = new_id("sale");
-    let confirmed = device_mode == DeviceMode::Server;
+    let sale_id = replay.map(|r| r.id.to_string()).unwrap_or_else(|| new_id("sale"));
+    let device_receipt = replay.map(|r| r.receipt_no.to_string());
     let sync_state = if confirmed { "confirmed" } else { "on_device" };
     let (series, _) = receipt_series_and_last(conn, device_id)?;
     let school_id = single_school_id(conn)?;
@@ -3125,9 +3200,30 @@ pub fn record_store_sale_logic(
     let guardian = input.guardian_id.clone();
     let mode_s = input.mode.clone();
     let lines2 = lines.clone();
+    let charged_input = StoreSaleInput { student_id: input.student_id.clone(), guardian_id: input.guardian_id.clone(), items: charged, mode: input.mode.clone() };
+    let today_s = today.to_string();
 
     let receipt_no = with_write(conn, &ctx, move |tx| {
-        let receipt_no = crate::numbering::next_no(tx, vidya_core::numbering::NumberKind::StoreSale, &series)?;
+        // The receipt number: the device's (replay) unless it is already used — then a
+        // fresh one from the same series, flagged for review; otherwise the next here.
+        let mut renumbered_from: Option<String> = None;
+        let receipt_no = match device_receipt {
+            Some(no) => {
+                let used = tx.query_row("SELECT 1 FROM store_sale WHERE receipt_no=?1", params![no], |_| Ok(())).optional()?.is_some();
+                if used {
+                    renumbered_from = Some(no);
+                    loop {
+                        let n = crate::numbering::next_no(tx, vidya_core::numbering::NumberKind::StoreSale, &series)?;
+                        if tx.query_row("SELECT 1 FROM store_sale WHERE receipt_no=?1", params![n], |_| Ok(())).optional()?.is_none() {
+                            break n;
+                        }
+                    }
+                } else {
+                    no
+                }
+            }
+            None => crate::numbering::next_no(tx, vidya_core::numbering::NumberKind::StoreSale, &series)?,
+        };
         let vid: Option<String> = if confirmed {
             let vno = crate::numbering::next_no(tx, vidya_core::numbering::NumberKind::Voucher, &series)?;
             Some(crate::ledger::post_store_sale_voucher(tx, &vno, &sale_id2, mode, total, &date, Some(actor_s.id.as_str()), dev.as_deref(), school_id.as_deref(), &now, "confirmed")?)
@@ -3139,25 +3235,51 @@ pub fn record_store_sale_logic(
              VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?10,?10,?13)",
             params![sale_id2, receipt_no, student, guardian, items_json, total, mode_s, vid, actor_s.id, now, dev, school_id, sync_state],
         )?;
-        // Decrement stock + record a stock_move per item.
-        for l in &lines2 {
+        // Decrement stock + record a stock_move per line (ids derived from the sale,
+        // so the device's rows and the school PC's canonical rows are the same rows).
+        for (i, l) in lines2.iter().enumerate() {
             tx.execute(
                 "INSERT INTO stock_move(id,item_id,qty,reason,ref_id,by,at,school_id,created_at,updated_at,sync_state) \
-                 VALUES (?1,?2,?3,'sale',?4,?5,?6,?7,?6,?6,'confirmed')",
-                params![new_id("mv"), l.item_id, -l.qty, sale_id2, actor_s.id, now, school_id],
+                 VALUES (?1,?2,?3,'sale',?4,?5,?6,?7,?6,?6,?8)",
+                params![format!("mv-{sale_id2}-{i}"), l.item_id, -l.qty, sale_id2, actor_s.id, now, school_id, sync_state],
             )?;
             tx.execute("UPDATE store_item SET stock=stock-?1, updated_at=?2 WHERE id=?3", params![l.qty, now, l.item_id])?;
         }
+        // Review flags (replay only): never a refusal, always the Principal's check.
+        if !oversold.is_empty() {
+            let items: Vec<serde_json::Value> =
+                oversold.iter().map(|(id, after)| serde_json::json!({ "item_id": id, "stock_after": after })).collect();
+            tx.execute(
+                "INSERT OR IGNORE INTO review_flag(id,kind,ref_table,ref_id,details_json,status,school_id) VALUES (?1,'store_oversold','store_sale',?2,?3,'open',?4)",
+                params![format!("rf-{sale_id2}-oversold"), sale_id2, serde_json::json!({ "items": items, "device_id": dev }).to_string(), school_id],
+            )?;
+        }
+        if !price_review.is_empty() || renumbered_from.is_some() {
+            tx.execute(
+                "INSERT OR IGNORE INTO review_flag(id,kind,ref_table,ref_id,details_json,status,school_id) VALUES (?1,'store_sale_review','store_sale',?2,?3,'open',?4)",
+                params![
+                    format!("rf-{sale_id2}-review"), sale_id2,
+                    serde_json::json!({ "prices": price_review, "renumbered_from": renumbered_from, "device_id": dev }).to_string(),
+                    school_id,
+                ],
+            )?;
+        }
         let audit = AuditEntry {
-            at: now.clone(), staff_id: Some(actor_s.id.clone()), action: "record_store_sale".into(),
+            at: now.clone(), staff_id: Some(actor_s.id.clone()), device_id: dev.clone(), action: "record_store_sale".into(),
             table: Some("store_sale".into()), record_id: Some(sale_id2.clone()),
-            after_json: Some(serde_json::json!({ "receipt_no": receipt_no, "total_paise": total }).to_string()),
+            after_json: Some(serde_json::json!({ "receipt_no": receipt_no, "total_paise": total, "oversold": !oversold.is_empty() }).to_string()),
             ..Default::default()
+        };
+        let payload = if confirmed {
+            "{}".to_string()
+        } else {
+            client_cmd_payload(&ClientCmd::RecordStoreSale { id: sale_id2.clone(), today: today_s.clone(), receipt_no: receipt_no.clone(), input: charged_input.clone() })
         };
         let op = Op {
             op_id: new_id("op"), hlc: now.clone(), device_id: dev.clone().unwrap_or_default(), staff_id: actor_s.id.clone(),
-            audience: "finance".into(), table: "store_sale".into(), record_id: sale_id2.clone(), kind: "insert".into(),
-            payload: "{}".into(), base_version: None, server_epoch: 1,
+            audience: "finance".into(), table: "store_sale".into(), record_id: sale_id2.clone(),
+            kind: if confirmed { "insert".into() } else { "action".into() },
+            payload, base_version: None, server_epoch: 1,
         };
         Ok(Effect { value: receipt_no, audit, op })
     })?;
@@ -3172,7 +3294,7 @@ pub struct StockAdjustInput {
 }
 
 /// Purchase or adjust stock (Principal): records a stock_move and updates the
-/// item's running stock (which must stay ≥ 0).
+/// item's running stock (a decrease must leave it ≥ 0; an increase is always allowed).
 pub fn stock_adjust_logic(conn: &mut Connection, actor_s: &SessionStaff, today: &str, input: &StockAdjustInput) -> CmdResult<StoreItemDto> {
     let actor = actor_from(conn, actor_s)?;
     require_allow(&actor, Action::ManageStore, &Target::of(TargetKind::Fee))?;
@@ -3184,8 +3306,8 @@ pub fn stock_adjust_logic(conn: &mut Connection, actor_s: &SessionStaff, today: 
         .query_row("SELECT stock FROM store_item WHERE id=?1", params![input.item_id], |r| r.get(0))
         .optional()?
         .ok_or_else(CmdError::not_found)?;
-    let new_stock = current + input.delta_qty;
-    vidya_core::store::validate_new_stock(new_stock)?;
+    // An increase is always allowed (a replayed oversell may have left it negative).
+    let new_stock = vidya_core::store::validate_stock_change(current, input.delta_qty)?;
     let now = now_iso();
     let date = today[..today.len().min(10)].to_string();
     let school_id = single_school_id(conn)?;
@@ -4047,6 +4169,9 @@ pub enum ClientCmd {
     SaveReportRemark { input: ReportRemarkInput },
     CreateStudent { id: String, today: String, provisional_no: String, input: NewStudentInput },
     RecordExpense { id: String, today: String, input: ExpenseInput },
+    /// A store sale from a joined device (W1): device-chosen id, the receipt number it
+    /// printed, the prices it charged. Replayed via [`record_store_sale_with`].
+    RecordStoreSale { id: String, today: String, receipt_no: String, input: StoreSaleInput },
 }
 
 pub fn client_cmd_payload(cmd: &ClientCmd) -> String {
@@ -4066,6 +4191,9 @@ pub fn run_client_cmd(conn: &mut Connection, author: &SessionStaff, device_id: &
             create_student_with(conn, author, dev, mode, today, input, Some(id), Some(provisional_no)).map(|_| ())
         }
         ClientCmd::RecordExpense { id, today, input } => record_expense_with(conn, author, dev, mode, today, input, Some(id)).map(|_| ()),
+        ClientCmd::RecordStoreSale { id, today, receipt_no, input } => {
+            record_store_sale_with(conn, author, dev, mode, today, input, Some(StoreSaleReplay { id, receipt_no })).map(|_| ())
+        }
     }
 }
 
@@ -5676,24 +5804,157 @@ pub fn decide_request_logic(
     decision: &str,
     note: Option<&str>,
 ) -> CmdResult<RequestDto> {
+    decide_request_with(conn, actor_s, None, device_mode, device_mode == DeviceMode::Client, id, decision, note)
+}
+
+/// Request decisions a Principal may make from a JOINED device (W1). Approving a
+/// payment reversal (a money correction: it posts a reversal voucher), an access
+/// change (staff permissions) or a device replacement (the device registry) stays on
+/// the school PC; every reject / return, and approving any other type, syncs.
+pub fn decision_allowed_off_server(kind: &str, decision: &str) -> bool {
+    decision != "approve" || !matches!(kind, "payment_reversal" | "access_change" | "device_replacement")
+}
+
+/// Sentinel for "the guarded decision UPDATE matched no pending row" inside a
+/// `with_write` closure (which can only return rusqlite errors).
+const NOT_PENDING: &str = "__vidya_not_pending__";
+fn not_pending() -> rusqlite::Error {
+    rusqlite::Error::InvalidParameterName(NOT_PENDING.into())
+}
+
+/// Map the "row was no longer pending" sentinel of a guarded decision write.
+fn decided_err(e: rusqlite::Error) -> CmdError {
+    match e {
+        rusqlite::Error::InvalidParameterName(ref s) if s == NOT_PENDING => CmdError::already_decided(),
+        other => other.into(),
+    }
+}
+
+/// Decide a request (approve / reject / return), Principal only.
+///
+/// * School PC (`Server`): applies the decision and its effects in ONE transaction;
+///   the request row is updated only `WHERE status='pending'`, so a second decision
+///   can never apply twice (→ `ALREADY_DECIDED`). `from_device` = this is a replay
+///   of a decision made on a joined device (`sync::apply`), which may only make the
+///   decisions [`decision_allowed_off_server`] allows.
+/// * Joined device (`Client`): records the decision on the local request row
+///   (on_device) and queues ONE `request`/`action` op carrying
+///   [`RequestCmd::Decide`]; the school PC replays it through this same function as
+///   the author. The effects (leave record, corrected mark, …) are written only by
+///   the school PC and reach the device by pull — never a fake local "applied".
+#[allow(clippy::too_many_arguments)]
+pub fn decide_request_with(
+    conn: &mut Connection,
+    actor_s: &SessionStaff,
+    device_id: Option<&str>,
+    device_mode: DeviceMode,
+    from_device: bool,
+    id: &str,
+    decision: &str,
+    note: Option<&str>,
+) -> CmdResult<RequestDto> {
     let actor = actor_from(conn, actor_s)?;
     require_allow(&actor, Action::ApproveRequest, &Target::of(TargetKind::Request))?;
+    if !matches!(decision, "approve" | "reject" | "return") {
+        return Err(CmdError::validation("decision", "invalid"));
+    }
     let req = get_request_logic(conn, id)?;
     if req.status != "pending" {
-        return Err(CoreError::RequestStale.into());
+        return Err(CmdError::already_decided());
+    }
+    if from_device && !decision_allowed_off_server(&req.kind, decision) {
+        return Err(CmdError::server_only());
     }
     let now = now_iso();
+    let dev = device_id.map(str::to_string);
+
+    // A joined device: the decision on the local row + the command in the outbox.
+    if device_mode == DeviceMode::Client {
+        let new_status = match decision {
+            "approve" => "approved",
+            "reject" => "rejected",
+            _ => "returned",
+        };
+        let cmd = RequestCmd::Decide { id: id.to_string(), decision: decision.to_string(), note: note.map(str::to_string) };
+        let payload = serde_json::to_string(&cmd).map_err(|e| CmdError::internal(e.to_string()))?;
+        let (rid, actor_id, note_owned, kind) = (id.to_string(), actor_s.id.clone(), note.map(str::to_string), req.kind.clone());
+        with_write(conn, &WriteCtx { mode: device_mode }, move |tx| {
+            let n = tx.execute(
+                "UPDATE request SET status=?1, decided_by=?2, decided_at=?3, note=?4, updated_at=?3, sync_state='on_device' WHERE id=?5 AND status='pending'",
+                params![new_status, actor_id, now, note_owned, rid],
+            )?;
+            if n == 0 {
+                return Err(not_pending());
+            }
+            let audit = AuditEntry {
+                at: now.clone(),
+                staff_id: Some(actor_id.clone()),
+                device_id: dev.clone(),
+                action: format!("{decision}_request"),
+                table: Some("request".into()),
+                record_id: Some(rid.clone()),
+                reason: Some(kind),
+                after_json: note_owned.clone(),
+                ..Default::default()
+            };
+            let op = Op {
+                op_id: new_id("op"),
+                hlc: now.clone(),
+                device_id: dev.clone().unwrap_or_default(),
+                staff_id: actor_id.clone(),
+                audience: "admin".into(),
+                table: "request".into(),
+                record_id: rid.clone(),
+                kind: "action".into(),
+                payload,
+                base_version: None,
+                server_epoch: 1,
+            };
+            Ok(Effect { value: (), audit, op })
+        })
+        .map_err(decided_err)?;
+        return get_request_logic(conn, id);
+    }
 
     if decision == "reject" || decision == "return" {
         let new_status = if decision == "reject" { "rejected" } else { "returned" };
-        conn.execute(
-            "UPDATE request SET status=?1, decided_by=?2, decided_at=?3, note=?4, updated_at=?3 WHERE id=?5",
-            params![new_status, actor_s.id, now, note, id],
-        )?;
+        let (rid, actor_id, note_owned, kind) = (id.to_string(), actor_s.id.clone(), note.map(str::to_string), req.kind.clone());
+        with_write(conn, &WriteCtx { mode: device_mode }, move |tx| {
+            let n = tx.execute(
+                "UPDATE request SET status=?1, decided_by=?2, decided_at=?3, note=?4, updated_at=?3 WHERE id=?5 AND status='pending'",
+                params![new_status, actor_id, now, note_owned, rid],
+            )?;
+            if n == 0 {
+                return Err(not_pending());
+            }
+            let audit = AuditEntry {
+                at: now.clone(),
+                staff_id: Some(actor_id.clone()),
+                device_id: dev.clone(),
+                action: format!("{decision}_request"),
+                table: Some("request".into()),
+                record_id: Some(rid.clone()),
+                reason: Some(kind),
+                after_json: note_owned.clone(),
+                ..Default::default()
+            };
+            let op = Op {
+                op_id: new_id("op"),
+                hlc: now.clone(),
+                device_id: dev.clone().unwrap_or_default(),
+                staff_id: actor_id.clone(),
+                audience: "admin".into(),
+                table: "request".into(),
+                record_id: rid.clone(),
+                kind: "update".into(),
+                payload: "{}".into(),
+                base_version: None,
+                server_epoch: 1,
+            };
+            Ok(Effect { value: (), audit, op })
+        })
+        .map_err(decided_err)?;
         return get_request_logic(conn, id);
-    }
-    if decision != "approve" {
-        return Err(CmdError::validation("decision", "invalid"));
     }
 
     // Approve: apply the change to the target record + audit + op, then mark the
@@ -5778,6 +6039,17 @@ pub fn decide_request_logic(
         let apply_state = if applied { "applied" } else { "not_applied" };
         let applied_at = if applied { Some(now.clone()) } else { None };
 
+        // Decide FIRST, guarded on the row still being pending: if it is not (decided
+        // meanwhile — e.g. on another computer) nothing below runs and the whole
+        // transaction rolls back (→ ALREADY_DECIDED), so effects never apply twice.
+        let n = tx.execute(
+            "UPDATE request SET status='approved', apply_state=?1, decided_by=?2, decided_at=?3, note=?4, applied_at=?5, updated_at=?3 WHERE id=?6 AND status='pending'",
+            params![apply_state, actor_id, now, note_owned, applied_at, req_id],
+        )?;
+        if n == 0 {
+            return Err(not_pending());
+        }
+
         match kind.as_str() {
             "attendance_correction" => {
                 // after.value is the new mark (P|A|L); target_id is the mark row.
@@ -5830,14 +6102,10 @@ pub fn decide_request_logic(
             _ => {} // marks_correction / student_details / access_change → applied in P7
         }
 
-        tx.execute(
-            "UPDATE request SET status='approved', apply_state=?1, decided_by=?2, decided_at=?3, note=?4, applied_at=?5, updated_at=?3 WHERE id=?6",
-            params![apply_state, actor_id, now, note_owned, applied_at, req_id],
-        )?;
-
         let audit = AuditEntry {
             at: now.clone(),
             staff_id: Some(actor_id.clone()),
+            device_id: dev.clone(),
             action: "approve_request".into(),
             table: Some(target_table.clone()),
             record_id: Some(target_id.clone()),
@@ -5848,7 +6116,7 @@ pub fn decide_request_logic(
         let op = Op {
             op_id: new_id("op"),
             hlc: now.clone(),
-            device_id: String::new(),
+            device_id: dev.clone().unwrap_or_default(),
             staff_id: actor_id.clone(),
             audience: "admin".into(),
             table: target_table,
@@ -5859,7 +6127,8 @@ pub fn decide_request_logic(
             server_epoch: 1,
         };
         Ok(Effect { value: (), audit, op })
-    })?;
+    })
+    .map_err(decided_err)?;
 
     get_request_logic(conn, id)
 }
@@ -7310,6 +7579,8 @@ pub fn set_module_logic(conn: &mut Connection, actor_s: &SessionStaff, key: &str
          ON CONFLICT(key) DO UPDATE SET enabled=excluded.enabled, changed_by=excluded.changed_by, changed_at=excluded.changed_at",
         params![key, enabled as i64, actor_s.id, now],
     )?;
+    // Joined devices learn the switches through the synced school row (W1).
+    crate::modules::publish_to_school(&tx)?;
     crate::security::audit::append(&tx, &AuditEntry {
         at: now.clone(),
         staff_id: Some(actor_s.id.clone()),
@@ -7876,8 +8147,12 @@ pub fn staff_attendance_month_logic(conn: &mut Connection, actor_s: &SessionStaf
     Ok(StaffAttnMonthDto { month: month.to_string(), working_days: working_days as i64, rows })
 }
 
-/// Shared Principal write to a `staff_attendance` row (accept/reject away, manual
-/// entry/correction): one transaction, audited, with an op so devices sync it.
+/// Shared Principal decision on an away check-in (accept / reject): one transaction,
+/// audited, guarded on the row still being `away_pending` (`sql` must carry
+/// `AND status='away_pending'`; no match → `ALREADY_DECIDED`, nothing written). On the
+/// school PC the op lets devices sync the row; on a joined device (W1) the op is the
+/// command itself — `staff_attendance`/`action` `{cmd: accept_away_checkin |
+/// reject_away_checkin, id}` — which the school PC replays through the same logic.
 #[allow(clippy::too_many_arguments)]
 fn principal_attn_write(
     conn: &mut Connection,
@@ -7900,11 +8175,15 @@ fn principal_attn_write(
     let status = status.to_string();
     let sql = sql.to_string();
     let actor_id = actor_s.id.clone();
+    let client = device_mode == DeviceMode::Client;
     with_write(conn, &WriteCtx { mode: device_mode }, move |tx| {
-        tx.execute(&sql, params![rid, actor_id, now])?;
+        if tx.execute(&sql, params![rid, actor_id, now])? == 0 {
+            return Err(not_pending());
+        }
         let audit = AuditEntry {
             at: now.clone(),
             staff_id: Some(actor_id.clone()),
+            device_id: dev.clone(),
             action: action.into(),
             table: Some("staff_attendance".into()),
             record_id: Some(rid.clone()),
@@ -7919,13 +8198,18 @@ fn principal_attn_write(
             audience: "admin".into(),
             table: "staff_attendance".into(),
             record_id: rid.clone(),
-            kind: "update".into(),
-            payload: serde_json::json!({ "staff_id": staff, "date": date, "status": status }).to_string(),
+            kind: if client { "action".into() } else { "update".into() },
+            payload: if client {
+                serde_json::json!({ "cmd": action, "id": rid }).to_string()
+            } else {
+                serde_json::json!({ "staff_id": staff, "date": date, "status": status }).to_string()
+            },
             base_version: None,
             server_epoch: 1,
         };
         Ok(Effect { value: (), audit, op })
-    })?;
+    })
+    .map_err(decided_err)?;
     Ok(())
 }
 
@@ -7939,13 +8223,13 @@ pub fn accept_away_checkin_logic(conn: &mut Connection, actor_s: &SessionStaff, 
         .optional()?
         .ok_or_else(CmdError::not_found)?;
     if status != "away_pending" {
-        return Err(CmdError::validation("status", "not_away_pending"));
+        return Err(CmdError::already_decided());
     }
     let settings = read_hr_settings(conn)?;
     let new_status = vidya_core::hr::accepted_away_status(check_in_min.unwrap_or(0) as u16, &settings).as_key();
     principal_attn_write(
         conn, actor_s, device_id, device_mode, "accept_away_checkin", id, &staff_id, &date, new_status,
-        "UPDATE staff_attendance SET status='PLACEHOLDER', accepted_by=?2, updated_at=?3, version=version+1 WHERE id=?1".replace("PLACEHOLDER", new_status).as_str(),
+        "UPDATE staff_attendance SET status='PLACEHOLDER', accepted_by=?2, updated_at=?3, version=version+1 WHERE id=?1 AND status='away_pending'".replace("PLACEHOLDER", new_status).as_str(),
         serde_json::json!({ "status": new_status }),
     )
 }
@@ -7960,11 +8244,11 @@ pub fn reject_away_checkin_logic(conn: &mut Connection, actor_s: &SessionStaff, 
         .optional()?
         .ok_or_else(CmdError::not_found)?;
     if status != "away_pending" {
-        return Err(CmdError::validation("status", "not_away_pending"));
+        return Err(CmdError::already_decided());
     }
     principal_attn_write(
         conn, actor_s, device_id, device_mode, "reject_away_checkin", id, &staff_id, &date, "absent",
-        "UPDATE staff_attendance SET status='absent', accepted_by=?2, updated_at=?3, version=version+1 WHERE id=?1",
+        "UPDATE staff_attendance SET status='absent', accepted_by=?2, updated_at=?3, version=version+1 WHERE id=?1 AND status='away_pending'",
         serde_json::json!({ "status": "absent" }),
     )
 }
@@ -8243,6 +8527,10 @@ pub enum RequestCmd {
     Create { id: String, input: RequestInput },
     Leave { id: String, input: LeaveRequestInput },
     Cancel { id: String },
+    /// A Principal's decision made on a joined device (W1). Run through
+    /// [`decide_request_with`] (not `request_command`); replayed on the school PC as
+    /// the author, re-checking role, pending state and the off-server policy.
+    Decide { id: String, decision: String, note: Option<String> },
 }
 
 /// Run a request command in ONE transaction with its sync record: on a client the
@@ -8258,8 +8546,13 @@ pub fn request_command(
     mode: DeviceMode,
     cmd: &RequestCmd,
 ) -> CmdResult<Option<RequestDto>> {
+    if let RequestCmd::Decide { id, decision, note } = cmd {
+        // A decision carries its own transaction + op (see decide_request_with).
+        return decide_request_with(conn, actor, device_id, mode, mode == DeviceMode::Client, id, decision, note.as_deref()).map(Some);
+    }
     let tx = conn.transaction()?;
     let (id, dto) = match cmd {
+        RequestCmd::Decide { .. } => unreachable!("handled above"),
         RequestCmd::Create { id, input } => (id.clone(), Some(create_request_in(&tx, actor, input, id)?)),
         RequestCmd::Leave { id, input } => (id.clone(), Some(request_leave_in(&tx, actor, input, id)?)),
         RequestCmd::Cancel { id } => {
@@ -11566,7 +11859,7 @@ mod tests {
             &AdvanceInput { staff_id: "stf-anita".into(), amount_paise: 100_000, recover_per_month_paise: 100_000, mode: "cash".into() }).unwrap(); // advance
         pay_salaries_logic(&mut c, &principal(), Some("dev-a1"), DeviceMode::Server, "2026-09", "bank", &[]).unwrap(); // salary
         record_store_sale_logic(&mut c, &accountant(), Some("dev-a2"), DeviceMode::Server, "2026-09-23",
-            &StoreSaleInput { student_id: None, guardian_id: None, mode: "cash".into(), items: vec![SaleItemInput { item_id: "itm-tie".into(), qty: 1 }] }).unwrap(); // store_sale
+            &StoreSaleInput { student_id: None, guardian_id: None, mode: "cash".into(), items: vec![SaleItemInput { item_id: "itm-tie".into(), qty: 1, price_paise: None }] }).unwrap(); // store_sale
         // receipt is already in the seed. Every kind present:
         let kinds: Vec<String> = {
             let mut s = c.prepare("SELECT DISTINCT kind FROM voucher ORDER BY kind").unwrap();
@@ -11622,8 +11915,8 @@ mod tests {
         let sale = record_store_sale_logic(
             &mut c, &accountant(), Some("dev-a2"), DeviceMode::Server, "2026-09-23",
             &StoreSaleInput { student_id: None, guardian_id: None, mode: "upi".into(), items: vec![
-                SaleItemInput { item_id: "itm-book".into(), qty: 1 },
-                SaleItemInput { item_id: "itm-shirt".into(), qty: 2 },
+                SaleItemInput { item_id: "itm-book".into(), qty: 1, price_paise: None },
+                SaleItemInput { item_id: "itm-shirt".into(), qty: 2, price_paise: None },
             ] },
         ).unwrap();
         assert!(sale.receipt_no.starts_with("S-"), "S- receipt number");
@@ -11636,7 +11929,7 @@ mod tests {
         // Selling beyond stock is blocked (stock never goes negative).
         assert!(record_store_sale_logic(
             &mut c, &accountant(), Some("dev-a2"), DeviceMode::Server, "2026-09-23",
-            &StoreSaleInput { student_id: None, guardian_id: None, mode: "cash".into(), items: vec![SaleItemInput { item_id: "itm-notebook".into(), qty: 99 }] },
+            &StoreSaleInput { student_id: None, guardian_id: None, mode: "cash".into(), items: vec![SaleItemInput { item_id: "itm-notebook".into(), qty: 99, price_paise: None }] },
         ).is_err());
 
         // Only the Principal manages stock.
@@ -11647,7 +11940,7 @@ mod tests {
         // A teacher can never touch the store.
         let teacher = SessionStaff { id: "stf-meena".into(), name: "M".into(), role: "teacher".into() };
         assert!(record_store_sale_logic(&mut c, &teacher, Some("dev-a1"), DeviceMode::Server, "2026-09-23",
-            &StoreSaleInput { student_id: None, guardian_id: None, mode: "cash".into(), items: vec![SaleItemInput { item_id: "itm-book".into(), qty: 1 }] }).is_err());
+            &StoreSaleInput { student_id: None, guardian_id: None, mode: "cash".into(), items: vec![SaleItemInput { item_id: "itm-book".into(), qty: 1, price_paise: None }] }).is_err());
     }
 
     #[test]

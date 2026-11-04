@@ -103,6 +103,11 @@ fn build_ctx(app: &tauri::AppHandle, data_dir: std::path::PathBuf) -> RtCtx {
                         if let Err(e) = roles::seed_role_permissions(&mut conn) {
                             tracing::warn!("role permission seed: {e}");
                         }
+                        // School PC: publish the module switches into the synced school
+                        // row so joined devices gate their commands the same way (W1).
+                        if let Err(e) = modules::publish_to_school(&conn) {
+                            tracing::warn!("module publish: {e}");
+                        }
                         // A joined client starts LOCKED like any device: the join token
                         // authenticates sync, never a human session (security::device_pin).
                         if let Some(cid) = crate::sync::client::load(&conn) {
