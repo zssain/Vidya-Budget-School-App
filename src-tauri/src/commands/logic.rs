@@ -94,12 +94,28 @@ fn bump_setup_step(conn: &Connection, step: i64) -> CmdResult<()> {
 /// build-config public key(s) and the licence's machine code must match this PC.
 pub fn activate_licence_impl(state: &State<RtCtx>, licence_key: &str) -> CmdResult<AppStateResponse> {
     let keys = crate::config::licence_public_keys();
-    if keys.is_empty() {
+    let session = state.session.lock().map_err(|_| CmdError::internal("lock"))?.clone();
+    state.with_db(|conn| activate_licence_with_keys(conn, &state.machine_id, licence_key, &keys, session))
+}
+
+/// The activation itself, with the public key(s) passed in: the command passes the
+/// build-config keys; the purchase rehearsal (scripts/rehearse-purchase.sh,
+/// tests/purchase_activation.rs) passes its throwaway test key. Verifies the key
+/// offline against THIS computer's machine code (derived from `machine_id`), holds it
+/// as the pending licence and returns the new app state (`activated` on success).
+pub fn activate_licence_with_keys(
+    conn: &mut Connection,
+    machine_id: &str,
+    licence_key: &str,
+    public_keys: &[[u8; 32]],
+    session: Option<SessionStaff>,
+) -> CmdResult<AppStateResponse> {
+    if public_keys.is_empty() {
         // A dev build before a keypair exists, or a misbuilt release.
         return Err(CmdError::new("LICENCE_INVALID", "licence.invalid", serde_json::Value::Null));
     }
-    let machine_code = vidya_core::licence::machine_code(&state.machine_id);
-    let lic = crate::licence::verify_offline(licence_key, &machine_code, &keys)?;
+    let machine_code = vidya_core::licence::machine_code(machine_id);
+    let lic = crate::licence::verify_offline(licence_key, &machine_code, public_keys)?;
 
     // Hold the verified licence until the wizard creates the school row (the
     // licence table FK needs a school). Persist encrypted in app_kv. v2 licences
@@ -113,13 +129,9 @@ pub fn activate_licence_impl(state: &State<RtCtx>, licence_key: &str) -> CmdResu
         "signature": lic.signature_b64,
         "raw_json": lic.payload_b64,
     });
-    state.with_db(|conn| {
-        kv::set(conn, KV_PENDING_LICENCE, &pending)?;
-        Ok(())
-    })?;
+    kv::set(conn, KV_PENDING_LICENCE, &pending)?;
     // Return the new app state (should be `activated`).
-    let session = state.session.lock().map_err(|_| CmdError::internal("lock"))?.clone();
-    state.with_db(|conn| Ok(crate::state::compute(conn, session)?))
+    Ok(crate::state::compute(conn, session)?)
 }
 
 /// This computer's display machine code (`XXXX-XXXX-XXXX-C`), shown on Welcome →

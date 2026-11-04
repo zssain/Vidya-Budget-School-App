@@ -1802,19 +1802,32 @@ pub fn restore_install(app: tauri::AppHandle, state: State<RtCtx>, path: String,
         let _ = guard.take();
     }
 
-    crate::backup::restore::install(&vbak, &backup_key_hex, &live_db, &new_hex, &now).map_err(restore_error)?;
-
     // Persist the new DB key (keychain on desktop, AndroidKeyStore-wrapped on
-    // Android — repair K1), then restart.
+    // Android — repair K1) as the install's commit step: if the key cannot be stored,
+    // the swap is rolled back, so the live DB never ends up under a lost key.
     #[cfg(not(target_os = "android"))]
     let key_store: Box<dyn crate::security::keys::KeyStore> =
         Box::new(crate::security::keys::KeyringStore::new());
     #[cfg(target_os = "android")]
     let key_store: Box<dyn crate::security::keys::KeyStore> =
         Box::new(crate::security::android_key::plugin_store(&app, &state.data_dir));
-    key_store
-        .set(&new_key)
-        .map_err(|e| crate::error::CmdError::internal(format!("key store: {e:?}")))?;
+    let installed = crate::backup::restore::install_then(&vbak, &backup_key_hex, &live_db, &new_hex, &now, || {
+        key_store.set(&new_key).map_err(|e| format!("key store: {e:?}"))
+    });
+    if let Err(e) = installed {
+        // Nothing was swapped in (or it was rolled back): reopen the previous live DB
+        // under its own key so the app stays usable without a restart.
+        if let Some(old_hex) = state.db_key_hex.as_deref() {
+            if live_db.exists() {
+                if let Ok(conn) = crate::db::open_encrypted(&live_db, old_hex) {
+                    if let Ok(mut guard) = state.db.lock() {
+                        *guard = Some(conn);
+                    }
+                }
+            }
+        }
+        return Err(restore_error(e));
+    }
 
     // Desktop relaunches into the restored school. On Android `app.restart()` aborts
     // the process (SIGABRT in tauri::process::restart — seen on the API 34 emulator)

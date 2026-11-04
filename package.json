@@ -26,6 +26,7 @@
     "test:watch": "vitest",
     "test:e2e": "playwright test",
     "test:e2e:pwa": "npm run build:web && npm run build:web:e2e && playwright test --config playwright.pwa.config.ts",
+    "rehearse:purchase": "bash scripts/rehearse-purchase.sh",
     "tauri": "tauri"
   },
   "dependencies": {

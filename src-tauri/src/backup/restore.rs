@@ -90,7 +90,11 @@ pub fn build_summary(vbak_path: &Path, backup_key_hex: &str) -> BackupResult<Res
         .map_err(|e| BackupError::Verify(e.to_string()))? as u64;
     let last_receipt_no: Option<String> = conn
         .query_row(
-            "SELECT receipt_no FROM payment ORDER BY receipt_no DESC LIMIT 1",
+            // The most recently COLLECTED receipt: with several device series
+            // (R-A1/R-A2/R-A3…), the text-max receipt_no is just the highest series,
+            // not the last receipt the school issued. Confirmed receipts first.
+            "SELECT receipt_no FROM payment \
+             ORDER BY (sync_state = 'confirmed') DESC, collected_at DESC, receipt_no DESC LIMIT 1",
             [],
             |r| r.get(0),
         )
@@ -138,6 +142,43 @@ pub fn install(
     new_db_key_hex: &str,
     now: &str,
 ) -> BackupResult<InstallReport> {
+    install_then(vbak_path, backup_key_hex, live_db_path, new_db_key_hex, now, || Ok(()))
+}
+
+/// [`install`], plus a `commit` step run right after the swap — the caller persists
+/// the new DB key there (keychain / AndroidKeyStore). If `commit` fails, the swap is
+/// **rolled back** (the restored DB is discarded and the previous live DB is moved
+/// back into place), so a key-store failure can never leave a live DB whose key was
+/// lost. Returns [`BackupError::Io`] carrying the commit error.
+pub fn install_then(
+    vbak_path: &Path,
+    backup_key_hex: &str,
+    live_db_path: &Path,
+    new_db_key_hex: &str,
+    now: &str,
+    commit: impl FnOnce() -> Result<(), String>,
+) -> BackupResult<InstallReport> {
+    let report = stage_and_swap(vbak_path, backup_key_hex, live_db_path, new_db_key_hex, now, &|a, b| {
+        std::fs::rename(a, b)
+    })?;
+    if let Err(e) = commit() {
+        rollback_swap(live_db_path, report.safety_copy.as_deref());
+        return Err(BackupError::Io(format!("restore not committed: {e}")));
+    }
+    Ok(report)
+}
+
+/// A rename primitive (real `std::fs::rename`, or a failing one in tests).
+type RenameFn<'a> = &'a dyn Fn(&Path, &Path) -> std::io::Result<()>;
+
+fn stage_and_swap(
+    vbak_path: &Path,
+    backup_key_hex: &str,
+    live_db_path: &Path,
+    new_db_key_hex: &str,
+    now: &str,
+    rename: RenameFn<'_>,
+) -> BackupResult<InstallReport> {
     // 1. Verify the backup (read-only), without ever modifying it.
     {
         let vbak = db::open_encrypted_readonly(vbak_path, backup_key_hex)
@@ -153,6 +194,11 @@ pub fn install(
     // 2. Re-encrypt the backup into a fresh, temp live DB under the new DB key. The
     //    staged DB is `main`; the backup is ATTACHed as a source and copied in with
     //    `sqlcipher_export('main','bak')` — so the `.vbak` is only ever read.
+    // A replacement PC may not have created its data dir yet (only after the backup
+    // verified: a wrong key touches nothing).
+    if let Some(parent) = live_db_path.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| BackupError::Io(e.to_string()))?;
+    }
     let staged = staged_path(live_db_path);
     remove_db_files(&staged);
     let new_epoch;
@@ -215,9 +261,69 @@ pub fn install(
     // 4. Atomic swap, keeping the previous DB as a safety copy. Drop the staged
     //    WAL/SHM sidecars first so only the finished main file is renamed in.
     remove_sidecars(&staged);
-    let safety_copy = swap_into_place(&staged, live_db_path, now)?;
+    let safety_copy = match swap_into_place(&staged, live_db_path, now, rename) {
+        Ok(s) => s,
+        Err(e) => {
+            remove_db_files(&staged);
+            return Err(e);
+        }
+    };
 
     Ok(InstallReport { new_epoch, devices_flagged, safety_copy })
+}
+
+/// Undo a completed swap: discard the restored live DB and move the safety copy (the
+/// previous live DB) back into place. With no safety copy (first-time restore) the
+/// restored DB is simply removed — the PC is back to "no school".
+fn rollback_swap(live: &Path, safety_copy: Option<&Path>) {
+    remove_db_files(live);
+    if let Some(safety) = safety_copy {
+        let _ = std::fs::rename(safety, live);
+        for ext in ["-wal", "-shm"] {
+            let side = sibling(safety, ext);
+            if side.exists() {
+                let _ = std::fs::rename(&side, sibling(live, ext));
+            }
+        }
+    }
+}
+
+/// Boot-time repair for a restore interrupted by a crash / power cut (§12). Call
+/// BEFORE opening the live DB. Two leftovers are possible:
+///
+/// * a `.<name>.restore-staged` temp DB — encrypted under a new key that was never
+///   persisted, so it is useless: removed;
+/// * the live DB missing while a `<name>.pre-restore-<stamp>` safety copy exists —
+///   the crash fell between moving the old DB aside and renaming the restored one
+///   in. The key store still holds the OLD key (it is only replaced after a
+///   successful swap), so the newest safety copy is moved back as the live DB.
+///
+/// Returns true when the live DB was put back.
+pub fn recover_interrupted_install(live: &Path) -> bool {
+    remove_db_files(&staged_path(live));
+    if live.exists() {
+        return false;
+    }
+    let Some(dir) = live.parent() else { return false };
+    let name = live.file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+    let prefix = format!("{name}.pre-restore-");
+    let newest = std::fs::read_dir(dir)
+        .ok()
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| e.file_name().to_string_lossy().to_string())
+        .filter(|n| {
+            n.strip_prefix(&prefix).is_some_and(|stamp| !stamp.is_empty() && stamp.bytes().all(|b| b.is_ascii_digit()))
+        })
+        .max();
+    match newest {
+        Some(n) => {
+            rollback_swap(live, Some(&dir.join(n)));
+            live.exists()
+        }
+        None => false,
+    }
 }
 
 /// Remove a DB file and its `-wal`/`-shm` sidecars (error cleanup / pre-clean).
@@ -233,23 +339,28 @@ fn remove_sidecars(path: &Path) {
 }
 
 /// Move any existing live DB aside (`<name>.pre-restore-<stamp>`), then rename the
-/// staged DB into place. Best-effort moves the `-wal`/`-shm` sidecars too.
-fn swap_into_place(staged: &Path, live: &Path, now: &str) -> BackupResult<Option<PathBuf>> {
+/// staged DB into place. Best-effort moves the `-wal`/`-shm` sidecars too. If the
+/// second rename fails, the previous live DB is moved back, so a failed swap never
+/// leaves the PC without its live database.
+fn swap_into_place(staged: &Path, live: &Path, now: &str, rename: RenameFn<'_>) -> BackupResult<Option<PathBuf>> {
     let mut safety_copy = None;
     if live.exists() {
         let stamp: String = now.chars().filter(|c| c.is_ascii_digit()).collect();
         let name = live.file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
         let safety = live.with_file_name(format!("{name}.pre-restore-{stamp}"));
-        std::fs::rename(live, &safety).map_err(|e| BackupError::Io(e.to_string()))?;
+        rename(live, &safety).map_err(|e| BackupError::Io(e.to_string()))?;
         for ext in ["-wal", "-shm"] {
             let side = sibling(live, ext);
             if side.exists() {
-                let _ = std::fs::rename(&side, sibling(&safety, ext));
+                let _ = rename(&side, sibling(&safety, ext).as_path());
             }
         }
         safety_copy = Some(safety);
     }
-    std::fs::rename(staged, live).map_err(|e| BackupError::Io(e.to_string()))?;
+    if let Err(e) = rename(staged, live) {
+        rollback_swap(live, safety_copy.as_deref());
+        return Err(BackupError::Io(e.to_string()));
+    }
     Ok(safety_copy)
 }
 
@@ -406,6 +517,98 @@ mod tests {
             .filter(|n| n.contains("restore-staged"))
             .collect();
         assert!(stray.is_empty(), "no staged temp DB should remain: {stray:?}");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// A real previous live DB (its own key) with a marker school name.
+    fn make_old_live(live: &Path) {
+        let mut c = db::open_encrypted(live, DB_KEY).unwrap();
+        db::run_migrations(&mut c).unwrap();
+        c.execute(
+            "INSERT INTO school(id,name,backup_salt,server_epoch,created_at,updated_at) VALUES ('old','Old Live School', x'00', 1, 't', 't')",
+            [],
+        )
+        .unwrap();
+        c.execute_batch("PRAGMA wal_checkpoint(TRUNCATE);").unwrap();
+    }
+
+    fn old_live_usable(live: &Path) -> bool {
+        let Ok(c) = db::open_encrypted(live, DB_KEY) else { return false };
+        db::is_readable(&c)
+            && c.query_row("SELECT name FROM school", [], |r| r.get::<_, String>(0)).ok().as_deref() == Some("Old Live School")
+    }
+
+    fn no_staged_left(dir: &Path) -> bool {
+        std::fs::read_dir(dir).unwrap().flatten().all(|e| !e.file_name().to_string_lossy().contains("restore-staged"))
+    }
+
+    #[test]
+    fn failed_rename_mid_swap_puts_the_previous_live_db_back() {
+        let dir = tmp_dir("midswap");
+        let vbak = make_vbak(&dir);
+        let live = dir.join("vidya.db");
+        make_old_live(&live);
+        // The live DB is moved aside fine, then renaming the staged DB in fails.
+        let failing = |a: &Path, b: &Path| -> std::io::Result<()> {
+            if a.to_string_lossy().contains("restore-staged") {
+                Err(std::io::Error::other("disk yanked"))
+            } else {
+                std::fs::rename(a, b)
+            }
+        };
+        let err = stage_and_swap(&vbak, BK_KEY, &live, NEW_KEY, "2026-09-23T10:00:00Z", &failing).unwrap_err();
+        assert!(matches!(err, BackupError::Io(_)), "{err:?}");
+        assert!(old_live_usable(&live), "previous live DB back in place and usable");
+        assert!(no_staged_left(&dir), "staged DB cleaned up");
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn failed_commit_rolls_the_swap_back() {
+        let dir = tmp_dir("commitfail");
+        let vbak = make_vbak(&dir);
+        let live = dir.join("vidya.db");
+        make_old_live(&live);
+        let err = install_then(&vbak, BK_KEY, &live, NEW_KEY, "2026-09-23T10:00:00Z", || Err("keychain locked".into()))
+            .unwrap_err();
+        assert!(matches!(err, BackupError::Io(ref m) if m.contains("keychain locked")), "{err:?}");
+        assert!(old_live_usable(&live), "rolled back to the previous live DB under the OLD key");
+        let leftovers: Vec<_> = std::fs::read_dir(&dir)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().to_string())
+            .filter(|n| n.contains("pre-restore") || n.contains("restore-staged"))
+            .collect();
+        assert!(leftovers.is_empty(), "no safety copy / staged DB left: {leftovers:?}");
+
+        // First-time restore whose commit fails → back to "no live DB" (no school).
+        let fresh = dir.join("fresh").join("vidya.db");
+        assert!(install_then(&vbak, BK_KEY, &fresh, NEW_KEY, "2026-09-23T10:00:00Z", || Err("x".into())).is_err());
+        assert!(!fresh.exists());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn boot_recovery_removes_staged_and_restores_a_missing_live_db() {
+        let dir = tmp_dir("bootrecover");
+        let live = dir.join("vidya.db");
+        make_old_live(&live);
+        // Crash window: the live DB was moved aside, a staged DB was left behind.
+        let safety = dir.join("vidya.db.pre-restore-20260923100000");
+        std::fs::rename(&live, &safety).unwrap();
+        std::fs::write(staged_path(&live), b"half-written staged db").unwrap();
+        assert!(recover_interrupted_install(&live), "live DB put back");
+        assert!(old_live_usable(&live));
+        assert!(!safety.exists());
+        assert!(no_staged_left(&dir));
+        // A normal boot (live present) is a no-op apart from dropping a stale stage.
+        std::fs::write(staged_path(&live), b"stale").unwrap();
+        assert!(!recover_interrupted_install(&live));
+        assert!(old_live_usable(&live) && no_staged_left(&dir));
+        // Nothing to recover on a fresh PC.
+        let fresh = dir.join("fresh");
+        std::fs::create_dir_all(&fresh).unwrap();
+        assert!(!recover_interrupted_install(&fresh.join("vidya.db")));
         std::fs::remove_dir_all(&dir).ok();
     }
 

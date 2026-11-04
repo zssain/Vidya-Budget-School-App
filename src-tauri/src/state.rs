@@ -58,7 +58,9 @@ pub enum AppState {
     BootstrapPending { staff: SessionStaff },
     /// DB file present but its key is missing (offer Recover; never overwrite).
     DbKeyMissing,
-    /// A restore/transfer means this device must re-join the school.
+    /// A restore/transfer means this device must re-join the school. (Kept for the
+    /// frontend contract; the school PC never enters it because other devices are
+    /// flagged `needs_rejoin` — see `compute`.)
     NeedsRejoin,
     /// The licence moved to another PC; this one is read-only.
     Moved,
@@ -82,13 +84,6 @@ fn school_exists(conn: &Connection) -> rusqlite::Result<bool> {
 fn licence_status(conn: &Connection) -> rusqlite::Result<Option<String>> {
     conn.query_row("SELECT status FROM licence LIMIT 1", [], |r| r.get::<_, String>(0))
         .optional()
-}
-
-fn any_device_needs_rejoin(conn: &Connection) -> rusqlite::Result<bool> {
-    Ok(conn
-        .query_row("SELECT 1 FROM device WHERE needs_rejoin = 1 LIMIT 1", [], |_| Ok(()))
-        .optional()?
-        .is_some())
 }
 
 /// Compute the state from the (opened) DB and the current in-memory session.
@@ -121,13 +116,12 @@ pub fn compute(conn: &Connection, session: Option<SessionStaff>) -> rusqlite::Re
     }
 
     // Off-path states take precedence once a school exists.
-    if has_school {
-        if lic_status.as_deref() == Some("moved") {
-            return Ok(AppStateResponse { state: AppState::Moved, licence_status: lic_status });
-        }
-        if any_device_needs_rejoin(conn)? {
-            return Ok(AppStateResponse { state: AppState::NeedsRejoin, licence_status: lic_status });
-        }
+    // NOTE: `device.needs_rejoin` flags OTHER devices (set by a restore on this PC,
+    // §12) and is shown on Staff & access — it must never gate the school PC itself.
+    // Gating on it here sent a freshly restored server to the dead-end "This computer
+    // is no longer the school server" screen (found by tests/restore_drill.rs).
+    if has_school && lic_status.as_deref() == Some("moved") {
+        return Ok(AppStateResponse { state: AppState::Moved, licence_status: lic_status });
     }
 
     let step: i64 = kv::get(conn, KV_SETUP_STEP)?.unwrap_or(0);
@@ -232,8 +226,10 @@ mod tests {
         assert_eq!(resp.licence_status.as_deref(), Some("moved"));
     }
 
+    /// After a restore every device row is flagged `needs_rejoin`; the restored school
+    /// PC itself must still reach its PIN screen (→ Home "Devices need to join again").
     #[test]
-    fn needs_rejoin_detected() {
+    fn flagged_devices_do_not_block_the_school_pc() {
         let c = fresh();
         make_school(&c);
         kv::set(&c, KV_SETUP_STEP, &SETUP_STEPS).unwrap();
@@ -248,7 +244,7 @@ mod tests {
             [],
         )
         .unwrap();
-        assert_eq!(compute(&c, None).unwrap().state, AppState::NeedsRejoin);
+        assert_eq!(compute(&c, None).unwrap().state, AppState::Locked);
     }
 
     fn join_as_teacher(c: &Connection) {

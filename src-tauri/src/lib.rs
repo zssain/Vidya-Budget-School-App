@@ -59,6 +59,11 @@ fn build_ctx(app: &tauri::AppHandle, data_dir: std::path::PathBuf) -> RtCtx {
     // (security::android_key, repair K1). If a DB file exists but the key is gone →
     // key_missing (never overwrite the DB).
     let db_path = data_dir.join("vidya.db");
+    // A restore interrupted by a crash / power cut: drop its staged temp DB and, if
+    // the live DB was already moved aside, put it back (backup::restore, §12).
+    if backup::restore::recover_interrupted_install(&db_path) {
+        tracing::warn!("restore was interrupted; the previous database was put back");
+    }
     #[cfg(not(target_os = "android"))]
     let key_result = {
         let _ = app;

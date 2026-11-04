@@ -12,7 +12,8 @@
     "migrate": "tsx src/migrate.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.test.json",
     "lint": "eslint .",
-    "test": "vitest run"
+    "test": "vitest run",
+    "rehearse:purchase": "vitest run --config vitest.rehearsal.config.ts"
   },
   "dependencies": {
     "@vidya/billing-core": "file:../../packages/billing-core",

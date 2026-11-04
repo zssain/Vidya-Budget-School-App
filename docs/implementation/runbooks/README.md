@@ -6,6 +6,8 @@
 | [production-setup.md](production-setup.md) | First deployment: Supabase, owner bootstrap + MFA, Postgres roles + migrations, catalogue, Razorpay test→live, Resend, domains, worker + signer. |
 | [operations.md](operations.md) | Running/monitoring the worker and signer, migrations, dead jobs, webhook retention, backups. |
 | [payment-reconciliation.md](payment-reconciliation.md) | A customer paid but the dashboard disagrees; missed webhooks; refunds/disputes; manual payments. |
+| [purchase-rehearsal.md](purchase-rehearsal.md) | Pre-sale check, automated: checkout → signed test webhook → worker → real signer → app activation (+ signer-failure retry). `npm run rehearse:purchase`. |
+| [restore-drill.md](restore-drill.md) | Pre-sale check, automated: back up a 1,000+-student fake school, restore it onto a clean replacement PC, verify tables/ledger/audit chain/fencing; wrong key and interrupted install. `cargo test -p vidya --test restore_drill`. |
 | [owner-recovery.md](owner-recovery.md) | Lost password, lost authenticator, suspected compromise, changing the owner account. |
 
 Signing-key generation, rotation and backup: [../licence-signer.md](../licence-signer.md).
