@@ -6,6 +6,7 @@ import type { Bundle } from '../index'
 const en: Record<string, string> = {
   'recover.back': '← Back',
   'recover.title': 'Recover a school',
+  'recover.doneReopen': 'The school has been restored. Please close Vidya and open it again to continue.',
   'recover.intro':
     'Restore a school on this computer from a Vidya backup file (.vbak) and your recovery key. The other devices will be asked to rejoin.',
   'recover.step1': '1. Choose the backup',
@@ -38,6 +39,7 @@ const en: Record<string, string> = {
 const hi: Record<string, string> = {
   'recover.back': '← वापस',
   'recover.title': 'स्कूल पुनर्प्राप्त करें',
+  'recover.doneReopen': 'स्कूल पुनर्स्थापित हो गया है। आगे बढ़ने के लिए कृपया Vidya को बंद करके दोबारा खोलें।',
   'recover.intro':
     'इस कंप्यूटर पर Vidya बैकअप फ़ाइल (.vbak) और अपनी रिकवरी कुंजी से स्कूल पुनर्स्थापित करें। बाकी डिवाइसों को फिर से जुड़ने के लिए कहा जाएगा।',
   'recover.step1': '1. बैकअप चुनें',

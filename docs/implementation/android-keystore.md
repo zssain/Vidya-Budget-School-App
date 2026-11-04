@@ -182,6 +182,8 @@ All restore data is durable before the restart, and the next launch is correct (
 its own post-restore path, such as reopening the DB in-process or a clean exit with a "reopen Vidya"
 message. After restore the state is `needs_rejoin` (restore semantics, not K1).
 
+**Fixed after this run (not re-run on the emulator):** `restore_install` no longer calls `app.restart()` on Android; it returns success and the Recover screen asks the user to close and reopen Vidya (same pattern as `join_school`).
+
 **Emulator ≠ physical device.** The emulator's AndroidKeyStore is the emulated KeyMint. It is
 not a TEE/StrongBox on real silicon, and OEM keystore quirks (Samsung/Xiaomi key invalidation
 after OS updates, slow `keystore2`) cannot show up here. Run the plan below on at least one real

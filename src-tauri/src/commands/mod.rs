@@ -1816,6 +1816,13 @@ pub fn restore_install(app: tauri::AppHandle, state: State<RtCtx>, path: String,
         .set(&new_key)
         .map_err(|e| crate::error::CmdError::internal(format!("key store: {e:?}")))?;
 
+    // Desktop relaunches into the restored school. On Android `app.restart()` aborts
+    // the process (SIGABRT in tauri::process::restart — seen on the API 34 emulator)
+    // instead of relaunching, so — as join_school does — we return success there and
+    // the UI asks the user to reopen Vidya; the next launch opens the restored DB.
+    #[cfg(target_os = "android")]
+    let _ = &app;
+    #[cfg(not(target_os = "android"))]
     app.restart();
     #[allow(unreachable_code)]
     Ok(())

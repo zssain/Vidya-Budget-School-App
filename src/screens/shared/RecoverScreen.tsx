@@ -29,6 +29,7 @@ export default function RecoverScreen() {
   const [driveList, setDriveList] = useState<RestoreDriveEntryDto[] | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [restored, setRestored] = useState(false)
 
   const showErr = (e: unknown) =>
     setError(t((e as CmdError).message_key, (e as CmdError).vars as Record<string, string | number>))
@@ -76,12 +77,15 @@ export default function RecoverScreen() {
     if (!path) return
     setBusy(true)
     setError(null)
-    // On success the backend restarts the app (this promise never resolves); only an
-    // error comes back here.
-    api.restore_install(path, recoveryKey).catch((e) => {
-      showErr(e)
-      setBusy(false)
-    })
+    // On success the desktop backend restarts the app (this promise never resolves).
+    // Android can't restart itself, so there it resolves and we ask the user to reopen.
+    api
+      .restore_install(path, recoveryKey)
+      .then(() => setRestored(true))
+      .catch((e) => {
+        showErr(e)
+        setBusy(false)
+      })
   }
 
   const input: React.CSSProperties = { height: 42, borderRadius: 8, border: '1px solid var(--line-strong)', padding: '0 14px', background: 'var(--white)', color: 'var(--ink)', fontSize: 14, width: '100%', boxSizing: 'border-box', fontFamily: 'ui-monospace, Menlo, monospace', letterSpacing: '0.04em' }
@@ -98,6 +102,11 @@ export default function RecoverScreen() {
         <h1 style={{ fontFamily: SERIF, fontSize: 34, margin: '0 0 6px' }}>{t('recover.title')}</h1>
         <p style={{ color: 'var(--muted)', fontSize: 14, margin: '0 0 24px', lineHeight: 1.5 }}>{t('recover.intro')}</p>
 
+        {restored && (
+          <div role="status" style={{ ...CARD, padding: 14, marginBottom: 16, fontSize: 14, lineHeight: 1.5 }}>
+            {t('recover.doneReopen')}
+          </div>
+        )}
         {error && <div style={{ ...CARD, padding: 14, marginBottom: 16, borderColor: 'var(--danger)', color: 'var(--danger)', fontSize: 14 }}>{error}</div>}
 
         {!summary ? (
