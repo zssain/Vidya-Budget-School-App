@@ -4,6 +4,7 @@ import tailwindcss from '@tailwindcss/vite'
 import { readFileSync, writeFileSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { fileURLToPath } from 'node:url'
+import { join } from 'node:path'
 
 // The iPhone PWA build (Phase 19). It compiles the SAME React app and design tokens
 // as the Tauri build (via the `@` → ../src alias — no forked styles, §18), but with
@@ -28,58 +29,68 @@ const webClientId = process.env.VITE_GOOGLE_CLIENT_ID_WEB ?? process.env.GOOGLE_
 // version. Hand-written service worker; no Workbox.
 function serviceWorker(): Plugin {
   return {
-    name: 'vidya-sw',
-    apply: 'build',
-    writeBundle(_options, bundle) {
-      const assets = Object.keys(bundle).map((f) => '/' + f)
-      const precache = [...new Set(['/', '/index.html', '/manifest.webmanifest', ...assets])]
-      const version = createHash('sha256').update(precache.join('|')).digest('hex').slice(0, 12)
-      const template = readFileSync(fileURLToPath(new URL('./sw-template.js', import.meta.url)), 'utf8')
-      const sw = template.replace('__VERSION__', version).replace('__PRECACHE__', JSON.stringify(precache))
-      writeFileSync(fileURLToPath(new URL('./dist/sw.js', import.meta.url)), sw)
-    },
+      name: 'vidya-sw',
+      apply: 'build',
+      writeBundle(options, bundle) {
+        const assets = Object.keys(bundle).map((f) => '/' + f)
+        const precache = [...new Set(['/', '/index.html', '/manifest.webmanifest', ...assets])]
+        const version = createHash('sha256').update(precache.join('|')).digest('hex').slice(0, 12)
+        const template = readFileSync(fileURLToPath(new URL('./sw-template.js', import.meta.url)), 'utf8')
+        const sw = template.replace('__VERSION__', version).replace('__PRECACHE__', JSON.stringify(precache))
+        writeFileSync(join(options.dir!, 'sw.js'), sw)
+      },
+    }
   }
-}
 
-// SPA fallback for static hosts. The router is hash-based, but the invitation
-// deep-link is a real path — `/join#d=…` — so on its FIRST load (in Safari, before
-// the service worker exists) the host must return index.html for that path. GitHub
-// Pages serves 404.html for any unknown path, so we emit a copy of index.html as
-// 404.html. Cloudflare Pages uses a `_redirects` rule instead (see DEPLOY-PWA.md).
-function spaFallback(): Plugin {
-  return {
-    name: 'vidya-spa-fallback',
-    apply: 'build',
-    writeBundle() {
-      const dist = (p: string) => fileURLToPath(new URL('./dist/' + p, import.meta.url))
-      writeFileSync(dist('404.html'), readFileSync(dist('index.html'), 'utf8'))
-    },
+  // SPA fallback for static hosts. The router is hash-based, but the invitation
+  // deep-link is a real path — `/join#d=…` — so on its FIRST load (in Safari, before
+  // the service worker exists) the host must return index.html for that path. GitHub
+  // Pages serves 404.html for any unknown path, so we emit a copy of index.html as
+  // 404.html. Cloudflare Pages uses a `_redirects` rule instead (see DEPLOY-PWA.md).
+  function spaFallback(): Plugin {
+    return {
+      name: 'vidya-spa-fallback',
+      apply: 'build',
+      writeBundle(options) {
+        const dist = (p: string) => join(options.dir!, p)
+        writeFileSync(dist('404.html'), readFileSync(dist('index.html'), 'utf8'))
+      },
+    }
   }
-}
 
-export default defineConfig({
-  root: fileURLToPath(new URL('.', import.meta.url)),
-  plugins: [react(), tailwindcss(), serviceWorker(), spaFallback()],
-  resolve: {
-    alias: {
-      // Same alias as the app so the shared src/ components resolve identically.
-      '@': fileURLToPath(new URL('../src', import.meta.url)),
-      // The generated vidya-wasm ES module (built by `npm run build:wasm`).
-      '@wasm': fileURLToPath(new URL('./wasm/vidya_wasm.js', import.meta.url)),
+  // `--mode e2e` (npm run build:web:e2e) is the TEST-ONLY build for the WebKit e2e
+  // suite: it sets `__VIDYA_E2E__` (which pulls in web-pwa/e2e-seed.ts), writes to
+  // web-pwa/dist-e2e (never the deployable dist/), and uses a fake OAuth client id so
+  // the Drive layer runs against the test's stubbed Google endpoints. Every other mode
+  // defines `__VIDYA_E2E__` as false, so the seeding harness is not in the bundle.
+  export default defineConfig(({ mode }) => {
+    const e2e = mode === 'e2e'
+    const clientId = e2e ? 'vidya-e2e-fake-client.apps.googleusercontent.com' : webClientId
+    return {
+    root: fileURLToPath(new URL('.', import.meta.url)),
+    plugins: [react(), tailwindcss(), serviceWorker(), spaFallback()],
+    resolve: {
+      alias: {
+        // Same alias as the app so the shared src/ components resolve identically.
+        '@': fileURLToPath(new URL('../src', import.meta.url)),
+        // The generated vidya-wasm ES module (built by `npm run build:wasm`).
+        '@wasm': fileURLToPath(new URL('./wasm/vidya_wasm.js', import.meta.url)),
+      },
     },
-  },
-  define: {
-    'import.meta.env.VITE_PLATFORM': JSON.stringify('web'),
-    __APP_VERSION__: JSON.stringify(appVersion),
-    ...(webClientId
-      ? { 'import.meta.env.VITE_GOOGLE_CLIENT_ID_WEB': JSON.stringify(webClientId) }
-      : {}),
-  },
-  build: {
-    outDir: fileURLToPath(new URL('./dist', import.meta.url)),
-    emptyOutDir: true,
-    target: 'es2022', // top-level await + modern WASM loading (iOS 16.4+ Safari)
-  },
-  clearScreen: false,
-  server: { port: 5273, strictPort: true },
+    define: {
+      'import.meta.env.VITE_PLATFORM': JSON.stringify('web'),
+      __APP_VERSION__: JSON.stringify(appVersion),
+      __VIDYA_E2E__: JSON.stringify(e2e),
+      ...(clientId
+        ? { 'import.meta.env.VITE_GOOGLE_CLIENT_ID_WEB': JSON.stringify(clientId) }
+        : {}),
+    },
+    build: {
+      outDir: fileURLToPath(new URL(e2e ? './dist-e2e' : './dist', import.meta.url)),
+      emptyOutDir: true,
+      target: 'es2022', // top-level await + modern WASM loading (iOS 16.4+ Safari)
+    },
+    clearScreen: false,
+    server: { port: 5273, strictPort: true },
+  }
 })

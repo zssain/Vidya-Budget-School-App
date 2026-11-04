@@ -5,7 +5,10 @@
 // module directly to check the rules run in Apple's engine. Unknown extensionless
 // paths fall back to index.html (the app is a hash-router SPA).
 //
-//   node scripts/serve-static.mjs [--port 5280]
+// `--dist <dir>` (relative to web-pwa/) serves another build, e.g. the test-only
+// `dist-e2e` seeding build used by tests/e2e/pwa/sync-problems.spec.ts.
+//
+//   node scripts/serve-static.mjs [--port 5280] [--dist dist]
 
 import { createServer } from 'node:http'
 import { readFile } from 'node:fs/promises'
@@ -14,7 +17,10 @@ import { extname, normalize } from 'node:path'
 
 const portArg = process.argv.indexOf('--port')
 const PORT = portArg > -1 ? Number(process.argv[portArg + 1]) : 5280
-const DIST = fileURLToPath(new URL('../web-pwa/dist/', import.meta.url))
+const distArg = process.argv.indexOf('--dist')
+const DIST_NAME = distArg > -1 ? process.argv[distArg + 1] : 'dist'
+if (!/^[\w-]+$/.test(DIST_NAME)) throw new Error(`serve-static: bad --dist ${DIST_NAME}`)
+const DIST = fileURLToPath(new URL(`../web-pwa/${DIST_NAME}/`, import.meta.url))
 const WASM = fileURLToPath(new URL('../web-pwa/wasm/', import.meta.url))
 
 const TYPES = {
@@ -63,4 +69,4 @@ const server = createServer(async (req, res) => {
   }
 })
 
-server.listen(PORT, () => console.log(`serve-static: http://localhost:${PORT} (dist + /wasm)`))
+server.listen(PORT, () => console.log(`serve-static: http://localhost:${PORT} (${DIST_NAME} + /wasm)`))

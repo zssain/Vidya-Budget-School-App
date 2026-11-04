@@ -29,10 +29,17 @@ import { loadAccent } from '@/lib/theme'
 import { loadLang } from '@/lib/i18n'
 import { registerServiceWorker } from './sw-register'
 
+// Build-time constant from vite.config.ts: true ONLY in the `--mode e2e` test build.
+declare const __VIDYA_E2E__: boolean
+
 loadAccent()
 loadLang()
 // Auto-lock (§9) is installed by App via lib/session.ts (idle + hidden, 5 min).
 registerServiceWorker() // offline shell + "new version — Reload" (Step 6)
+// Test-only seeding harness (tests/e2e/pwa). `__VIDYA_E2E__` is the literal `false`
+// in every non-e2e build, so this branch and the e2e-seed chunk are dropped from the
+// production bundle (asserted by tests/e2e/pwa/pwa.spec.ts).
+if (__VIDYA_E2E__) void import('./e2e-seed')
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>

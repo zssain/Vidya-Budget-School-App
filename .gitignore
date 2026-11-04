@@ -58,3 +58,6 @@ cloud/_archive/licence/.dev-keys/
 
 # Fidelity baselines are regenerated locally until ≤0.1% tuning lands (P9)
 /tests/e2e/__screens__/
+
+# PWA e2e test-only build (npm run build:web:e2e) — never deployed
+web-pwa/dist-e2e/

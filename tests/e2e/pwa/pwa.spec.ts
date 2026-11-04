@@ -1,4 +1,6 @@
 import { test, expect } from '@playwright/test'
+import { existsSync, readdirSync, readFileSync } from 'node:fs'
+import { join } from 'node:path'
 
 // iPhone-PWA tests in WebKit (Phase 19, Step 9) — Apple's engine, the production
 // build, its real CSP + service worker. These verify the PWA *foundation* that is
@@ -128,4 +130,28 @@ test('persistent storage and IndexedDB are available', async ({ page }) => {
   expect(r.persistIsFn).toBe(true)
   expect(r.persistedType).toBe('boolean')
   expect(r.idbWorks).toBe(true)
+})
+
+test('the production build contains no e2e seeding harness', () => {
+  // web-pwa/e2e-seed.ts (used by sync-problems.spec.ts) is only built in `--mode e2e`
+  // (web-pwa/dist-e2e). The deployable web-pwa/dist must not contain it: no chunk, no
+  // window hook, no fake OAuth client id. The e2e build is scanned too, so the
+  // markers are proven to be what the harness actually emits.
+  const MARKERS = ['__vidyaE2E', 'seedJoinedTeacher', 'e2e-seed', 'vidya-e2e-fake-client']
+  const scan = (dir: string): string[] => {
+    const hits: string[] = []
+    for (const e of readdirSync(dir, { withFileTypes: true, recursive: true })) {
+      if (!e.isFile() || !/\.(js|html|json|webmanifest|css)$/.test(e.name)) continue
+      const file = join(e.parentPath, e.name)
+      const text = readFileSync(file, 'utf8')
+      for (const m of MARKERS) if (text.includes(m)) hits.push(`${file}: ${m}`)
+    }
+    return hits
+  }
+  expect(existsSync('web-pwa/dist/index.html')).toBe(true)
+  expect(scan('web-pwa/dist')).toEqual([])
+  if (existsSync('web-pwa/dist-e2e')) {
+    const e2eHits = scan('web-pwa/dist-e2e').join('\n')
+    for (const m of MARKERS) expect(e2eHits).toContain(m)
+  }
 })

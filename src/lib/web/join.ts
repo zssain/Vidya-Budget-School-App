@@ -151,7 +151,10 @@ export async function pollJoinResponse(
   return true
 }
 
-/** Whether this device has completed a join (has an identity + session key). */
+/** Whether this device has completed a join (has an identity + session key). Checks
+ *  that the session key is STORED without opening it: once a PIN exists it is
+ *  PIN-wrapped (K2), and `app_state` asks this while locked — opening it there would
+ *  reject LOCKED and strand a joined phone on "Please sign in" instead of the PIN gate. */
 export async function hasJoined(): Promise<boolean> {
-  return (await kvGet<string>('device_id')) != null && (await secretGet<string>('session_key')) != null
+  return (await kvGet<string>('device_id')) != null && (await kvGet<unknown>('session_key')) != null
 }

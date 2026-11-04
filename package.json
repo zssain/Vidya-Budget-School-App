@@ -11,6 +11,7 @@
     "build:wasm": "wasm-pack build crates/vidya-wasm --target web --out-dir ../../web-pwa/wasm",
     "dev:web": "vite --config web-pwa/vite.config.ts",
     "build:web": "npm run build:wasm && vite build --config web-pwa/vite.config.ts",
+    "build:web:e2e": "vite build --config web-pwa/vite.config.ts --mode e2e",
     "check:hex": "node scripts/check-hex.mjs",
     "check:i18n": "node scripts/check-i18n.mjs",
     "check:deps": "node scripts/check-deps.mjs",
@@ -24,7 +25,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
-    "test:e2e:pwa": "npm run build:web && playwright test --config playwright.pwa.config.ts",
+    "test:e2e:pwa": "npm run build:web && npm run build:web:e2e && playwright test --config playwright.pwa.config.ts",
     "tauri": "tauri"
   },
   "dependencies": {
