@@ -183,8 +183,11 @@ jobs:
         with:
           targets: aarch64-linux-android,armv7-linux-androideabi
       - run: npm ci
-      - name: Build split APKs (debug; unsigned test build)
-        run: npm run tauri android build -- --apk --split-per-abi --debug
+      # Release profile, unsigned (no keystore in CI), ARM only — what phones get, so
+      # the size gate measures the real download. A debug build is 270–770 MB per ABI
+      # (unstripped symbols) and x86/x86_64 are emulator-only, as in release.yml.
+      - name: Build split APKs (release profile, unsigned, ARM only)
+        run: npm run tauri android build -- --apk --split-per-abi --target aarch64 --target armv7
       - name: Size gate (download ≤ 40 MB, installed ≤ 50 MB)
         run: node scripts/size-report.mjs
       - uses: actions/upload-artifact@v4
