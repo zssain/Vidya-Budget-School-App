@@ -304,10 +304,21 @@ pub fn recover_interrupted_install(live: &Path) -> bool {
     if live.exists() {
         return false;
     }
-    let Some(dir) = live.parent() else { return false };
+    match newest_safety_copy(live) {
+        Some(copy) => {
+            rollback_swap(live, Some(&copy));
+            live.exists()
+        }
+        None => false,
+    }
+}
+
+/// The newest `<name>.pre-restore-<stamp>` safety copy next to `live`, if any.
+fn newest_safety_copy(live: &Path) -> Option<PathBuf> {
+    let dir = live.parent()?;
     let name = live.file_name().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
     let prefix = format!("{name}.pre-restore-");
-    let newest = std::fs::read_dir(dir)
+    std::fs::read_dir(dir)
         .ok()
         .into_iter()
         .flatten()
@@ -316,14 +327,41 @@ pub fn recover_interrupted_install(live: &Path) -> bool {
         .filter(|n| {
             n.strip_prefix(&prefix).is_some_and(|stamp| !stamp.is_empty() && stamp.bytes().all(|b| b.is_ascii_digit()))
         })
-        .max();
-    match newest {
-        Some(n) => {
-            rollback_swap(live, Some(&dir.join(n)));
-            live.exists()
-        }
-        None => false,
+        .max()
+        .map(|n| dir.join(n))
+}
+
+/// Boot-time repair for a crash in the narrow window AFTER the restored DB was
+/// swapped in but BEFORE its new key reached the key store: the live DB is then
+/// encrypted under a key nobody holds, while the stored key still opens the newest
+/// safety copy (the pre-restore DB). In exactly that case the unreadable restored DB
+/// is moved aside (`<name>.unkeyed-restore-<stamp>`, kept, never deleted) and the
+/// safety copy goes back live, so the PC starts on its previous data and the restore
+/// can simply be run again. A live DB the stored key opens is never touched.
+/// Returns true when the previous DB was put back.
+pub fn recover_unkeyed_restore(live: &Path, stored_key_hex: &str, now_stamp: &str) -> bool {
+    if !live.exists() || db::open_encrypted_readonly(live, stored_key_hex).and_then(|c| c.query_row("SELECT count(*) FROM sqlite_master", [], |r| r.get::<_, i64>(0))).is_ok() {
+        return false;
     }
+    let Some(copy) = newest_safety_copy(live) else { return false };
+    let copy_opens = db::open_encrypted_readonly(&copy, stored_key_hex)
+        .and_then(|c| c.query_row("SELECT count(*) FROM sqlite_master", [], |r| r.get::<_, i64>(0)))
+        .is_ok();
+    if !copy_opens {
+        return false;
+    }
+    let aside = sibling(live, &format!(".unkeyed-restore-{now_stamp}"));
+    if std::fs::rename(live, &aside).is_err() {
+        return false;
+    }
+    for ext in ["-wal", "-shm"] {
+        let side = sibling(live, ext);
+        if side.exists() {
+            let _ = std::fs::rename(&side, sibling(&aside, ext));
+        }
+    }
+    rollback_swap(live, Some(&copy));
+    live.exists()
 }
 
 /// Remove a DB file and its `-wal`/`-shm` sidecars (error cleanup / pre-clean).
@@ -654,5 +692,30 @@ mod tests {
         std::fs::remove_file(crate::backup::meta_path(&vbak)).unwrap();
         assert!(matches!(backup_key_from_meta(&vbak, recovery), Err(BackupError::Unreadable(_))));
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn a_crash_before_the_new_key_was_saved_puts_the_previous_db_back() {
+        let dir = tmp_dir("unkeyed");
+        let live = dir.join("vidya.db");
+        // The pre-restore DB (stored key) as the safety copy, the restored DB live
+        // under a key that never reached the key store.
+        {
+            let mut c = db::open_encrypted(&dir.join("vidya.db.pre-restore-20261105010101"), DB_KEY).unwrap();
+            db::run_migrations(&mut c).unwrap();
+            c.execute("INSERT INTO app_kv(key,value_json,updated_at) VALUES ('marker','old','t')", []).unwrap();
+        }
+        {
+            let mut c = db::open_encrypted(&live, NEW_KEY).unwrap();
+            db::run_migrations(&mut c).unwrap();
+        }
+        assert!(recover_unkeyed_restore(&live, DB_KEY, "20261105020202"));
+        let c = db::open_encrypted(&live, DB_KEY).unwrap();
+        let v: String = c.query_row("SELECT value_json FROM app_kv WHERE key='marker'", [], |r| r.get(0)).unwrap();
+        assert_eq!(v, "old");
+        assert!(dir.join("vidya.db.unkeyed-restore-20261105020202").exists(), "the restored copy is kept");
+        // A live DB the stored key opens is left alone.
+        assert!(!recover_unkeyed_restore(&live, DB_KEY, "x"));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

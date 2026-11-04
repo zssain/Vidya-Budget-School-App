@@ -82,6 +82,12 @@ fn build_ctx(app: &tauri::AppHandle, data_dir: std::path::PathBuf) -> RtCtx {
     let (db, key_missing) = match key_result {
         Ok(key) => {
             let hex = security::keys::to_hex(&key);
+            // A crash after a restore's swap but before its new key was saved: the
+            // stored key no longer opens the live DB but opens the pre-restore copy.
+            let stamp = time::OffsetDateTime::now_utc().unix_timestamp().to_string();
+            if backup::restore::recover_unkeyed_restore(&db_path, &hex, &stamp) {
+                tracing::warn!("restore's new key was never saved; the previous database was put back");
+            }
             db_key_hex = Some(hex.clone());
             match db::open_encrypted(&db_path, &hex) {
                 Ok(mut conn) => match db::run_migrations(&mut conn) {
