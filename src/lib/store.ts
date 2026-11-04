@@ -96,6 +96,15 @@ export function routeForState(app: AppState): Route {
   }
 }
 
+/**
+ * What the "DB key missing" state shows for a path: the restore flow on `/recover`,
+ * otherwise the status message WITH a way into that flow. Without it the state is a
+ * dead end on Android (no address bar) — found on the K1 emulator run.
+ */
+export function keyMissingView(base: string): 'recover' | 'status' {
+  return base === '/recover' ? 'recover' : 'status'
+}
+
 /** The home route path for a role (Principal/Accountant/Teacher). */
 export function homePathForRole(role: string): string {
   switch (role) {

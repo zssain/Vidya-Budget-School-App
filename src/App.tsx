@@ -1,9 +1,9 @@
 import { lazy, Suspense, useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
-import { useRoute, matchRoute } from '@/lib/router'
+import { useRoute, matchRoute, navigate } from '@/lib/router'
 import * as api from '@/lib/api'
 import type { CmdError, StaffDto } from '@/lib/api'
-import { useStore, refreshAppState, routeForState } from '@/lib/store'
+import { useStore, refreshAppState, routeForState, keyMissingView } from '@/lib/store'
 import { t, useLang } from '@/lib/i18n'
 import AppShell from '@/components/desktop/AppShell'
 import type { Role } from '@/lib/nav'
@@ -77,10 +77,21 @@ import Mocks from '@/dev/Mocks'
 import { welcomeFixture } from '@/dev/fixtures/welcome'
 
 // A simple full-screen status message (db_key_missing / needs_rejoin / moved).
-function StatusScreen({ messageKey }: { messageKey: string }) {
+function StatusScreen({ messageKey, action }: { messageKey: string; action?: { labelKey: string; onClick: () => void } }) {
   return (
     <div style={{ minHeight: '100vh', display: 'grid', placeItems: 'center', background: 'var(--bg)', padding: 24 }}>
-      <p style={{ maxWidth: 420, textAlign: 'center', color: 'var(--ink)', fontSize: 15, lineHeight: 1.5 }}>{t(messageKey)}</p>
+      <div style={{ maxWidth: 420, textAlign: 'center' }}>
+        <p style={{ color: 'var(--ink)', fontSize: 15, lineHeight: 1.5 }}>{t(messageKey)}</p>
+        {action && (
+          <button
+            type="button"
+            onClick={action.onClick}
+            style={{ marginTop: 16, height: 44, padding: '0 20px', borderRadius: 8, border: 0, background: 'var(--accent)', color: '#FFFFFF', fontSize: 14, fontWeight: 600, cursor: 'pointer' }}
+          >
+            {t(action.labelKey)}
+          </button>
+        )}
+      </div>
     </div>
   )
 }
@@ -220,7 +231,14 @@ function AppRoutes() {
     case 'bootstrap_pending':
       return <StatusScreen messageKey="pin.bootstrap_pending" />
     case 'db_key_missing':
-      return <StatusScreen messageKey="error.DB_KEY_MISSING" />
+      // The DB key is gone (e.g. AndroidKeyStore key invalidated): restore from a backup.
+      if (keyMissingView(base) === 'recover') return <RecoverScreen />
+      return (
+        <StatusScreen
+          messageKey="error.DB_KEY_MISSING"
+          action={{ labelKey: 'welcome.cta.recover', onClick: () => navigate('/recover') }}
+        />
+      )
     case 'needs_rejoin':
       return <StatusScreen messageKey="error.EPOCH_OLD" />
     case 'moved':

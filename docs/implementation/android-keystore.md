@@ -123,18 +123,82 @@ transient during migration, corrupt / newer blob untouched, `set` replacing a ke
 | `cargo clippy -p vidya -p tauri-plugin-vidya-android --lib --target aarch64-linux-android -- -D warnings` | clean (covers the `#[cfg(target_os = "android")]` code) |
 | `tauri android build --debug --target aarch64 --apk --ci` (stub frontend via `--config`, because the worktree had no `node_modules`) | **APK built.** The first attempt failed because vendored OpenSSL could not find `aarch64-linux-android-ranlib`; it succeeded once `AR_aarch64_linux_android` / `RANLIB_aarch64_linux_android` pointed at NDK `llvm-ar` / `llvm-ranlib`. Generated `tauri.settings.gradle` includes `:tauri-plugin-vidya-android`. The Kotlin plugin compiled, and `Lapp/vidya/plugin/KeystorePlugin;` plus the alias string are in `classes4.dex`. |
 | Release (R8-minified) build | not run |
-| Emulator / device run | **not run**: no system image, no AVD, no `sdkmanager` in the SDK |
+| Emulator / device run | Emulator: **run 5 Nov 2026**, see next section. Physical device: **not run**. |
+
+## Emulator verification (5 Nov 2026) — emulator, NOT a physical device
+
+**Environment.** Apple M5, macOS 26.2, Hypervisor.Framework acceleration. Installed with Google's
+`sdkmanager` (Homebrew `android-commandlinetools`, `--sdk_root=~/Library/Android/sdk`):
+`cmdline-tools;latest` and `system-images;android-34;google_apis;arm64-v8a` (rev 14). AVD
+`vidya_api34` (`avdmanager create avd -k "system-images;android-34;google_apis;arm64-v8a" -d pixel_6`),
+booted headless: `emulator -avd vidya_api34 -no-window -no-audio -no-boot-anim -no-snapshot -gpu swiftshader_indirect`
+(Android Emulator 37.1.11). Device: Android 14, API 34, `google/sdk_gphone64_arm64/emu64a:14/UE1A.230829.050/12077443:userdebug`.
+
+**APK.** Same env as above (NDK 26.3, JDK 21, `CC_/CXX_/AR_/RANLIB_aarch64_linux_android`,
+`CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER`), real frontend (`npm ci`), then
+`npm run tauri android build -- --debug --apk --target aarch64 --ci` →
+`app-universal-debug.apk`, package `in.vidyabudget.app.debug`, data dir
+`/data/data/in.vidyabudget.app.debug/` (key files and `vidya.db` live directly in it).
+
+**"Old" (pre-K1) build.** Same tree with only the Android branch of `build_ctx` switched back to
+the exact pre-K1 code (`ensure_key(&FileKeyStore::new(data_dir.join("db-key")), …)`, as in
+`08e95e6^`), same `versionCode`, so `adb install -r` is a real in-place upgrade with the old
+on-disk layout (64-hex `db-key`, no wrapped file). Not a build of `391e8c4` itself.
+
+**How it was driven.** `adb` (`~/Library/Android/sdk/platform-tools/adb`); files via
+`adb shell run-as in.vidyabudget.app.debug ls/cat/sha256sum/cp`; the app via the debug
+WebView's DevTools socket (`adb forward tcp:9333 localabstract:webview_devtools_remote_<pid>`,
+CDP `Runtime.evaluate` of `window.__TAURI_INTERNALS__.invoke(...)`): `seed_demo_school` (debug-only),
+`app_state`, the setup commands, `unlock`, `list_students`, `backup_now`, `restore_summary`,
+`restore_install`. Keystore calls were confirmed in logcat (`Tauri/Plugin: … pluginId: vidya-android, command: wrap|unwrap`);
+the migration outcome in the app's own log `logs/vidya-<date>.log`.
+
+| # | Test | Result |
+|---|---|---|
+| 1 | Fresh install, first launch | **PASS.** One `wrap` + one `unwrap`; only `db-key.wrapped.json` (103 B, mode 600, content `{"v":1,"iv":"…","ct":"…"}` only); **no `db-key`**. Seeded a school; force-stop + relaunch → only `unwrap`, `app_state` = `setup_in_progress`, licence `active` (data present). `adb reboot` → still opens, same state. |
+| 2 | Upgrade from the plaintext build (`adb install -r`) | **PASS.** Old build: `db-key` (64 hex) + DB, no wrapped file. New build first launch: `wrap`, `unwrap`, `unwrap`; log `DB key moved into AndroidKeyStore; plaintext key file removed`; `db-key` gone, wrapped file present, same school state. Relaunch → `unwrap` only, data present. |
+| 3 | Interrupted upgrade (time-based) | **PASS.** Pre-K1 state restored before each run, `am start` then `am force-stop` after 0.1/0.3/0.5/0.7/0.9/1.0/1.1/1.2/1.4/1.7/2.0 s. Kills ≤1.7 s left `db-key` only (migration not reached yet); 2.0 s left the migrated state. Every relaunch: wrapped only, school opens with its data. |
+| 3' | Interrupted upgrade (exact points) | **PASS.** A same-uid on-device loop (`run-as … kill -9 $(pidof …)`) killed the app the instant `db-key.wrapped.json.tmp` / `db-key.wrapped.json` appeared (+0/0.02/0.05/0.1 s). Seen on disk after the kill: `db-key` **and** `db-key.wrapped.json` (after rename, before delete) in 5 of 5 runs at ≤0.05 s; at 0.1 s already migrated. Each relaunch finished the migration (plaintext deleted) and opened the DB. |
+| 3(a–c) | Forced on-disk states | **PASS.** (a) `db-key` only → migrates. (b) `db-key` + a valid wrapped file → relaunch made **no `wrap` call** (two `unwrap`s), deleted `db-key`. (c) garbage `db-key.wrapped.json.tmp` next to `db-key` → tmp removed, migrated normally. |
+| 4 | Keystore key gone (uninstall → reinstall drops the alias; app files pushed back without `db-key`) | **PASS.** Log `wrapped DB key is permanently unusable and no plaintext copy exists: KEY_MISSING: keystore key vidya.dbkey.wrap.v1 is missing`; `app_state` = `db_key_missing`; `sha256` of `vidya.db` and `db-key.wrapped.json` identical before and after 3 relaunches; no key file created. Done twice (seeded school; completed school with 670 students). |
+| 4' | Recover from that state | **PASS after the fix below.** "Start recovery" → Recover screen; `restore_summary` of a `.vbak` made on the device by `backup_now` (670 students, chain ok); `restore_install` → new `wrap` + verifying `unwrap`, new `db-key.wrapped.json` (different hash), restored `vidya.db`, old DB kept as `vidya.db.pre-restore-*`, no `db-key`. Relaunch → DB opens with the new wrapped key, `list_students` = 670. See the restart crash below. |
+| 7 | Webview cannot call the plugin | **PASS.** `invoke('plugin:vidya-android|unwrap', …)` and `…|wrap` both reject: `vidya-android.unwrap not allowed. Command not found`. |
+| 5 | Restore on a fresh phone via the file picker | **not run.** The test above passed an app-private path to `restore_install` directly. The Android picker returns a `content://` URI, and restore also reads a `.meta` sidecar next to the file, so the picker path on Android is unverified. |
+| 6 | Release (R8) build | **not run** (needs `build-config/release.json` and a signing key). |
+
+**Bug found and fixed (this run).** The `db_key_missing` screen was a dead end: just the text
+"This device's key is missing. Recover to continue." with no control, and `/recover` was only
+routed under the Welcome state, so on Android (no address bar) Recover could not be reached.
+The screen now has a **Start recovery** button, and `/recover` renders `RecoverScreen` in that state
+(`src/App.tsx`, `keyMissingView` in `src/lib/store.ts`, test
+`store.test.ts › lets the key-missing state reach the restore flow`). Checked on the emulator
+(button shown, tap opens "Recover a school").
+
+**Found, NOT fixed (outside K1).** After a successful `restore_install` the app calls
+`app.restart()`. On Android that aborts the process (logcat: `Abort message: 'Error changing dalvik-cache ownership : Permission denied'`
+in the spawned child, then `FORTIFY: pthread_mutex_lock called on a destroyed mutex` in EGL teardown under
+`tauri::process::restart` → `std::process::exit`). The user sees a crash and has to reopen the app.
+All restore data is durable before the restart, and the next launch is correct (4'). Android needs
+its own post-restore path, such as reopening the DB in-process or a clean exit with a "reopen Vidya"
+message. After restore the state is `needs_rejoin` (restore semantics, not K1).
+
+**Emulator ≠ physical device.** The emulator's AndroidKeyStore is the emulated KeyMint. It is
+not a TEE/StrongBox on real silicon, and OEM keystore quirks (Samsung/Xiaomi key invalidation
+after OS updates, slow `keystore2`) cannot show up here. Run the plan below on at least one real
+low-end phone before shipping.
 
 ## What is NOT verified here
 
-The Kotlin code compiles and ships in the debug APK. It and the JNI round trip were **not run
-on a device or emulator** (no system image or device was available). See the device plan below. Known residual
+The Kotlin code and the JNI round trip have now run on an **emulator** (API 34, arm64; see above).
+Still not run: a **physical device**, the R8 release build, Android API levels other than 34, and
+the restore picker (`content://`) path. Known residual
 points:
 
 - `run_mobile_plugin` blocks the calling thread until the Android UI thread answers. It is
   called from `setup` (Rust main thread — the same pattern `register_android_plugin` already
   uses, which blocks identically) and from the sync `restore_install` command. A hang there
-  would show as a frozen splash; check it on device.
+  would show as a frozen splash. On the emulator it did not hang: cold start was 0.7–1.8 s
+  (`am start -W` TotalTime) with migration included, about 14 s right after a reboot. Check it on a device.
 - Plaintext key bytes in Rust are not zeroized (`String` hex is passed to SQLCipher, as before).
 - StrongBox is not requested (TEE-backed keystore is used); deleting a file on flash does not
   guarantee physical erasure of the old plaintext.

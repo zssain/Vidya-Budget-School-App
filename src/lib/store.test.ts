@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { routeForState, homePathForRole } from './store'
+import { routeForState, homePathForRole, keyMissingView } from './store'
 
 describe('routeForState', () => {
   it('routes each state-machine state to the right screen', () => {
@@ -17,6 +17,12 @@ describe('routeForState', () => {
     expect(routeForState({ kind: 'db_key_missing' })).toEqual({ screen: 'db_key_missing' })
     expect(routeForState({ kind: 'needs_rejoin' })).toEqual({ screen: 'needs_rejoin' })
     expect(routeForState({ kind: 'moved' })).toEqual({ screen: 'moved' })
+  })
+
+  it('lets the key-missing state reach the restore flow', () => {
+    expect(keyMissingView('/recover')).toBe('recover')
+    expect(keyMissingView('/')).toBe('status')
+    expect(keyMissingView('/welcome')).toBe('status')
   })
 
   it('maps roles to home paths', () => {
