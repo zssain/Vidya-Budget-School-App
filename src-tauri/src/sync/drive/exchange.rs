@@ -325,22 +325,30 @@ pub struct DownExport {
     /// replaces its whole store from `changes` and doesn't need them.)
     #[serde(default)]
     pub deletes: Vec<crate::sync::protocol::Delete>,
+    /// 0 when `deletes` lists every deletion; otherwise the `op_log` position of the
+    /// newest deletion left out. A device whose last applied export is older than
+    /// this may have missed deletions, so it reconciles against `changes` instead.
+    #[serde(default)]
+    pub deletes_from: i64,
 }
 
 /// How many recent deletions a down export carries.
-const DOWN_TOMBSTONES: i64 = 5000;
+pub const DOWN_TOMBSTONES: i64 = 5000;
 
 /// The most recent distinct deletions from synced tables, minus rows that exist
-/// again (re-created after the delete — they are in the export as live rows).
-fn recent_tombstones(conn: &Connection, live: &[crate::sync::protocol::Change]) -> rusqlite::Result<Vec<crate::sync::protocol::Delete>> {
+/// again (re-created after the delete — they are in the export as live rows), and
+/// the `deletes_from` position (0 = the list is complete; see [`DownExport`]).
+fn recent_tombstones(conn: &Connection, live: &[crate::sync::protocol::Change]) -> rusqlite::Result<(Vec<crate::sync::protocol::Delete>, i64)> {
     let live: std::collections::HashSet<(&str, &str)> = live.iter().map(|c| (c.table.as_str(), c.record_id.as_str())).collect();
     let mut st = conn.prepare(
-        "SELECT \"table\", record_id FROM op_log WHERE kind='delete' GROUP BY \"table\", record_id ORDER BY MAX(server_seq) DESC LIMIT ?1",
+        "SELECT \"table\", record_id, MAX(server_seq) FROM op_log WHERE kind='delete' GROUP BY \"table\", record_id ORDER BY MAX(server_seq) DESC LIMIT ?1",
     )?;
-    let rows = st.query_map(params![DOWN_TOMBSTONES], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+    let mut rows: Vec<(String, String, i64)> = st
+        .query_map(params![DOWN_TOMBSTONES + 1], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+        .collect::<rusqlite::Result<_>>()?;
+    let deletes_from = if rows.len() as i64 > DOWN_TOMBSTONES { rows.pop().map(|(_, _, seq)| seq).unwrap_or(0) } else { 0 };
     let mut out = Vec::new();
-    for row in rows {
-        let (table, record_id) = row?;
+    for (table, record_id, _) in rows {
         if !crate::sync::scope::SYNC_TABLES.contains(&table.as_str()) || live.contains(&(table.as_str(), record_id.as_str())) {
             continue;
         }
@@ -349,7 +357,7 @@ fn recent_tombstones(conn: &Connection, live: &[crate::sync::protocol::Change]) 
             out.push(crate::sync::protocol::Delete { table, record_id });
         }
     }
-    Ok(out)
+    Ok((out, deletes_from))
 }
 
 /// School PC: for every live device with a session key, write `down/<device>.vdown`
@@ -394,8 +402,8 @@ pub fn write_down_exports(conn: &Connection, drive: &impl DriveApi, exchange_fol
             cursor,
             &changes,
         );
-        let deletes = recent_tombstones(conn, &changes)?;
-        let body = DownExport { v: 1, device_id: device.clone(), cursor, server_epoch: epoch, changes, manifest: Some(manifest), deletes };
+        let (deletes, deletes_from) = recent_tombstones(conn, &changes)?;
+        let body = DownExport { v: 1, device_id: device.clone(), cursor, server_epoch: epoch, changes, manifest: Some(manifest), deletes, deletes_from };
         let json = serde_json::to_vec(&body).map_err(|e| ExchangeError::Bundle(e.to_string()))?;
         let Ok(keys) = seal::derive_keys(&sk) else { continue };
         let sealed = seal::seal(&keys.s2c, &vidya_core::seal::device_down_aad(&device), &json);

@@ -319,7 +319,17 @@ pub fn visible_row(conn: &Connection, actor: &Actor, table: &str, id: &str) -> r
                     let f = |r: &mut serde_json::Value| { if let Some(o) = r.as_object_mut() { o.retain(|k, _| STAFF_PUBLIC.contains(&k.as_str())); } };
                     Ok(mk(row, Some(&f)))
                 }
-                "class" => Ok(if classes.contains(id) { mk(row, None) } else { None }),
+                // Own classes, plus (name only matters) a class this teacher has a
+                // substitution in — the substitution row references it.
+                "class" => {
+                    let ok = classes.contains(id)
+                        || conn.query_row(
+                            "SELECT EXISTS(SELECT 1 FROM substitution WHERE class_id=?1 AND (substitute_teacher_id=?2 OR absent_teacher_id=?2))",
+                            rusqlite::params![id, actor.staff_id],
+                            |r| r.get::<_, bool>(0),
+                        )?;
+                    Ok(if ok { mk(row, None) } else { None })
+                }
                 "class_subject" => {
                     // Own subjects, plus every subject assignment in a class this
                     // teacher teaches (the class timetable references them).
@@ -670,6 +680,15 @@ pub fn snapshot(conn: &Connection, actor: &Actor) -> rusqlite::Result<Vec<Change
             // substitute's assigned class shows up and their attendance grant works.
             for id in ids_of(conn, "SELECT id FROM substitution WHERE substitute_teacher_id=?1 OR absent_teacher_id=?1", &[&actor.staff_id])? {
                 push(conn, "substitution", &id, None)?;
+            }
+            // …and the class row each one references (a period cover without
+            // attendance in a class this teacher doesn't teach would otherwise leave
+            // the snapshot referentially incomplete — refused whole by the device).
+            let duty = duty_grants(conn, &actor.staff_id, &duty_window_start())?;
+            for cid in ids_of(conn, "SELECT DISTINCT class_id FROM substitution WHERE substitute_teacher_id=?1 OR absent_teacher_id=?1", &[&actor.staff_id])? {
+                if !classes.contains(&cid) && !duty.contains_key(&cid) {
+                    push(conn, "class", &cid, None)?;
+                }
             }
             // Homework & notes history for the teacher's classes.
             for id in ids_of(conn, &format!("SELECT id FROM homework_note WHERE class_id IN ({ph})"), cargs.as_slice())? {

@@ -324,22 +324,54 @@ pub fn client_drive_tick(conn: &mut Connection) -> Result<(), String> {
     }
     // The school PC's canonical export for this device (school data without the LAN).
     if let Ok(Some(down)) = exchange::read_down_export(&drive, &exchange_folder, &id.device_id, &id.session_key) {
-        let held: i64 = crate::kv::get(conn, "down_cursor").ok().flatten().unwrap_or(-1);
-        // The export carries the same manifest as a LAN snapshot; one without it (or
-        // whose rows don't match it) is not applied.
-        if let Some(m) = down.manifest.as_ref().filter(|_| down.cursor > held) {
-            match crate::sync::engine::apply_snapshot(conn, m, &down.changes) {
-                Ok(_) => {
-                    if let Err(e) = crate::sync::engine::apply_tombstones(conn, &down.deletes) {
-                        tracing::warn!("down export deletions not applied: {e}");
-                    }
-                    let _ = crate::kv::set(conn, "down_cursor", &down.cursor);
-                }
-                Err(e) => tracing::warn!("down export not applied: {e}"),
-            }
+        if let Err(e) = apply_down_export(conn, &down) {
+            tracing::warn!("down export not applied: {e}");
         }
     }
     Ok(())
+}
+
+/// What applying a down export did.
+#[derive(Debug, PartialEq, Eq)]
+pub enum DownApplied {
+    /// Not newer than the export this device already holds.
+    Unchanged,
+    /// Rows + listed deletions applied.
+    Applied,
+    /// The device was behind the export's deletion list, so every local row the
+    /// export doesn't contain was removed (`n` rows).
+    Reconciled(usize),
+    /// Behind the deletion list but changes are still waiting to upload: rows and
+    /// listed deletions applied, the reconcile waits (the export is applied again
+    /// next pass) so no unsent edit is lost.
+    ReconcileDeferred,
+}
+
+/// Apply the school PC's down export (rows, deletions, and — when this device
+/// missed more deletions than the export lists — a reconcile), all in one
+/// transaction. The export carries the same manifest as a LAN snapshot; one
+/// without it (or whose rows don't match it) is not applied.
+pub fn apply_down_export(conn: &mut Connection, down: &super::drive::exchange::DownExport) -> Result<DownApplied, String> {
+    let held: i64 = crate::kv::get(conn, "down_cursor").map_err(|e| e.to_string())?.unwrap_or(-1);
+    if down.cursor <= held {
+        return Ok(DownApplied::Unchanged);
+    }
+    let manifest = down.manifest.as_ref().ok_or("down export has no manifest")?;
+    let behind = down.deletes_from > 0 && held < down.deletes_from;
+    let mut outcome = DownApplied::Applied;
+    crate::sync::engine::apply_snapshot_then(conn, manifest, &down.changes, |tx| {
+        let pending: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM outbox)", [], |r| r.get(0)).map_err(|e| e.to_string())?;
+        crate::sync::engine::apply_tombstones(tx, &down.deletes).map_err(|e| e.to_string())?;
+        if behind && pending {
+            outcome = DownApplied::ReconcileDeferred;
+            return Ok(()); // down_cursor not advanced: retried next pass
+        }
+        if behind {
+            outcome = DownApplied::Reconciled(crate::sync::engine::prune_to_export(tx, &down.changes).map_err(|e| e.to_string())?);
+        }
+        crate::kv::set(tx, "down_cursor", &down.cursor).map_err(|e| e.to_string())
+    })?;
+    Ok(outcome)
 }
 
 /// Discover the school server's current LAN address via mDNS (desktop), confirming the

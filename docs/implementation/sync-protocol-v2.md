@@ -91,6 +91,11 @@ fields, privacy actions, backups, bulk import, transfers, guardian edits, store 
   that exist again) because the native client upserts exports; the PWA replaces its
   store from the export and ignores them. A device never deletes a row that still has
   an unsent outbox op (`engine::apply_tombstones`) — the school PC answers that op.
+  If the list was cut, `deletes_from` is the newest deletion left out; a device whose
+  last applied export (`down_cursor`) is older reconciles: it removes every synced row
+  the export doesn't contain, in the same transaction as the export's rows — but only
+  with an empty outbox (a sheet op covers rows it doesn't name); otherwise it applies
+  the rows + listed deletions, keeps `down_cursor`, and reconciles on a later pass.
 * **Duty rosters:** a teacher covering a class through a current/upcoming attendance
   grant (substitution with attendance, approved attendance duty; from yesterday UTC
   on) receives that class's row, its students (address withheld), enrollments and

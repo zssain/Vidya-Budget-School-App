@@ -299,3 +299,79 @@ fn down_export_reaches_only_its_device_and_tracks_changes() {
     assert!(!tomb("sub-back"), "re-created: no tombstone");
     assert!(after.changes.iter().any(|c| c.table == "substitution" && c.record_id == "sub-back"));
 }
+
+/// A Drive-only device that missed more deletions than an export lists (5000)
+/// reconciles against the export's complete scoped data instead of keeping stale
+/// rows; a deleted-then-re-created row survives; with unsent changes queued the
+/// reconcile waits (nothing is lost) and runs once the outbox is empty.
+#[test]
+fn a_device_that_missed_more_deletes_than_an_export_lists_reconciles() {
+    use vidya_lib::sync::client::{apply_down_export, DownApplied};
+    let s = server();
+    let sk = register(&s, "dev-ipad", "stf-meena", 0x71);
+    let drive = FakeDrive::new();
+    let l = drive.provision_school(&[]);
+    let acct = drive.as_actor(PRINCIPAL);
+    let n = exchange::DOWN_TOMBSTONES as usize + 2;
+    let today = vidya_lib::commands::today();
+    s.execute_batch("BEGIN").unwrap();
+    for i in 0..n {
+        s.execute(
+            "INSERT INTO substitution(id,date,absent_teacher_id,substitute_teacher_id,class_id,period_no,includes_attendance) \
+             VALUES (?1,?2,'stf-nair','stf-meena','cls-4a',NULL,0)",
+            params![format!("sub-{i:05}"), today],
+        )
+        .unwrap();
+    }
+    s.execute_batch("COMMIT").unwrap();
+
+    let mut dev = phone();
+    exchange::write_down_exports(&s, &acct, &l.exchange).unwrap();
+    let first = exchange::read_down_export(&acct, &l.exchange, "dev-ipad", &sk).unwrap().unwrap();
+    assert_eq!(first.deletes_from, 0);
+    assert_eq!(apply_down_export(&mut dev, &first).unwrap(), DownApplied::Applied);
+    let subs = |c: &Connection| -> i64 { c.query_row("SELECT COUNT(*) FROM substitution", [], |r| r.get(0)).unwrap() };
+    let held = |c: &Connection, id: &str| -> i64 { c.query_row("SELECT COUNT(*) FROM substitution WHERE id=?1", [id], |r| r.get(0)).unwrap() };
+    assert!(subs(&dev) >= n as i64);
+
+    // The device is offline while the school PC deletes all of them (5002 > 5000),
+    // and re-creates one.
+    s.execute("DELETE FROM substitution WHERE id LIKE 'sub-%'", []).unwrap();
+    s.execute(
+        "INSERT INTO substitution(id,date,absent_teacher_id,substitute_teacher_id,class_id,period_no,includes_attendance) \
+         VALUES ('sub-00001',?1,'stf-nair','stf-meena','cls-4a',NULL,0)",
+        params![today],
+    )
+    .unwrap();
+    exchange::write_down_exports(&s, &acct, &l.exchange).unwrap();
+    let later = exchange::read_down_export(&acct, &l.exchange, "dev-ipad", &sk).unwrap().unwrap();
+    assert!(later.deletes.len() as i64 <= exchange::DOWN_TOMBSTONES);
+    assert!(later.deletes_from > first.cursor, "the export says its deletion list is incomplete for this device");
+
+    // Unsent change queued → listed deletions applied, reconcile deferred.
+    dev.execute(
+        "INSERT INTO outbox(op_id,hlc,device_id,staff_id,audience,\"table\",record_id,kind,payload,server_epoch) \
+         VALUES ('op-wait','h','dev-ipad','stf-meena','school','homework_note','n-1','action','{}',1)",
+        [],
+    )
+    .unwrap();
+    assert_eq!(apply_down_export(&mut dev, &later).unwrap(), DownApplied::ReconcileDeferred);
+    let left: i64 = dev.query_row("SELECT COUNT(*) FROM substitution WHERE id LIKE 'sub-%'", [], |r| r.get(0)).unwrap();
+    assert!(left > 1, "only the listed deletions so far");
+    let outbox: i64 = dev.query_row("SELECT COUNT(*) FROM outbox", [], |r| r.get(0)).unwrap();
+    assert_eq!(outbox, 1, "the unsent change is kept");
+
+    // Outbox drained → the same export reconciles.
+    dev.execute("DELETE FROM outbox", []).unwrap();
+    assert!(matches!(apply_down_export(&mut dev, &later).unwrap(), DownApplied::Reconciled(k) if k >= 1));
+    let left: Vec<String> = {
+        let mut st = dev.prepare("SELECT id FROM substitution WHERE id LIKE 'sub-%'").unwrap();
+        st.query_map([], |r| r.get(0)).unwrap().collect::<Result<_, _>>().unwrap()
+    };
+    assert_eq!(left, vec!["sub-00001".to_string()], "every missed delete applied; the re-created row kept");
+    assert_eq!(held(&dev, "sub-00001"), 1);
+    // Every other synced row still matches the export (nothing else pruned).
+    let classes: i64 = dev.query_row("SELECT COUNT(*) FROM class", [], |r| r.get(0)).unwrap();
+    assert_eq!(classes as usize, later.changes.iter().filter(|c| c.table == "class").count());
+    assert_eq!(apply_down_export(&mut dev, &later).unwrap(), DownApplied::Unchanged);
+}

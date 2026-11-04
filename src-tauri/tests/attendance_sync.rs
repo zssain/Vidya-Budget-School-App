@@ -290,7 +290,8 @@ fn a_teacher_cannot_cancel_someone_elses_request_via_sync() {
 use vidya_lib::commands::logic::{staff_check_in_logic, CheckInInput};
 
 fn check_in_input(route: &str) -> CheckInInput {
-    CheckInInput { route: route.into(), date: "2026-11-03".into(), minute: 8 * 60 + 20, device_ms: OffsetDateTime::now_utc().unix_timestamp() * 1000 }
+    // Today: the demo seed fills the previous 12 working days, never today.
+    CheckInInput { route: route.into(), date: vidya_lib::commands::today(), minute: 8 * 60 + 20, device_ms: OffsetDateTime::now_utc().unix_timestamp() * 1000 }
 }
 
 #[tokio::test]
@@ -305,7 +306,7 @@ async fn lan_check_in_counts_at_school() {
     let (status, min, route): (String, i64, String) = server
         .lock()
         .unwrap()
-        .query_row("SELECT status, check_in_min, route FROM staff_attendance WHERE staff_id='stf-meena' AND date='2026-11-03'", [], |r| {
+        .query_row("SELECT status, check_in_min, route FROM staff_attendance WHERE staff_id='stf-meena' AND date=?1", [vidya_lib::commands::today()], |r| {
             Ok((r.get(0)?, r.get(1)?, r.get(2)?))
         })
         .unwrap();
@@ -330,7 +331,7 @@ fn a_drive_check_in_claiming_lan_is_recorded_as_away() {
     let out = exchange::import_all(&mut s, &drive.as_actor(PRINCIPAL), &l.exchange).unwrap();
     assert_eq!(out.confirmed, 1);
     let (status, route): (String, String) = s
-        .query_row("SELECT status, route FROM staff_attendance WHERE staff_id='stf-meena' AND date='2026-11-03'", [], |r| Ok((r.get(0)?, r.get(1)?)))
+        .query_row("SELECT status, route FROM staff_attendance WHERE staff_id='stf-meena' AND date=?1", [vidya_lib::commands::today()], |r| Ok((r.get(0)?, r.get(1)?)))
         .unwrap();
     assert_eq!(route, "drive", "server-side route, not the device's claim");
     assert_ne!(status, "present", "not counted 'at school' without the LAN");

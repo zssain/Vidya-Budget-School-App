@@ -152,6 +152,17 @@ pub fn apply_snapshot(
     manifest: &crate::sync::protocol::SnapshotManifest,
     changes: &[crate::sync::protocol::Change],
 ) -> Result<usize, String> {
+    apply_snapshot_then(conn, manifest, changes, |_| Ok(()))
+}
+
+/// [`apply_snapshot`], then `after` inside the same transaction (a down export's
+/// deletions / reconcile commit together with its rows, or not at all).
+pub fn apply_snapshot_then(
+    conn: &mut Connection,
+    manifest: &crate::sync::protocol::SnapshotManifest,
+    changes: &[crate::sync::protocol::Change],
+    after: impl FnOnce(&Connection) -> Result<(), String>,
+) -> Result<usize, String> {
     manifest.verify(changes)?;
     if manifest.server_epoch < known_epoch(conn).map_err(|e| e.to_string())? {
         return Err("snapshot is from an older school PC epoch (EPOCH_OLD)".into());
@@ -167,7 +178,7 @@ pub fn apply_snapshot(
     // which is never sent to clients). Completeness is checked explicitly below.
     // (`PRAGMA foreign_keys` can't change inside a transaction, so it wraps it.)
     conn.execute_batch("PRAGMA foreign_keys = OFF").map_err(|e| e.to_string())?;
-    let result = apply_snapshot_tx(conn, manifest, changes);
+    let result = apply_snapshot_tx(conn, manifest, changes, after);
     conn.execute_batch("PRAGMA foreign_keys = ON").map_err(|e| e.to_string())?;
     result
 }
@@ -176,6 +187,7 @@ fn apply_snapshot_tx(
     conn: &mut Connection,
     manifest: &crate::sync::protocol::SnapshotManifest,
     changes: &[crate::sync::protocol::Change],
+    after: impl FnOnce(&Connection) -> Result<(), String>,
 ) -> Result<usize, String> {
     let tx = conn.transaction().map_err(|e| e.to_string())?;
     for ch in changes {
@@ -225,6 +237,7 @@ fn apply_snapshot_tx(
     if let Some(id) = crate::sync::client::load(&tx) {
         crate::sync::client::ensure_self_device_row(&tx, &id).map_err(|e| e.to_string())?;
     }
+    after(&tx)?;
     tx.commit().map_err(|e| format!("bootstrap commit failed: {e}"))?;
     Ok(changes.len())
 }
@@ -267,6 +280,37 @@ pub fn apply_tombstones(conn: &Connection, deletes: &[crate::sync::protocol::Del
             continue;
         }
         removed += conn.execute(&format!("DELETE FROM {} WHERE id=?1", del.table), params![del.record_id]).unwrap_or(0);
+    }
+    Ok(removed)
+}
+
+/// Make the local synced tables match a complete role-scoped export: remove every
+/// row (in a synced table with an `id`) the export doesn't contain. Used when the
+/// device missed more deletions than an export lists. Callers run it only with an
+/// empty outbox — a pending sheet op covers rows (marks) it doesn't name, so a
+/// row-by-row "is it pending?" check can't protect unsent edits. Returns rows removed.
+pub fn prune_to_export(conn: &Connection, changes: &[crate::sync::protocol::Change]) -> rusqlite::Result<usize> {
+    let live: std::collections::HashSet<(&str, &str)> = changes.iter().map(|c| (c.table.as_str(), c.record_id.as_str())).collect();
+    let mut removed = 0;
+    for table in crate::sync::scope::SYNC_TABLES {
+        let has_id: bool = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_info(?1) WHERE name='id')",
+            params![table],
+            |r| r.get(0),
+        )?;
+        if !has_id {
+            continue;
+        }
+        let ids: Vec<String> = {
+            let mut st = conn.prepare(&format!("SELECT id FROM {table}"))?;
+            let rows = st.query_map([], |r| r.get::<_, String>(0))?;
+            rows.collect::<rusqlite::Result<_>>()?
+        };
+        for id in ids {
+            if !live.contains(&(*table, id.as_str())) {
+                removed += conn.execute(&format!("DELETE FROM {table} WHERE id=?1"), params![id])?;
+            }
+        }
     }
     Ok(removed)
 }
